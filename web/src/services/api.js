@@ -96,6 +96,9 @@ export default {
   getSiteClients(siteId) {
     return apiClient.get(`/sites/${siteId}/clients`)
   },
+  updateClientHostname(siteId, mac, hostname) {
+    return apiClient.patch(`/sites/${siteId}/clients/${mac}/hostname`, { hostname })
+  },
 
   // Settings
   getSiteSettings(siteId) {

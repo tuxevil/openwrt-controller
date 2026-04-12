@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -14,12 +15,21 @@ type AggregatedClient struct {
 	Hostname       string  `json:"hostname"`
 	IPAddress      string  `json:"ip_address"`
 	UplinkDevice   string  `json:"uplink"`
+	UplinkName     string  `json:"uplink_name"`
 	SSID           string  `json:"ssid"`
 	Signal         float64 `json:"signal"`
 	Noise          float64 `json:"noise"`
-	TXRate         float64 `json:"tx_rate"`
-	RXRate         float64 `json:"rx_rate"`
-	ConnectionType string  `json:"conn_type"`
+	TXRate             float64 `json:"tx_rate"`
+	RXRate             float64 `json:"rx_rate"`
+	TxMCS              float64 `json:"tx_mcs"`
+	RxMCS              float64 `json:"rx_mcs"`
+	TxMHz              string  `json:"tx_mhz"`
+	RxMHz              string  `json:"rx_mhz"`
+	TxPkts             int     `json:"tx_pkts"`
+	RxPkts             int     `json:"rx_pkts"`
+	InactiveTime       int     `json:"inactive"`
+	ExpectedThroughput string  `json:"expected_throughput"`
+	ConnectionType     string  `json:"conn_type"`
 }
 
 func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +40,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rows, err := database.DB.Query(
-		"SELECT id, state_json FROM devices WHERE site_id = $1 AND state_json IS NOT NULL",
+		"SELECT id, name, state_json FROM devices WHERE site_id = $1 AND state_json IS NOT NULL",
 		siteID,
 	)
 	if err != nil {
@@ -39,18 +49,45 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
+	// Fetch custom hostnames
+	customHostnames := make(map[string]string)
+	hRows, err := database.DB.Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	if err == nil {
+		defer hRows.Close()
+		for hRows.Next() {
+			var m, h string
+			if err := hRows.Scan(&m, &h); err == nil {
+				customHostnames[m] = h
+			}
+		}
+	}
+
 	clientMap := make(map[string]*AggregatedClient)
 
 	for rows.Next() {
 		var devID string
+		var devName sql.NullString
 		var stateJSON []byte
-		if err := rows.Scan(&devID, &stateJSON); err != nil {
+		if err := rows.Scan(&devID, &devName, &stateJSON); err != nil {
 			continue
 		}
+		nodeName := devName.String
 
 		var d map[string]interface{}
 		if err := json.Unmarshal(stateJSON, &d); err != nil {
 			continue
+		}
+
+		// Extract board hostname as node name fallback
+		if nodeName == "" {
+			if board, ok := d["board"].(map[string]interface{}); ok {
+				if bh, ok := board["hostname"].(string); ok && bh != "" {
+					nodeName = bh
+				}
+			}
+		}
+		if nodeName == "" {
+			nodeName = devID
 		}
 
 		// ── PRIORITY 1: wireless_stations (new agent format) ──────────────────
@@ -75,12 +112,21 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 						clientMap[mac] = &AggregatedClient{
 							MAC:            mac,
 							UplinkDevice:   devID,
+							UplinkName:     nodeName,
 							SSID:           ifaceName,
 							Signal:         floatVal(st, "signal"),
-							Noise:          floatVal(st, "noise"),
-							TXRate:         anyToFloat(st["tx_rate"]),
-							RXRate:         anyToFloat(st["rx_rate"]),
-							ConnectionType: "wireless",
+							Noise:              floatVal(st, "noise"),
+							TXRate:             anyToFloat(st["tx_rate"]),
+							RXRate:             anyToFloat(st["rx_rate"]),
+							TxMCS:              anyToFloat(st["tx_mcs"]),
+							RxMCS:              anyToFloat(st["rx_mcs"]),
+							TxMHz:              strVal(st, "tx_mhz"),
+							RxMHz:              strVal(st, "rx_mhz"),
+							TxPkts:             int(floatVal(st, "tx_pkts")),
+							RxPkts:             int(floatVal(st, "rx_pkts")),
+							InactiveTime:       int(floatVal(st, "inactive")),
+							ExpectedThroughput: strVal(st, "expected_throughput"),
+							ConnectionType:     "wireless",
 						}
 					}
 				}
@@ -122,14 +168,23 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 						}
 						if _, found := clientMap[mac]; !found {
 							clientMap[mac] = &AggregatedClient{
-								MAC:            mac,
-								UplinkDevice:   devID,
-								SSID:           ssid,
-								Signal:         floatVal(st, "signal"),
-								Noise:          floatVal(st, "noise"),
-								TXRate:         anyToFloat(st["tx_rate"]),
-								RXRate:         anyToFloat(st["rx_rate"]),
-								ConnectionType: "wireless",
+								MAC:                mac,
+								UplinkDevice:       devID,
+								UplinkName:         nodeName,
+								SSID:               ssid,
+								Signal:             floatVal(st, "signal"),
+								Noise:              floatVal(st, "noise"),
+								TXRate:             anyToFloat(st["tx_rate"]),
+								RXRate:             anyToFloat(st["rx_rate"]),
+								TxMCS:              anyToFloat(st["tx_mcs"]),
+								RxMCS:              anyToFloat(st["rx_mcs"]),
+								TxMHz:              strVal(st, "tx_mhz"),
+								RxMHz:              strVal(st, "rx_mhz"),
+								TxPkts:             int(floatVal(st, "tx_pkts")),
+								RxPkts:             int(floatVal(st, "rx_pkts")),
+								InactiveTime:       int(floatVal(st, "inactive")),
+								ExpectedThroughput: strVal(st, "expected_throughput"),
+								ConnectionType:     "wireless",
 							}
 						}
 					}
@@ -158,6 +213,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 						MAC:            mac,
 						IPAddress:      ip,
 						UplinkDevice:   devID,
+						UplinkName:     nodeName,
 						ConnectionType: "wired",
 					}
 				}
@@ -184,6 +240,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 						clientMap[mac] = &AggregatedClient{
 							MAC:            mac,
 							UplinkDevice:   devID,
+							UplinkName:     nodeName,
 							ConnectionType: "wired",
 						}
 					}
@@ -218,6 +275,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 							Hostname:       hostname,
 							IPAddress:      ip,
 							UplinkDevice:   devID,
+							UplinkName:     nodeName,
 							ConnectionType: "wired",
 						}
 					}
@@ -227,12 +285,53 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	clients := make([]AggregatedClient, 0, len(clientMap))
-	for _, c := range clientMap {
+	for mac, c := range clientMap {
+		if customHostname, ok := customHostnames[mac]; ok {
+			c.Hostname = customHostname
+		}
 		clients = append(clients, *c)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": clients})
+}
+
+// UpdateClientHostnamePayload encapsulates hostname updates
+type UpdateClientHostnamePayload struct {
+	Hostname string `json:"hostname"`
+}
+
+func UpdateClientHostnameHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	mac := r.PathValue("mac")
+
+	if siteID == "" || mac == "" {
+		http.Error(w, `{"error": "site_id and mac are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	var payload UpdateClientHostnamePayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error": "invalid json body"}`, http.StatusBadRequest)
+		return
+	}
+
+	query := `
+		INSERT INTO client_hostnames (mac, site_id, hostname, updated_at)
+		VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+		ON CONFLICT (mac) DO UPDATE SET 
+			hostname = EXCLUDED.hostname,
+			site_id = EXCLUDED.site_id,
+			updated_at = CURRENT_TIMESTAMP
+	`
+	_, err := database.DB.Exec(query, mac, siteID, payload.Hostname)
+	if err != nil {
+		http.Error(w, `{"error": "failed to update hostname"}`, http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

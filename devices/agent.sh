@@ -55,13 +55,29 @@ while true; do
         ASSOCLIST=$(iwinfo "$IFACE" assoclist 2>/dev/null | awk '
             BEGIN { printf "[" }
             /^[0-9A-F:]+/ { 
-                if (count > 0) printf ","
-                printf "{\"mac\":\"%s\",\"signal\":%d,\"noise\":%d", $1, $2, $5
+                if (count > 0) printf "},"
+                printf "{\"mac\":\"%s\",\"signal\":%d,\"noise\":%d,\"inactive\":%d", $1, $2, $5, $9
                 count++
             }
-            /RX:/ { printf ",\"rx_rate\":\"%s\"", $2 }
-            /TX:/ { printf ",\"tx_rate\":\"%s\"}", $2 }
-            END { printf "]" }
+            /RX:/ { 
+                mcs="null"; mhz="unknown"; pkts="0"
+                if ($4 == "MCS") { mcs=$5; sub(/,/, "", mcs); mhz=$6; pkts=$7 }
+                else { pkts=$4 }
+                printf ",\"rx_rate\":\"%s\",\"rx_mcs\":%s,\"rx_mhz\":\"%s\",\"rx_pkts\":%d", $2, mcs, mhz, pkts
+            }
+            /TX:/ { 
+                mcs="null"; mhz="unknown"; pkts="0"
+                if ($4 == "MCS") { mcs=$5; sub(/,/, "", mcs); mhz=$6; pkts=$7 }
+                else { pkts=$4 }
+                printf ",\"tx_rate\":\"%s\",\"tx_mcs\":%s,\"tx_mhz\":\"%s\",\"tx_pkts\":%d", $2, mcs, mhz, pkts
+            }
+            /expected throughput:/ {
+                printf ",\"expected_throughput\":\"%s\"", $3
+            }
+            END { 
+                if (count > 0) printf "}"
+                printf "]"
+            }
         ')
         
         [ "$ASSOCLIST" = "[" ] && ASSOCLIST="[]"

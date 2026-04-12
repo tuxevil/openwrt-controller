@@ -160,6 +160,13 @@ func createTables() error {
 	CREATE EXTENSION IF NOT EXISTS pg_trgm;
 	CREATE INDEX IF NOT EXISTS trgm_idx_system_logs_message ON system_logs USING gin (message gin_trgm_ops);
 
+	CREATE TABLE IF NOT EXISTS client_hostnames (
+		mac VARCHAR(50) PRIMARY KEY,
+		site_id UUID REFERENCES sites(id),
+		hostname VARCHAR(255) NOT NULL,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
 	-- Migrate existing tables safely (idempotent)
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id);
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS wg_endpoint VARCHAR(255);

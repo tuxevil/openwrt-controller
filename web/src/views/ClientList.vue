@@ -5,6 +5,10 @@ import api from '../services/api'
 
 const props = defineProps(['site_id'])
 const clients = ref([])
+const selectedClient = ref(null)
+const showModal = ref(false)
+const editHostname = ref('')
+const isSaving = ref(false)
 let pollInterval
 
 onMounted(async () => {
@@ -17,6 +21,14 @@ async function fetchClients() {
   try {
     const res = await api.getSiteClients(props.site_id)
     clients.value = res.data.data || []
+    
+    // Update selected client if open
+    if (showModal.value && selectedClient.value) {
+      const updated = clients.value.find(c => c.mac === selectedClient.value.mac)
+      if (updated) {
+        selectedClient.value = { ...updated }
+      }
+    }
   } catch (e) { console.error(e) }
 }
 
@@ -44,6 +56,26 @@ function isWeak(dbm) {
 function formatRate(rate) {
   if (!rate || rate === 0) return '?'
   return rate.toFixed(1)
+}
+
+function selectClient(client) {
+  selectedClient.value = { ...client }
+  editHostname.value = client.hostname || ''
+  showModal.value = true
+}
+
+async function saveHostname() {
+  if (!selectedClient.value) return
+  try {
+    isSaving.value = true
+    await api.updateClientHostname(props.site_id, selectedClient.value.mac, editHostname.value)
+    showModal.value = false
+    await fetchClients()
+  } catch (err) {
+    console.error('Failed to save hostname:', err)
+  } finally {
+    isSaving.value = false
+  }
 }
 </script>
 
@@ -91,9 +123,10 @@ function formatRate(rate) {
           <tr
             v-for="c in clients"
             :key="c.mac"
-            class="border-b border-neon-green/8 transition-colors"
+            @click="selectClient(c)"
+            class="border-b border-neon-green/8 transition-colors cursor-pointer"
             :class="[
-              isWeak(c.signal) ? 'bg-neon-amber/5 glitch-anim' : 'hover:bg-neon-green/5',
+              isWeak(c.signal) ? 'bg-neon-amber/5 glitch-anim' : 'hover:bg-neon-green/5 hover:border-neon-green/30',
             ]"
           >
             <!-- HOSTNAME -->
@@ -112,7 +145,7 @@ function formatRate(rate) {
 
             <!-- NODE (uplink AP) -->
             <td class="py-2 px-3 text-muted">
-              <span class="text-white">{{ c.uplink ? c.uplink.substring(0, 11) : '---' }}</span>
+              <span class="text-white">{{ c.uplink_name || (c.uplink ? c.uplink.substring(0, 11) : '---') }}</span>
               <span v-if="c.ssid" class="text-neon-green ml-1 opacity-70">@{{ c.ssid }}</span>
             </td>
 
@@ -163,6 +196,121 @@ function formatRate(rate) {
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- Client Detail Modal -->
+    <div v-if="showModal && selectedClient" class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+      <div class="neon-panel w-full max-w-xl max-h-[90vh] flex flex-col border-neon-green/60">
+        <div class="flex justify-between items-center border-b border-neon-green/30 pb-4 shrink-0">
+          <h3 class="text-xl glitch-anim">> NODE_DETAIL_VIEW</h3>
+          <button @click="showModal = false" class="text-muted hover:text-neon-red">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
+
+        <div class="py-6 flex-1 overflow-auto space-y-6">
+          <!-- Identity -->
+          <div class="grid grid-cols-2 gap-4">
+            <div class="space-y-1">
+              <label class="text-xs text-muted block">> ASSIGNED_HOSTNAME</label>
+              <div class="flex gap-2">
+                <input 
+                  type="text" 
+                  v-model="editHostname" 
+                  class="flex-1 bg-black/50 border border-neon-green/30 px-3 py-1.5 text-white font-mono text-sm focus:border-neon-green focus:outline-none clip-chamfer"
+                  placeholder="Enter hostname"
+                  @keyup.enter="saveHostname"
+                />
+                <button 
+                  @click="saveHostname" 
+                  :disabled="isSaving"
+                  class="px-3 bg-neon-green/10 text-neon-green border border-neon-green/40 hover:bg-neon-green/20 disabled:opacity-50 clip-chamfer font-mono text-sm uppercase transition-colors"
+                >
+                  {{ isSaving ? '...' : 'SAVE' }}
+                </button>
+              </div>
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-muted block">> MAC_ADDR</label>
+              <div class="font-mono text-white break-all">{{ selectedClient.mac }}</div>
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-muted block">> IP_ADDR</label>
+              <div class="font-mono" :class="selectedClient.ip_address ? 'text-neon-green' : 'text-neon-red'">
+                {{ selectedClient.ip_address || 'NO_IP_ASSIGNED' }}
+              </div>
+            </div>
+            <div class="space-y-1">
+              <label class="text-xs text-muted block">> UPLINK_NODE</label>
+              <div class="font-mono text-white">
+                {{ selectedClient.uplink_name || selectedClient.uplink || '---' }}
+              </div>
+              <div v-if="selectedClient.uplink_name && selectedClient.uplink_name !== selectedClient.uplink" class="text-xs text-muted">
+                {{ selectedClient.uplink }}
+              </div>
+            </div>
+          </div>
+
+          <!-- Connection Stats if Wireless -->
+          <div v-if="selectedClient.conn_type === 'wireless'" class="border border-neon-amber/20 bg-neon-amber/5 p-4 clip-chamfer flex flex-col gap-4">
+            <h4 class="text-xs text-neon-amber border-b border-neon-amber/20 pb-1 uppercase tracking-widest">> RF_TELEMETRY</h4>
+            
+            <div class="grid grid-cols-4 gap-4 font-mono text-xs">
+              <div>
+                <span class="text-muted block">SSID</span>
+                <span class="text-white">{{ selectedClient.ssid || '---' }}</span>
+              </div>
+              <div>
+                <span class="text-muted block">SIGNAL / NOISE</span>
+                <span>
+                  <span :class="signalClass(selectedClient.signal)">{{ selectedClient.signal }}</span>
+                  <span class="text-muted mx-1">/</span>
+                  <span class="text-muted">{{ selectedClient.noise || '---' }}</span>
+                  <span class="text-muted ml-1">dBm</span>
+                </span>
+              </div>
+              <div>
+                <span class="text-muted block">INACTIVE</span>
+                <span class="text-white">{{ selectedClient.inactive ? selectedClient.inactive + ' ms' : '---' }}</span>
+              </div>
+              <div>
+                <span class="text-muted block">EXPECTED_TPUT</span>
+                <span class="text-neon-green">{{ selectedClient.expected_throughput || '---' }}</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-4">
+              <!-- TX Block -->
+              <div class="border border-neon-green/20 bg-neon-green/5 p-3 clip-chamfer">
+                <span class="text-neon-green text-xs block mb-2">> TX_METRICS_AP_TO_STA</span>
+                <div class="grid grid-cols-2 gap-2 font-mono text-xs">
+                  <div><span class="text-muted">RATE:</span> <span class="text-white">{{ formatRate(selectedClient.tx_rate) }}M</span></div>
+                  <div><span class="text-muted">MCS:</span> <span class="text-white">{{ selectedClient.tx_mcs !== null ? selectedClient.tx_mcs : '?' }}</span></div>
+                  <div><span class="text-muted">BW:</span> <span class="text-white">{{ selectedClient.tx_mhz || '?' }}</span></div>
+                  <div><span class="text-muted">PKTS:</span> <span class="text-white">{{ selectedClient.tx_pkts || 0 }}</span></div>
+                </div>
+              </div>
+              <!-- RX Block -->
+              <div class="border border-neon-amber/20 bg-neon-amber/5 p-3 clip-chamfer">
+                <span class="text-neon-amber text-xs block mb-2">> RX_METRICS_STA_TO_AP</span>
+                <div class="grid grid-cols-2 gap-2 font-mono text-xs">
+                  <div><span class="text-muted">RATE:</span> <span class="text-white">{{ formatRate(selectedClient.rx_rate) }}M</span></div>
+                  <div><span class="text-muted">MCS:</span> <span class="text-white">{{ selectedClient.rx_mcs !== null ? selectedClient.rx_mcs : '?' }}</span></div>
+                  <div><span class="text-muted">BW:</span> <span class="text-white">{{ selectedClient.rx_mhz || '?' }}</span></div>
+                  <div><span class="text-muted">PKTS:</span> <span class="text-white">{{ selectedClient.rx_pkts || 0 }}</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Wired Stats -->
+          <div v-else class="border border-neon-blue/20 bg-neon-blue/5 p-4 clip-chamfer">
+            <div class="flex items-center gap-2 text-neon-blue font-mono">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+              <span>PHYSICAL_ETHERNET_LINK</span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
