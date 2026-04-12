@@ -18,6 +18,32 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+var (
+	PrivateKey ssh.Signer
+	PublicKey  string
+)
+
+func init() {
+	keyBytes, err := os.ReadFile("certs/id_controller")
+	if err != nil {
+		log.Println("[CRITICAL] Private key ./certs/id_controller not found. SSH Matrix will be disabled.")
+		return
+	}
+	signer, err := ssh.ParsePrivateKey(keyBytes)
+	if err != nil {
+		log.Printf("[CRITICAL] Failed to parse private key: %v", err)
+		return
+	}
+	PrivateKey = signer
+
+	pubBytes, err := os.ReadFile("certs/id_controller.pub")
+	if err != nil {
+		log.Println("[WARNING] Public key ./certs/id_controller.pub not found.")
+		return
+	}
+	PublicKey = string(pubBytes)
+}
+
 func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
 	if deviceID == "" {
@@ -40,16 +66,15 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	// b) Recupera las credenciales SSH del dispositivo
-	sshPass := os.Getenv("SSH_DEFAULT_PASS")
-	if sshPass == "" {
-		sshPass = "root" // common default
+	if PrivateKey == nil {
+		ws.WriteMessage(websocket.TextMessage, []byte("\r\n[!] ERROR: Controller SSH private key not configured\r\n"))
+		return
 	}
 
 	config := &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
-			ssh.Password(sshPass),
+			ssh.PublicKeys(PrivateKey),
 		},
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}

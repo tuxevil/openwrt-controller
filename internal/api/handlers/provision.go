@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"openwrt-controller/internal/database"
 )
@@ -96,12 +97,18 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		wlansList = make([]map[string]string, 0)
 	}
 
+	sshConfig := make(map[string]interface{})
+	if PublicKey != "" {
+		sshConfig["authorized_keys"] = []string{strings.TrimSpace(PublicKey)}
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"action": "apply",
 		"config": map[string]interface{}{
 			"wireless": map[string]interface{}{
 				"wlans": wlansList,
 			},
+			"ssh": sshConfig,
 		},
 	})
 }
