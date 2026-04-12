@@ -108,6 +108,10 @@ const fetchHealth = async () => {
             ⚙️ PLATFORM_CONFIG
           </router-link>
 
+          <router-link to="/global/sentinel" class="text-xs px-3 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer mt-2 shadow-[0_0_5px_#bc13fe]">
+            👁️ GLOBAL_PULSE (AI)
+          </router-link>
+
           <router-link to="/global" class="text-xs text-muted hover:text-white transition-colors block text-center uppercase tracking-[0.2em] mt-2">Exit to Global</router-link>
        </div>
     </div>
