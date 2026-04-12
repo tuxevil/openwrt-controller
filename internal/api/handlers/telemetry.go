@@ -34,6 +34,19 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	providedKey := r.Header.Get("X-Site-Key")
+	var siteKey *string
+	err = database.DB.QueryRow(`
+		SELECT s.api_key FROM sites s 
+		JOIN devices d ON d.site_id = s.id 
+		WHERE d.id = $1`, deviceID).Scan(&siteKey)
+	if err == nil && siteKey != nil && *siteKey != "" {
+		if providedKey != *siteKey {
+			http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+			return
+		}
+	}
+
 	modelStr := "UNKNOWN"
 	if boardInfo, ok := raw["board"].(map[string]interface{}); ok {
 		if model, ok := boardInfo["model"].(string); ok {

@@ -1,6 +1,7 @@
 #!/bin/sh
 
 CONTROLLER_IP="10.0.0.6"
+SITE_KEY="tu_llave_generada_aqui"
 DEVICE_ID=$(cat /sys/class/net/br-lan/address)
 TELEMETRY_URL="http://$CONTROLLER_IP:3000/api/telemetry"
 
@@ -47,6 +48,10 @@ while true; do
 EOF
 )
 
-    curl -m 5 -s -X POST -H "Content-Type: application/json" -d "$PAYLOAD" "$TELEMETRY_URL" > /dev/null
+    curl -m 5 -s -X POST \
+        -H "Content-Type: application/json" \
+        -H "X-Site-Key: $SITE_KEY" \
+        -d "$PAYLOAD" \
+        "$TELEMETRY_URL"
     sleep 10
 done

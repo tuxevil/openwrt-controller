@@ -1,7 +1,9 @@
 package database
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -100,7 +102,20 @@ func createTables() error {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
-	return seedAdminUser()
+	// Idempotent migrations
+	migrations := []string{
+		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS api_key TEXT UNIQUE",
+	}
+	for _, m := range migrations {
+		if _, err := DB.Exec(m); err != nil {
+			return fmt.Errorf("migration failed (%s): %w", m, err)
+		}
+	}
+
+	if err := seedAdminUser(); err != nil {
+		return err
+	}
+	return seedSiteAPIKeys()
 }
 
 func seedAdminUser() error {
@@ -121,6 +136,35 @@ func seedAdminUser() error {
 		return fmt.Errorf("failed to seed admin user: %w", err)
 	}
 	log.Println("Bootstrap admin user created (username: admin)")
+	return nil
+}
+
+func seedSiteAPIKeys() error {
+	rows, err := DB.Query("SELECT id, name FROM sites WHERE api_key IS NULL OR api_key = ''")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	var updates []struct{ id, name, key string }
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		b := make([]byte, 16)
+		rand.Read(b)
+		key := hex.EncodeToString(b)
+		updates = append(updates, struct{ id, name, key string }{id, name, key})
+	}
+
+	for _, u := range updates {
+		_, err := DB.Exec("UPDATE sites SET api_key = $1 WHERE id = $2", u.key, u.id)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("SITIO: [%s] | API_KEY: [%s]\n", u.name, u.key)
+	}
 	return nil
 }
 

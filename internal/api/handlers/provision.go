@@ -28,7 +28,12 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var siteID sql.NullString
-	err := database.DB.QueryRow("SELECT site_id FROM devices WHERE id = $1", deviceID).Scan(&siteID)
+	var siteKey *string
+	err := database.DB.QueryRow(`
+		SELECT d.site_id, s.api_key 
+		FROM devices d 
+		LEFT JOIN sites s ON d.site_id = s.id 
+		WHERE d.id = $1`, deviceID).Scan(&siteID, &siteKey)
 
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error": "device not found"}`, http.StatusNotFound)
@@ -36,6 +41,14 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	} else if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
+	}
+
+	providedKey := r.Header.Get("X-Site-Key")
+	if siteKey != nil && *siteKey != "" {
+		if providedKey != *siteKey {
+			http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
+			return
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 
@@ -25,8 +26,16 @@ func GetSiteSettingsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var apiKey sql.NullString
+	_ = database.DB.QueryRow("SELECT api_key FROM sites WHERE id = $1", siteID).Scan(&apiKey)
+
+	resp := map[string]interface{}{
+		"data":    settings,
+		"api_key": apiKey.String,
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": settings})
+	json.NewEncoder(w).Encode(resp)
 }
 
 func UpdateSiteSettingsHandler(w http.ResponseWriter, r *http.Request) {
