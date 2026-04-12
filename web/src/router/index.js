@@ -13,6 +13,7 @@ import RFIntelligence from '../views/RFIntelligence.vue'
 import Vault from '../views/Vault.vue'
 import Runbook from '../views/Runbook.vue'
 import Login from '../views/Login.vue'
+import AgentMgmt from '../views/AgentMgmt.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -36,6 +37,11 @@ const router = createRouter({
       path: '/orchestrator',
       name: 'orchestrator',
       component: Orchestrator
+    },
+    {
+      path: '/orchestrator/agent',
+      name: 'agent-mgmt',
+      component: AgentMgmt
     },
     {
       path: '/runbook',

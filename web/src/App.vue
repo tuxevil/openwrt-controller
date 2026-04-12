@@ -96,6 +96,10 @@ const fetchHealth = async () => {
             ⚡ ORCHESTRATOR
           </router-link>
           
+          <router-link to="/orchestrator/agent" class="text-xs px-3 py-2 border border-[#ffff00]/60 text-[#ffff00] hover:bg-[#ffff00]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer font-bold drop-shadow-[0_0_5px_rgba(255,255,0,0.8)]">
+            [ AGENT_MGMT ]
+          </router-link>
+
           <router-link to="/runbook" class="text-xs px-3 py-2 border border-[#80ed99] text-[#80ed99] hover:bg-[#80ed99]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
             [ RUNBOOK_MANUAL ]
           </router-link>

@@ -59,17 +59,22 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	
+	agentVersion := ""
+	if v, ok := raw["agent_version"].(string); ok {
+		agentVersion = v
+	}
+
 	remoteIP := r.RemoteAddr
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		remoteIP = host
 	}
 
 	// 1. Goroutine for PostgreSQL (upsert state and explicit model)
-	go func(devID string, state []byte, mod string, ip string) {
-		if err := database.UpsertDeviceState(devID, state, mod, ip); err != nil {
+	go func(devID string, state []byte, mod string, ip string, av string) {
+		if err := database.UpsertDeviceState(devID, state, mod, ip, av); err != nil {
 			log.Printf("Error upserting device state to postgres: %v\n", err)
 		}
-	}(deviceID, body, modelStr, remoteIP)
+	}(deviceID, body, modelStr, remoteIP, agentVersion)
 
 	// Extract Metrics cleanly bypassing struct matching
 	var metrics models.DeviceMetrics

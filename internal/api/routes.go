@@ -54,6 +54,13 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/profiles/{profile_id}", middleware.WithAuth(handlers.DeleteProfileHandler))
 	mux.HandleFunc("POST /api/orchestrator/command", middleware.WithAuth(handlers.MassCommandHandler))
 
+	// ── Agent Management ─────────────────────────────────────────────────────
+	// Uses site-key auth inside the script context
+	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)
+	mux.HandleFunc("GET /api/agent/latest/raw", handlers.GetLatestAgentRawHandler)
+	mux.HandleFunc("POST /api/agent/deploy", middleware.WithAuth(handlers.DeployAgentHandler))
+	mux.HandleFunc("GET /api/agent/status", middleware.WithAuth(handlers.GetAgentVersionsStatusHandler))
+
 	// ── SPA Static files ─────────────────────────────────────────────────────
 	fs := http.FileServer(http.Dir("./web/dist"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

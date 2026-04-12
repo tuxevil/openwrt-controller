@@ -33,6 +33,8 @@ apiClient.interceptors.response.use(
 )
 
 export default {
+  client: apiClient,
+  
   // Auth
   login(username, password) {
     return apiClient.post('/auth/login', { username, password })
