@@ -135,6 +135,19 @@ func createTables() error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS system_logs (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		device_id VARCHAR(50) REFERENCES devices(id) ON DELETE CASCADE,
+		log_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
+		severity VARCHAR(20) NOT NULL,
+		message TEXT NOT NULL,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
+	-- In Postgres, GIN index on text usually requires pg_trgm
+	CREATE EXTENSION IF NOT EXISTS pg_trgm;
+	CREATE INDEX IF NOT EXISTS trgm_idx_system_logs_message ON system_logs USING gin (message gin_trgm_ops);
+
 	-- Migrate existing tables safely (idempotent)
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id);
 	`
@@ -222,4 +235,37 @@ func UpsertDeviceState(deviceID string, stateJSON []byte, model string, lastIP s
 	`
 	_, err := DB.Exec(query, deviceID, stateJSON, model, lastIP)
 	return err
+}
+
+type LogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Message   string `json:"message"`
+}
+
+func InsertDeviceLogs(deviceID string, logs []LogEntry) error {
+	if len(logs) == 0 {
+		return nil
+	}
+
+	tx, err := DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	stmt, err := tx.Prepare("INSERT INTO system_logs (device_id, log_timestamp, severity, message) VALUES ($1, $2, $3, $4)")
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+
+	for _, logLine := range logs {
+		_, err := stmt.Exec(deviceID, logLine.Timestamp, logLine.Level, logLine.Message)
+		if err != nil {
+			return err
+		}
+	}
+
+	return tx.Commit()
 }

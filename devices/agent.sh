@@ -67,7 +67,10 @@ while true; do
     # 4. DHCP LEASES
     DHCP_LEASES=$(ubus call dhcp ipv4leases 2>/dev/null || echo "{\"leases\":[]}")
 
-    # 5. CONSTRUCCIÓN DEL PAYLOAD
+    # 5. LOGS RECIENTES (Últimas 20 líneas de syslog)
+    SYS_LOGS=$(logread | tail -n 50 | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{printf "%s\\n", $0}')
+
+    # 6. CONSTRUCCIÓN DEL PAYLOAD
     PAYLOAD=$(cat <<EOF
 {
     "device_id": "$DEVICE_ID",
@@ -77,7 +80,8 @@ while true; do
     "wireless_stations": $WIFI_DATA,
     "arp_table": $ARP_TABLE,
     "bridge_table": $BRIDGE_TABLE,
-    "dhcp": $DHCP_LEASES
+    "dhcp": $DHCP_LEASES,
+    "logs": "$SYS_LOGS"
 }
 EOF
 )

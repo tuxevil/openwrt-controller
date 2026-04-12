@@ -2,43 +2,73 @@ package handlers
 
 import (
 	"encoding/json"
-	"math/rand"
 	"net/http"
 	"time"
+
+	"openwrt-controller/internal/database"
 )
 
-type LogEntry struct {
-	Timestamp string `json:"timestamp"`
-	Level     string `json:"level"`
-	Message   string `json:"message"`
-}
-
 func GetLogsHandler(w http.ResponseWriter, r *http.Request) {
-	// Mock generator for Matrix typewriter
-	// We extract anomaly metrics probabilistically. Since dump_a0 lacks explicit log arrays natively, we inject brutalist flavor.
-	
-	logs := []LogEntry{}
-	levels := []string{"INFO", "WARN", "CRIT"}
+	siteID := r.PathValue("site_id")
+	if siteID == "" {
+		http.Error(w, "Missing site_id", http.StatusBadRequest)
+		return
+	}
 
-	for i := 0; i < 15; i++ {
-		lvl := levels[rand.Intn(len(levels))]
-		msg := "NETWORK_SYNC_OK"
-		if lvl == "CRIT" {
-			msg = "SECURITY_BREACH_AUTH_ATTEMPT_DENIED"
-		} else if lvl == "WARN" {
-			msg = "LATENCY_SPIKE_DETECTED CPU_TEMP_W>"
-		} else {
-			msgs := []string{"DEVICE_DHCP_LEASED MAC_ASSIGNED", "UPSTREAM_PACKET_DROPPED RECOVERED", "WLAN_HANDSHAKE_COMPLETED"}
-			msg = msgs[rand.Intn(len(msgs))]
+	severityFilter := r.URL.Query().Get("severity")
+	searchQuery := r.URL.Query().Get("search")
+
+	// Base query joining devices and system_logs
+	query := `
+		SELECT l.log_timestamp, l.severity, l.message 
+		FROM system_logs l
+		JOIN devices d ON d.id = l.device_id
+		WHERE d.site_id = $1
+	`
+	args := []interface{}{siteID}
+	argIdx := 2
+
+	if severityFilter != "" && severityFilter != "ALL" {
+		query += ` AND l.severity = $` + javaToPgIdx(argIdx)
+		args = append(args, severityFilter)
+		argIdx++
+	}
+
+	if searchQuery != "" {
+		query += ` AND l.message ILIKE $` + javaToPgIdx(argIdx)
+		args = append(args, "%"+searchQuery+"%")
+		argIdx++
+	}
+
+	query += ` ORDER BY l.log_timestamp DESC LIMIT 1000`
+
+	rows, err := database.DB.Query(query, args...)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	var logs []database.LogEntry
+	for rows.Next() {
+		var timestamp time.Time
+		var entry database.LogEntry
+		if err := rows.Scan(&timestamp, &entry.Level, &entry.Message); err != nil {
+			continue
 		}
-		
-		logs = append(logs, LogEntry{
-			Timestamp: time.Now().Add(-time.Duration(i*3) * time.Minute).Format(time.RFC3339),
-			Level:     lvl,
-			Message:   msg,
-		})
+		entry.Timestamp = timestamp.Format(time.RFC3339)
+		logs = append(logs, entry)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"data": logs})
+}
+
+// helper for pg indexed placeholder formats
+func javaToPgIdx(i int) string {
+	importStr := []string{"", "1", "2", "3", "4", "5", "6", "7", "8", "9"}
+	if i < 10 {
+		return importStr[i]
+	}
+	return "" // Just an inline hack for max 2 filters
 }

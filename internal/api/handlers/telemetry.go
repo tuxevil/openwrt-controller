@@ -7,6 +7,8 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
+	"time"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/models"
@@ -133,7 +135,41 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}(deviceID, metrics)
 
-	// 3. The Signal (Alerts Evaluation)
+	// 3. Process logs
+	if logsStr, ok := raw["logs"].(string); ok && logsStr != "" {
+		lines := strings.Split(logsStr, "\n")
+		var parsedLogs []database.LogEntry
+		now := time.Now().Format(time.RFC3339)
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			lower := strings.ToLower(line)
+			severity := "INFO"
+			if strings.Contains(lower, "warn") {
+				severity = "WARN"
+			}
+			if strings.Contains(lower, "err") || strings.Contains(lower, "fail") || strings.Contains(lower, "panic") || strings.Contains(lower, "crit") || strings.Contains(lower, "auth.error") {
+				severity = "ERROR"
+			}
+			
+			// Simple fallback for timestamp (in a real scenario we'd use regex, here we assume it's prepended or just use now)
+			parsedLogs = append(parsedLogs, database.LogEntry{
+				Timestamp: now,
+				Level:     severity,
+				Message:   line,
+			})
+		}
+		
+		go func(devID string, logs []database.LogEntry) {
+			if err := database.InsertDeviceLogs(devID, logs); err != nil {
+				log.Printf("Error inserting logs sequentially: %v\n", err)
+			}
+		}(deviceID, parsedLogs)
+	}
+
+	// 4. The Signal (Alerts Evaluation)
 	var sID string
 	_ = database.DB.QueryRow("SELECT site_id FROM devices WHERE id = $1", deviceID).Scan(&sID)
 	go services.ProcessTelemetry(deviceID, sID, metrics)
