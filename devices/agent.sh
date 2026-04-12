@@ -91,8 +91,8 @@ while true; do
         for IFACE in $(ls /sys/class/net | grep -E "wlan|ath|radio|ra|phy"); do
             iw dev "$IFACE" station dump 2>/dev/null | awk '
                 /^Station/ { mac=$2 }
-                /RX bytes:/ { rx=$3 }
-                /TX bytes:/ { tx=$3; print mac, rx, tx }
+                /rx bytes:/  { rx=$3 }  # lowercase - this is what iw outputs
+                /tx bytes:/  { tx=$3; if (mac != "") print mac, rx, tx }
             '
         done | awk -v state_file="$STATE_FILE" -v ts="$(date +%s)" '
             BEGIN {

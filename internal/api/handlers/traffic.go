@@ -104,22 +104,57 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var result []map[string]interface{}
 	for rows.Next() {
-		var id, name string
+		var id string
+		var name *string  // use pointer to handle NULL
 		var stateJSON []byte
-		if err := rows.Scan(&id, &name, &stateJSON); err == nil {
-			var state map[string]interface{}
-			if len(stateJSON) > 0 {
-				if err := json.Unmarshal(stateJSON, &state); err == nil {
-					devData := map[string]interface{}{
-						"device_id":   id,
-						"name":        name,
-						"top_talkers": state["top_talkers"],
-						"iface_stats": state["iface_stats"],
+		if err := rows.Scan(&id, &name, &stateJSON); err != nil {
+			continue
+		}
+		devName := id // fallback to ID if no name
+		if name != nil && *name != "" {
+			devName = *name
+		}
+
+		var state map[string]interface{}
+		if len(stateJSON) > 0 {
+			if err := json.Unmarshal(stateJSON, &state); err != nil {
+				state = map[string]interface{}{}
+			}
+		} else {
+			state = map[string]interface{}{}
+		}
+
+		// Flatten wireless_stations into a client list
+		var clients []map[string]interface{}
+		if ws, ok := state["wireless_stations"].(map[string]interface{}); ok {
+			for iface, stList := range ws {
+				if stations, ok := stList.([]interface{}); ok {
+					for _, s := range stations {
+						if sm, ok := s.(map[string]interface{}); ok {
+							entry := map[string]interface{}{
+								"iface": iface,
+							}
+							for k, v := range sm {
+								entry[k] = v
+							}
+							clients = append(clients, entry)
+						}
 					}
-					result = append(result, devData)
 				}
 			}
 		}
+		if clients == nil {
+			clients = make([]map[string]interface{}, 0)
+		}
+
+		devData := map[string]interface{}{
+			"device_id":        id,
+			"name":             devName,
+			"top_talkers":      state["top_talkers"],
+			"iface_stats":      state["iface_stats"],
+			"wireless_clients": clients,
+		}
+		result = append(result, devData)
 	}
 
 	if result == nil {
