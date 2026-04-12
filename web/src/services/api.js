@@ -60,6 +60,14 @@ export default {
     return apiClient.get(`/devices/${deviceId}/metrics`)
   },
 
+  // RF Intelligence
+  getRFOptimization(siteId) {
+    return apiClient.get(`/sites/${siteId}/rf-optimization`)
+  },
+  runRFFix(siteId) {
+    return apiClient.post(`/sites/${siteId}/rf-fix`)
+  },
+
   // Clients
   getSiteClients(siteId) {
     return apiClient.get(`/sites/${siteId}/clients`)

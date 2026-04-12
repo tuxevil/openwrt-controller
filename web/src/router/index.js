@@ -9,6 +9,7 @@ import Terminal from '../views/Terminal.vue'
 import Incidents from '../views/Incidents.vue'
 import Topology from '../views/Topology.vue'
 import Orchestrator from '../views/Orchestrator.vue'
+import RFIntelligence from '../views/RFIntelligence.vue'
 import Login from '../views/Login.vue'
 
 const router = createRouter({
@@ -80,6 +81,12 @@ const router = createRouter({
       path: '/site/:site_id/topology',
       name: 'site-topology',
       component: Topology,
+      props: true
+    },
+    {
+      path: '/site/:site_id/rf',
+      name: 'site-rf',
+      component: RFIntelligence,
       props: true
     }
   ]
