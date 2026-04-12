@@ -83,9 +83,9 @@ const chartOptions = {
 
 // Speedometer logic
 const strokeDasharray = computed(() => {
-  const c = Math.PI * 40 // circumference of r=40
-  const pct = (result.value.overall_health / 100) * (c / 2) // half circle
-  return `${pct} ${c}`
+  const arcLength = Math.PI * 40 // length of half-circle with r=40
+  const pct = (result.value.overall_health / 100) * arcLength
+  return `${pct} ${arcLength}`
 })
 </script>
 
@@ -157,7 +157,6 @@ const strokeDasharray = computed(() => {
 
       <!-- Auto Optimize Ticker -->
       <div class="bg-[#030303] border border-neon-cyan/20 p-6 flex flex-col gap-4 relative overflow-hidden">
-        <div class="absolute top-0 right-0 p-2 text-[8px] text-neon-cyan/20">SYSTEM: WNDR3700</div>
         <div class="text-neon-cyan text-sm tracking-widest mb-2">REMEDIATION</div>
         
         <!-- Raw Output Terminal -->
