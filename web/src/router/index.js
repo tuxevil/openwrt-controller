@@ -1,15 +1,21 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import GlobalDashboard from '../views/GlobalDashboard.vue'
 import SiteDashboard from '../views/SiteDashboard.vue'
-
 import ClientList from '../views/ClientList.vue'
 import SiteSettings from '../views/SiteSettings.vue'
 import LogConsole from '../views/LogConsole.vue'
 import WirelessManager from '../views/WirelessManager.vue'
+import Login from '../views/Login.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    {
+      path: '/login',
+      name: 'login',
+      component: Login,
+      meta: { public: true }
+    },
     {
       path: '/',
       redirect: '/global'
@@ -50,6 +56,18 @@ const router = createRouter({
       props: true
     }
   ]
+})
+
+// Navigation guard: require JWT for all non-public routes
+router.beforeEach((to, _from, next) => {
+  if (to.meta.public) {
+    return next()
+  }
+  const token = localStorage.getItem('jwt_token')
+  if (!token) {
+    return next('/login')
+  }
+  next()
 })
 
 export default router

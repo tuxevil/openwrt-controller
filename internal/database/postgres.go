@@ -7,6 +7,7 @@ import (
 	"os"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"golang.org/x/crypto/bcrypt"
 )
 
 var DB *sql.DB
@@ -85,12 +86,41 @@ func createTables() error {
 		dhcp_server BOOLEAN DEFAULT true,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS users (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		username VARCHAR(100) UNIQUE NOT NULL,
+		password_hash VARCHAR(255) NOT NULL,
+		role VARCHAR(50) DEFAULT 'viewer',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {
 		return fmt.Errorf("failed to create tables: %w", err)
 	}
 
+	return seedAdminUser()
+}
+
+func seedAdminUser() error {
+	var count int
+	err := DB.QueryRow("SELECT COUNT(*) FROM users").Scan(&count)
+	if err != nil || count > 0 {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte("REPLACE_WITH_BOOTSTRAP_PASSWORD"), bcrypt.DefaultCost)
+	if err != nil {
+		return fmt.Errorf("failed to hash bootstrap password: %w", err)
+	}
+	_, err = DB.Exec(
+		"INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'admin')",
+		"admin", string(hash),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to seed admin user: %w", err)
+	}
+	log.Println("Bootstrap admin user created (username: admin)")
 	return nil
 }
 
