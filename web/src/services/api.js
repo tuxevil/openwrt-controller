@@ -108,6 +108,11 @@ export default {
     return apiClient.get(`/sites/${siteId}/logs`)
   },
 
+  // Topology
+  getSiteTopology(siteId) {
+    return apiClient.get(`/sites/${siteId}/topology`)
+  },
+
   // WLANs
   getSiteWLANs(siteId) {
     return apiClient.get(`/sites/${siteId}/wlans`)

@@ -103,7 +103,7 @@ const strokeDasharray = computed(() => {
       > SCANNING FREQUENCIES...
     </div>
     
-    <div v-else-if="result.clients.length === 0" class="flex-1 flex flex-col items-center justify-center gap-4 opacity-50">
+    <div v-else-if="!result.clients || result.clients.length === 0" class="flex-1 flex flex-col items-center justify-center gap-4 opacity-50">
       <div class="w-16 h-16 border-2 border-dashed border-neon-cyan rounded-full animate-spin"></div>
       <p class="text-neon-cyan text-sm tracking-widest">NO CLIENTS DETECTED ON AIRSPACE</p>
     </div>

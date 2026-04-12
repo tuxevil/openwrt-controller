@@ -67,7 +67,7 @@ const configs = reactive(
 
 const loadTopology = async () => {
   try {
-    const res = await api.get(`/sites/${props.site_id}/topology`)
+    const res = await api.getSiteTopology(props.site_id)
     let data = res.data?.data || { nodes: {}, edges: {} }
     nodes.value = data.nodes || {}
     edges.value = data.edges || {}

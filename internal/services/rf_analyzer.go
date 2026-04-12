@@ -33,7 +33,7 @@ func AnalyzeSiteRF(siteID string) (RFHealthResult, error) {
 	}
 	defer rows.Close()
 
-	var clients []RFClientRecord
+	clients := make([]RFClientRecord, 0)
 	totalSNR := 0.0
 	validClients := 0
 	worstNoise := -200.0
