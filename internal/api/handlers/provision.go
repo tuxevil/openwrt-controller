@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/services"
 )
 
 // deepMerge merges src into dst. dst values have priority.
@@ -123,6 +124,52 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		sshConfig["authorized_keys"] = []string{strings.TrimSpace(PublicKey)}
 	}
 
+	// --- Módulo SECURE_TUNNEL: Wireguard Config ---
+	var wgPrivKey, wgPubKey, wgIP, wgEndpoint, siteWgPubKey sql.NullString
+	_ = database.DB.QueryRow(`
+		SELECT d.wg_privkey, d.wg_pubkey, d.wg_ip, s.wg_endpoint, s.wg_pubkey 
+		FROM devices d 
+		LEFT JOIN sites s ON d.site_id = s.id 
+		WHERE d.id = $1`, deviceID).Scan(&wgPrivKey, &wgPubKey, &wgIP, &wgEndpoint, &siteWgPubKey)
+
+	if !wgPrivKey.Valid || wgPrivKey.String == "" {
+		priv, pub, err := services.GenerateWireGuardKeys()
+		if err == nil {
+			database.DB.Exec("UPDATE devices SET wg_privkey = $1, wg_pubkey = $2 WHERE id = $3", priv, pub, deviceID)
+			wgPrivKey = sql.NullString{String: priv, Valid: true}
+			wgPubKey = sql.NullString{String: pub, Valid: true}
+		}
+	}
+	
+	if !wgIP.Valid || wgIP.String == "" {
+		ip, err := services.AssignInternalIP(deviceID)
+		if err == nil {
+			wgIP = sql.NullString{String: ip, Valid: true}
+		}
+	}
+
+	// Make sure the site has a controller wg pubkey
+	if !siteWgPubKey.Valid || siteWgPubKey.String == "" {
+		// Generate site controller key if missing
+		sitePriv, sitePub, err := services.GenerateWireGuardKeys()
+		if err == nil {
+			database.DB.Exec("UPDATE sites SET wg_privkey = $1, wg_pubkey = $2 WHERE id = $3", sitePriv, sitePub, siteID.String)
+			siteWgPubKey = sql.NullString{String: sitePub, Valid: true}
+		}
+	}
+
+	wgConfig := make(map[string]interface{})
+	if wgEndpoint.Valid && wgEndpoint.String != "" {
+		wgConfig["enabled"] = true
+		wgConfig["private_key"] = wgPrivKey.String
+		wgConfig["controller_pubkey"] = siteWgPubKey.String
+		wgConfig["endpoint_ip"] = wgEndpoint.String
+		wgConfig["internal_ip"] = wgIP.String
+		wgConfig["allowed_ips"] = "10.8.0.0/24"
+	} else {
+		wgConfig["enabled"] = false
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"action": "apply",
 		"config": map[string]interface{}{
@@ -130,6 +177,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 				"wlans": wlansList,
 			},
 			"ssh": sshConfig,
+			"wireguard": wgConfig,
 		},
 	})
 }

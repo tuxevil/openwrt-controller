@@ -72,6 +72,9 @@ func createTables() error {
 	ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_config_pulled_at TIMESTAMP WITH TIME ZONE;
 	ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_ip VARCHAR(50);
 	ALTER TABLE devices ADD COLUMN IF NOT EXISTS agent_version VARCHAR(64);
+	ALTER TABLE devices ADD COLUMN IF NOT EXISTS wg_pubkey VARCHAR(255);
+	ALTER TABLE devices ADD COLUMN IF NOT EXISTS wg_privkey VARCHAR(255);
+	ALTER TABLE devices ADD COLUMN IF NOT EXISTS wg_ip VARCHAR(50);
 
 	CREATE TABLE IF NOT EXISTS wlans (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -159,6 +162,9 @@ func createTables() error {
 
 	-- Migrate existing tables safely (idempotent)
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id);
+	ALTER TABLE sites ADD COLUMN IF NOT EXISTS wg_endpoint VARCHAR(255);
+	ALTER TABLE sites ADD COLUMN IF NOT EXISTS wg_pubkey VARCHAR(255);
+	ALTER TABLE sites ADD COLUMN IF NOT EXISTS wg_privkey VARCHAR(255);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {

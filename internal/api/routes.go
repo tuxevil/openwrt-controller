@@ -43,6 +43,11 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/rf-optimization", middleware.WithAuth(handlers.GetRFOptimizationHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rf-fix", middleware.WithAuth(handlers.RunRFFixHandler))
 
+	// ── VPN Matrix / SECURE_TUNNEL ───────────────────────────────────────────
+	mux.HandleFunc("GET /api/sites/{site_id}/vpn", middleware.WithAuth(handlers.GetVPNConfigHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/vpn/endpoint", middleware.WithAuth(handlers.UpdateVPNEndpointHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/vpn/peers", middleware.WithAuth(handlers.GetVPNPeersHandler))
+
 	// ── Vault / Firmware ──────────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/devices/{device_id}/backup", middleware.WithAuth(handlers.CreateBackupTrigger))
 	mux.HandleFunc("GET /api/devices/{device_id}/backups", middleware.WithAuth(handlers.GetDeviceBackupsHandler))

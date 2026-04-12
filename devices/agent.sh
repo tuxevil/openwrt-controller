@@ -156,6 +156,55 @@ EOF
                 logger -t agent "SSH_KEY_INJECTED: Master controller key added."
             }
         fi
+
+        # 8. CONFIGURACIÓN DE WIREGUARD (SECURE_TUNNEL)
+        WG_ENABLED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.enabled')
+        if [ "$WG_ENABLED" = "true" ]; then
+            logger -t agent "WIREGUARD: Tunnel config received."
+            
+            # Check if wireguard is installed, install via apk if missing
+            if ! command -v wg > /dev/null; then
+                logger -t agent "WIREGUARD: wg tools missing. Installing via apk..."
+                apk update && apk add wireguard-tools
+            fi
+            
+            # Check if wg0 already configured in uci
+            WG_EXISTS=$(uci -q get network.wg0.proto)
+            if [ "$WG_EXISTS" != "wireguard" ]; then
+                logger -t agent "WIREGUARD: Configuring wg0 interface..."
+                
+                WG_PRIV=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.private_key')
+                WG_PUB=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.controller_pubkey')
+                WG_EP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.endpoint_ip')
+                WG_IP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.internal_ip')
+                WG_ALLOWED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.allowed_ips')
+                
+                uci set network.wg0=interface
+                uci set network.wg0.proto='wireguard'
+                uci set network.wg0.private_key="$WG_PRIV"
+                
+                # Add an IP address for wireguard interface, we append /24 for subnet
+                uci -q delete network.wg0.addresses
+                uci add_list network.wg0.addresses="${WG_IP}/24"
+
+                # Define the controller peer
+                uci set network.wg0_control=wireguard_wg0
+                uci set network.wg0_control.public_key="$WG_PUB"
+                uci set network.wg0_control.endpoint_host="${WG_EP%%:*}"
+                uci set network.wg0_control.endpoint_port="${WG_EP##*:}"
+                uci set network.wg0_control.route_allowed_ips='1'
+                uci set network.wg0_control.persistent_keepalive='25'
+                
+                # Add allowed IPs
+                uci -q delete network.wg0_control.allowed_ips
+                uci add_list network.wg0_control.allowed_ips="$WG_ALLOWED"
+
+                uci commit network
+                
+                logger -t agent "WIREGUARD: wg0 committed. Bringing interface up."
+                ifup wg0
+            fi
+        fi
     fi
 
     sleep 10

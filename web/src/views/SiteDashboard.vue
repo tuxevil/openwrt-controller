@@ -59,7 +59,10 @@ const goBack = () => router.push('/global')
         <button @click="goBack" class="neon-btn !text-white !border-white hover:!bg-white !px-3 border-dashed">&lt;- RET</button>
         <h1 class="text-3xl glitch-anim">SITE_MATRIX : {{ site_id.substring(0, 8) }}</h1>
       </div>
-      <div class="text-neon-green animate-pulse font-mono">&gt; LINK_ESTABLISHED</div>
+      <div class="flex items-center gap-4">
+        <button @click="router.push(`/site/${site_id}/vpn`)" class="neon-btn !text-white !border-blue-500 hover:!bg-blue-900 border font-mono px-3 glitch-anim" style="color: #0047AB; border-color: #0047AB;">[SECURE_TUNNEL]</button>
+        <div class="text-neon-green animate-pulse font-mono">&gt; LINK_ESTABLISHED</div>
+      </div>
     </div>
 
     <!-- METRICS GRID -->
