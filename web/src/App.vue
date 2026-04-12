@@ -23,6 +23,11 @@
            <span class="tracking-widest">SETTINGS</span>
          </router-link>
 
+         <router-link :to="`/site/${$route.params.site_id}/topology`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+           <span class="tracking-widest">THE_GRID</span>
+         </router-link>
+
          <router-link :to="`/site/${$route.params.site_id}/logs`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
            <span class="tracking-widest">MATRIX LOGS</span>

@@ -7,6 +7,7 @@ import LogConsole from '../views/LogConsole.vue'
 import WirelessManager from '../views/WirelessManager.vue'
 import Terminal from '../views/Terminal.vue'
 import Incidents from '../views/Incidents.vue'
+import Topology from '../views/Topology.vue'
 import Login from '../views/Login.vue'
 
 const router = createRouter({
@@ -67,6 +68,12 @@ const router = createRouter({
       path: '/site/:site_id/ssh/:device_id?',
       name: 'site-ssh',
       component: Terminal,
+      props: true
+    },
+    {
+      path: '/site/:site_id/topology',
+      name: 'site-topology',
+      component: Topology,
       props: true
     }
   ]
