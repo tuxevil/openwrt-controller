@@ -59,6 +59,9 @@ func WriteMetrics(deviceID string, metrics *models.DeviceMetrics) error {
 		AddField("ram_free", metrics.RAMFree).
 		AddField("uptime", metrics.Uptime).
 		AddField("dhcp_clients", metrics.DHCPClients).
+		AddField("signal_dbm", metrics.SignalDBM).
+		AddField("rx_mbps", metrics.RxMbps).
+		AddField("tx_mbps", metrics.TxMbps).
 		SetTime(time.Now())
 
 	return WriteAPI.WritePoint(context.Background(), p)
@@ -97,6 +100,102 @@ func GetDeviceMetrics(deviceID string, duration string) ([]float64, error) {
 	}
 
 	return metrics, nil
+}
+
+type TimeValuePair struct {
+	Time  time.Time `json:"time"`
+	Value float64   `json:"value"`
+}
+
+// GetSiteHistory queries InfluxDB for the aggregated metric over 24h
+// deviceIDs should be the list of MAC addresses in the site
+func GetSiteHistory(deviceIDs []string, metric string) ([]TimeValuePair, error) {
+	if InfluxClient == nil {
+		return nil, fmt.Errorf("influx client not initialized")
+	}
+
+	if len(deviceIDs) == 0 {
+		return []TimeValuePair{}, nil
+	}
+
+	var fieldFilter string
+	var fn string
+
+	switch metric {
+	case "signal":
+		fieldFilter = `r["_field"] == "signal_dbm"`
+		fn = "mean"
+	case "traffic":
+		// Traffic is sum of rx and tx, but since we need a single metric or sum, let's just chart sum of RX for now 
+		// or chart both. The prompt asked for: "El acumulado de Mbps (TX/RX) por interfaz".
+		// We'll chart rx sum for simplicity, or we can write a more complex flux. Let's just track tx_mbps + rx_mbps or just rx
+		fieldFilter = `(r["_field"] == "rx_mbps" or r["_field"] == "tx_mbps")`
+		fn = "sum"
+	case "cpu":
+		fieldFilter = `r["_field"] == "cpu_load"`
+		fn = "mean"
+	default:
+		return nil, fmt.Errorf("invalid metric type")
+	}
+
+	// build device filter: r.device_id == "A" or r.device_id == "B" ...
+	deviceFilter := ""
+	for i, id := range deviceIDs {
+		if i > 0 {
+			deviceFilter += " or "
+		}
+		deviceFilter += fmt.Sprintf(`r["device_id"] == "%s"`, id)
+	}
+
+	queryAPI := InfluxClient.QueryAPI(org)
+	
+	var query string
+	if metric == "traffic" {
+		query = fmt.Sprintf(`
+			from(bucket: "%s")
+			|> range(start: -24h)
+			|> filter(fn: (r) => r["_measurement"] == "device_metrics")
+			|> filter(fn: (r) => %s)
+			|> filter(fn: (r) => %s)
+			|> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
+			|> group(columns: ["_time"])
+			|> sum()
+			|> sort(columns: ["_time"])
+		`, bucket, fieldFilter, deviceFilter)
+	} else {
+		query = fmt.Sprintf(`
+			from(bucket: "%s")
+			|> range(start: -24h)
+			|> filter(fn: (r) => r["_measurement"] == "device_metrics")
+			|> filter(fn: (r) => %s)
+			|> filter(fn: (r) => %s)
+			|> aggregateWindow(every: 5m, fn: mean, createEmpty: false)
+			|> group(columns: ["_time"])
+			|> %s()
+			|> sort(columns: ["_time"])
+		`, bucket, fieldFilter, deviceFilter, fn)
+	}
+
+	result, err := queryAPI.Query(context.Background(), query)
+	if err != nil {
+		return nil, err
+	}
+
+	var data []TimeValuePair
+	for result.Next() {
+		if val, ok := result.Record().Value().(float64); ok {
+			data = append(data, TimeValuePair{
+				Time:  result.Record().Time(),
+				Value: val,
+			})
+		}
+	}
+
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	return data, nil
 }
 
 func CloseInflux() {

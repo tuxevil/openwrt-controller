@@ -46,6 +46,9 @@ type DeviceMetrics struct {
 	RAMFree     int64   `json:"ram_free"`
 	Uptime      int64   `json:"uptime"`
 	DHCPClients int     `json:"dhcp_clients"`
+	SignalDBM   float64 `json:"signal_dbm"`
+	RxMbps      float64 `json:"rx_mbps"`
+	TxMbps      float64 `json:"tx_mbps"`
 }
 
 type WLAN struct {

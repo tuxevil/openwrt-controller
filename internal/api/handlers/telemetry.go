@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"strconv"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/models"
@@ -84,6 +85,45 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			metrics.Uptime = int64(uptime)
 		}
 	}
+
+	var totalSignal float64
+	var totalRx float64
+	var totalTx float64
+	var clientCount int
+
+	if wStations, ok := raw["wireless_stations"].(map[string]interface{}); ok {
+		for _, clientsList := range wStations {
+			if clients, ok := clientsList.([]interface{}); ok {
+				clientCount += len(clients)
+				for _, cIf := range clients {
+					if cMap, ok := cIf.(map[string]interface{}); ok {
+						if sig, ok := cMap["signal"].(float64); ok {
+							totalSignal += sig
+						}
+						// rx_rate and tx_rate come as strings like "130.0" from awk
+						if rxStr, ok := cMap["rx_rate"].(string); ok {
+							if rx, err := strconv.ParseFloat(rxStr, 64); err == nil {
+								totalRx += rx
+							}
+						}
+						if txStr, ok := cMap["tx_rate"].(string); ok {
+							if tx, err := strconv.ParseFloat(txStr, 64); err == nil {
+								totalTx += tx
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	if clientCount > 0 {
+		metrics.SignalDBM = totalSignal / float64(clientCount)
+	} else {
+		metrics.SignalDBM = 0
+	}
+	metrics.RxMbps = totalRx
+	metrics.TxMbps = totalTx
 
 	// 2. Goroutine for InfluxDB (metrics)
 	go func(devID string, mets models.DeviceMetrics) {

@@ -3,6 +3,7 @@ import { ref, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import MetricHacker from '../components/MetricHacker.vue'
+import HistoryChart from '../components/HistoryChart.vue'
 
 const props = defineProps({
   site_id: { type: String, required: true }
@@ -11,6 +12,7 @@ const props = defineProps({
 const router = useRouter()
 const devices = ref([])
 const activeMetrics = ref([])
+const activeChartMetric = ref('signal')
 let pollingInterval
 
 onMounted(async () => {
@@ -88,8 +90,23 @@ const goBack = () => router.push('/global')
       </div>
     </div>
 
+    <!-- CHRONOS_VIEW CHART -->
+    <div class="neon-panel shrink-0 h-80 flex flex-col">
+      <div class="flex items-center justify-between mb-4 border-b border-neon-green/30 pb-2">
+        <h2 class="text-xl">&gt; CHRONOS_VIEW</h2>
+        <div class="flex gap-2">
+          <button @click="activeChartMetric = 'signal'" :class="{'bg-neon-green text-black': activeChartMetric === 'signal'}" class="px-3 py-1 border border-neon-green clip-chamfer text-xs transition-colors hover:bg-neon-green hover:text-black focus:outline-none">SIGNAL</button>
+          <button @click="activeChartMetric = 'traffic'" :class="{'bg-neon-green text-black': activeChartMetric === 'traffic'}" class="px-3 py-1 border border-neon-green clip-chamfer text-xs transition-colors hover:bg-neon-green hover:text-black focus:outline-none">TRAFFIC</button>
+          <button @click="activeChartMetric = 'cpu'" :class="{'bg-neon-green text-black': activeChartMetric === 'cpu'}" class="px-3 py-1 border border-neon-green clip-chamfer text-xs transition-colors hover:bg-neon-green hover:text-black focus:outline-none">CPU</button>
+        </div>
+      </div>
+      <div class="flex-1 relative">
+        <HistoryChart :site_id="site_id" :metric="activeChartMetric" />
+      </div>
+    </div>
+
     <!-- TOPOLOGY TABLE -->
-    <div class="neon-panel flex-1 overflow-auto">
+    <div class="neon-panel flex-1 overflow-auto min-h-[250px]">
       <h2 class="text-xl mb-4">&gt; TOPOLOGY_NODES</h2>
       <table class="w-full text-left font-mono text-sm border-collapse">
         <thead class="text-neon-green border-b border-neon-green/50">
