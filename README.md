@@ -1,103 +1,76 @@
-# 📡 openwrt-controller: The Nerve Center
+# 📡 openwrt-controller: The Nerve Center \[V2.0\]
 
-**openwrt-controller** es una plataforma de orquestación, telemetría y gestión distribuida para flotas de dispositivos OpenWrt. Diseñado para operar en entornos críticos y remotos, combina una arquitectura de microservicios ligera con una interfaz de mando **Neo-Brutalista** de alta visibilidad.
-
-## 🛠️ Arquitectura del Sistema
-
-El sistema se divide en tres componentes clave que operan en perfecta sincronía:
-
-1.  **The Core (Backend):** Motor en **Go** de alto rendimiento que gestiona la persistencia en **PostgreSQL**, telemetría en **InfluxDB** y orquestación paralela vía **SSH criptográfico**.
-2.  **The Interface (Frontend):** Dashboard en **Vue 3** optimizado para baja fatiga visual (Vantablack) con visualizaciones en tiempo real mediante WebSockets.
-3.  **The Agent (`agent.sh`):** Script ultra-ligero en shell/awk que reside en los nodos OpenWrt, encargado de la recolección multimodal y la auto-inyección de identidades.
+**openwrt-controller** es una plataforma de orquestación masiva y SD-WAN privada diseñada para la gestión de flotas OpenWrt en entornos críticos y remotos (como infraestructuras rurales u off-grid). El sistema evoluciona de un simple monitor a un **Cerebro de Red** capaz de autogestionarse, repararse y ofrecer túneles de cristal hacia el interior profundo de cada nodo.
 
 * * *
 
-## 🛰️ Módulos Operativos
+## 🛰️ Módulos de Operación Avanzada
 
-| Módulo | Nombre Clave | Funcionalidad | Color Táctico |
+| Módulo | Nombre Clave | Funcionalidad | Estatus |
 | --- | --- | --- | --- |
-| **Shell** | `MATRIX_SHELL` | Terminal SSH embebida mediante WebSockets y xterm.js. | Verde Neón |
-| **Telemetry** | `CHRONOS_VIEW` | Análisis histórico de series de tiempo (Signal, Traffic, CPU). | Verde Neón |
-| **Alerts** | `THE_SIGNAL` | Motor de incidentes reactivo con notificaciones vía Telegram. | Rojo/Naranja |
-| **Topology** | `THE_GRID` | Grafo dinámico de la red basado en tablas de Bridge y Wireless. | Cian Neón |
-| **Mass Mgmt** | `ORCHESTRATOR` | Ejecución de comandos en lote y gestión de perfiles globales. | Amarillo Neón |
-| **RF Intel** | `RF_INTELLIGENCE` | Optimización heurística de canales y análisis de SNR. | Cian Brillante |
-| **Backups** | `THE_VAULT` | Bóveda de configuraciones con control de versiones y visualización Diff. | Blanco Plata |
+| **VPN Overlay** | `SECURE_TUNNEL` | Red privada WireGuard (10.8.0.x) con acceso directo a LuCI. | **ACTIVO** |
+| **Auto-Update** | `AGENT_UPDATE` | Sistema de despliegue de código con A/B Rollback automático. | **ACTIVO** |
+| **Log Center** | `LOG_HARVESTER` | Centralización de Syslogs con búsqueda indexada (GIN Index). | **ACTIVO** |
+| **Orchestrator** | `COMMAND_CENTER` | Ejecución paralela vía SSH (sync.WaitGroups) y perfiles globales. | **ACTIVO** |
+| **RF Intel** | `RF_INTELLIGENCE` | Diagnóstico de SNR y optimización heurística de canales. | **ACTIVO** |
+| **Topology** | `THE_GRID` | Mapeo visual de nodos y clientes con trazas de tráfico animadas. | **ACTIVO** |
+| **Security** | `THE_VAULT` | Bóveda de backups SHA256 con visor diferencial (Diff). | **ACTIVO** |
+
+Exportar a Hojas de cálculo
 
 * * *
 
-## 🔒 Seguridad y Hardening
+## 🏗️ Stack Tecnológico de Grado Operativo
 
--   **Identidad Criptográfica:** El controlador utiliza un par de llaves Ed25519/RSA para gestionar los nodos; las contraseñas planas están prohibidas en el plano de control.
--   **Site-Isolation:** Cada sitio geográfico requiere una `X-Site-Key` única para reportar telemetría.
--   **Auth de Usuario:** Acceso protegido por **JWT (JSON Web Tokens)** con roles granulares (Admin/Viewer).
--   **Data Integrity:** Los backups en `The Vault` se validan mediante checksums **SHA256**.
+-   **Core (Backend):** Go (Golang) con concurrencia nativa para gestión de miles de hilos SSH.
+-   **Data Lake:** InfluxDB 2.x (Series de tiempo) + PostgreSQL 16 (Relacional/Logs).
+-   **Networking:** WireGuard (X25519) para el túnel de gestión cifrado.
+-   **Frontend:** Vue 3 + Vite + Tailwind (Estética Vantablack/Cobalto).
+-   **Node Agent:** `agent.sh` optimizado para `ash` (BusyBox) con integración `procd`.
 
 * * *
 
-## 🚀 Instalación y Despliegue
+## 🚀 Despliegue de la Red Overlay
 
-### Requisitos Previos
+### 1\. Requisitos de Infraestructura
 
--   **Docker & Docker Compose** (para PostgreSQL e InfluxDB).
--   **Go 1.21+** (para compilar el Core).
--   **Node.js 18+** (para compilar la Interface).
-
-### 1\. Levantar Infraestructura
+El controlador debe correr en un entorno con Docker para la persistencia:
 
 Bash
 
 ```
-docker-compose up -d
+docker-compose up -d  # Postgres & InfluxDB
 ```
 
-### 2\. Compilar el Controlador
+### 2\. Configuración del Túnel (Secure Tunnel)
 
-Bash
+El controlador genera automáticamente las llaves para cada router. Al añadir un dispositivo, el sistema le asigna una IP en el rango `10.8.0.0/24`.
 
-```
-# Generar llaves SSH maestras
-mkdir -p certs
-ssh-keygen -t ed25519 -f ./certs/id_controller -N ""
+-   **Endpoint:** Configura tu IP pública/dominio en `Settings -> VPN`.
+-   **Handshake:** Los routers se auto-instalan `wireguard-tools` (vía `apk` o `opkg`) al recibir la configuración.
 
-# Compilar Core
-go build -ldflags="-s -w" -o openwrt-controller ./cmd/openwrt-controller
-```
+### 3\. El Ciclo de Actualización (Safe Update)
 
-### 3\. Compilar Interface
+Para actualizar la lógica de toda la flota:
 
-Bash
-
-```
-cd web
-npm install
-npm run build
-```
-
-### 4\. Configurar el Agente
-
-Copia el archivo `agent.sh` a tus routers en `/root/agent.sh`, configura la `CONTROLLER_IP` y la `SITE_KEY`, y ejecútalo:
-
-Bash
-
-```
-chmod +x /root/agent.sh
-/root/agent.sh &
-```
+1.  Edita el `agent.sh` en la vista **Agent Management**.
+2.  Presiona **\[PUSH\_DEPLOY\]**.
+3.  Los routers descargarán la versión, verificarán el Checksum y reiniciarán.
+4.  Si un router pierde conexión, volverá automáticamente a la versión anterior (**Rollback Guard**).
 
 * * *
 
-## 📑 Procedimientos de Emergencia (Runbook)
+## 📑 Manual de Operaciones (Runbook de Emergencia)
 
--   **Pérdida de Nodo:** Consultar `THE_GRID` para identificar el punto de fallo. Si el hardware ha muerto, reemplazar y usar `THE_VAULT` para restaurar la última configuración conocida.
--   **Saturación de Radio:** Ejecutar `RF_FIX` desde el módulo de Inteligencia de Radio para reubicar canales automáticamente.
--   **Actualización de Flota:** Utilizar el `ORCHESTRATOR` para enviar comandos `sysupgrade` masivos tras cargar el firmware en la Bóveda.
+-   **Diagnóstico de Caídas:** Si un nodo entra en `OUT_OF_SYNC`, revisa el **Log Explorer**. Filtra por severidad `ERROR` para buscar fallos de kernel o kernel panics.
+-   **Acceso de Emergencia:** Usa el botón **\[OPEN\_LUCI\]** en la Matrix VPN para entrar directamente a la IP 10.8.0.x del dispositivo. No necesitas abrir puertos en el router.
+-   **Interferencia de Radio:** En caso de degradación de señal en Pallatanga, activa `RF_FIX` desde el panel de inteligencia para re-escanear el espectro.
 
 * * *
 
-## 🌲 Créditos y Desarrollo
+## 🌲 Visión del Proyecto
 
-Desarrollado por **Sebastián Real** como parte del ecosistema de infraestructura distribuida para **nexOS** y gestión de activos rurales en Pallatanga, Ecuador.
+Este controlador es la columna vertebral de la infraestructura de **Sebastián Real**, integrando la telemetría de red con la resiliencia necesaria para operar en la montaña, asegurando que los 6 sitios de la corporación funcionen como una sola red local unificada y segura.
 
-> _"En la red, como en la montaña, la visibilidad es la clave de la supervivencia."_
+> **"Status: Omega Active. Traffic: Encrypted. Control: Absolute."**
 
