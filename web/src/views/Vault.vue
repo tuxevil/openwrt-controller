@@ -7,6 +7,9 @@ const route = useRoute()
 const devices = ref([])
 const activeDevice = ref('')
 const backups = ref([])
+const backupLoading = ref(false)
+const backupError = ref('')
+const backupStatus = ref('')
 
 // Diff state
 const diffing = ref(false)
@@ -54,11 +57,38 @@ const fetchBackups = async () => {
 
 const triggerBackup = async () => {
   if (!activeDevice.value) return
+  backupLoading.value = true
+  backupError.value = ''
+  backupStatus.value = 'INITIATING SSH CONNECTION...'
   try {
-    await api.createBackup(activeDevice.value)
-    alert('BACKUP INITIATED IN BACKGROUND')
-    setTimeout(fetchBackups, 3000)
-  } catch(e) { console.error(e) }
+    const res = await api.createBackup(activeDevice.value)
+    if (res.data && res.data.error) {
+      backupError.value = res.data.error
+      backupLoading.value = false
+      backupStatus.value = ''
+      return
+    }
+    backupStatus.value = 'RUNNING TAR OVER SSH — POLLING FOR RESULT...'
+    // Poll hasta 5 veces cada 3s (15s total)
+    let attempts = 0
+    const prevCount = backups.value.length
+    const poll = setInterval(async () => {
+      attempts++
+      await fetchBackups()
+      if (backups.value.length > prevCount || attempts >= 5) {
+        clearInterval(poll)
+        backupLoading.value = false
+        backupStatus.value = backups.value.length > prevCount
+          ? 'SNAP SAVED SUCCESSFULLY.'
+          : 'TIMEOUT: Backup may still be running. Check server logs.'
+        setTimeout(() => { backupStatus.value = '' }, 4000)
+      }
+    }, 3000)
+  } catch(e) {
+    backupError.value = e.response?.data?.error || e.message || 'Unknown error'
+    backupLoading.value = false
+    backupStatus.value = ''
+  }
 }
 
 const getDiff = async () => {
@@ -138,9 +168,16 @@ const lineClass = (line) => {
         
         <div class="flex items-center justify-between">
           <h2 class="text-neon-white text-sm tracking-[0.2em] drop-shadow-[0_0_5px_#ffffff]">BACKUP_REGISTER</h2>
-          <button @click="triggerBackup" class="text-xs px-3 py-1 bg-neon-white text-black font-bold hover:shadow-[0_0_15px_#ffffff] transition">
-            SNAP
+          <button @click="triggerBackup" :disabled="backupLoading" class="text-xs px-3 py-1 bg-neon-white text-black font-bold hover:shadow-[0_0_15px_#ffffff] transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2">
+            <span v-if="backupLoading" class="inline-block w-2 h-2 bg-black rounded-full animate-ping"></span>
+            {{ backupLoading ? 'SNAPPING...' : 'SNAP' }}
           </button>
+        </div>
+
+        <!-- Status/Error messages -->
+        <div v-if="backupStatus" class="text-xs text-neon-white/70 font-mono animate-pulse">{{ backupStatus }}</div>
+        <div v-if="backupError" class="text-xs text-neon-red font-mono border border-neon-red/40 px-2 py-1">
+          ⚠ {{ backupError }}
         </div>
 
         <div class="flex-1 overflow-auto border border-[#1a1a1a] bg-[#030303] p-2 mt-4 space-y-2 max-h-[300px]">

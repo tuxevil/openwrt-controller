@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"github.com/google/uuid"
 
@@ -16,10 +17,26 @@ func CreateBackupTrigger(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid device"}`, http.StatusBadRequest)
 		return
 	}
-	
+
+	// Primero verificamos que el dispositivo tenga last_ip registrada
+	var lastIP string
+	err := database.DB.QueryRow(`SELECT COALESCE(last_ip, '') FROM devices WHERE id = $1`, deviceID).Scan(&lastIP)
+	if err != nil || lastIP == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"error": "Device has no known IP address. Ensure the device has sent telemetry recently.",
+		})
+		return
+	}
+
 	// Correr asincrónicamente para no bloquear UI
 	go func() {
-		_ = services.CreateBackup(deviceID)
+		if err := services.CreateBackup(deviceID); err != nil {
+			log.Printf("[VAULT][ERROR] Backup failed for device %s: %v", deviceID, err)
+		} else {
+			log.Printf("[VAULT][OK] Backup completed for device %s", deviceID)
+		}
 	}()
 
 	w.Header().Set("Content-Type", "application/json")

@@ -2,12 +2,10 @@ package services
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
-	"strings"
 	"time"
 
 	"openwrt-controller/internal/database"
@@ -23,8 +21,11 @@ func CreateBackup(deviceID string) error {
 		return fmt.Errorf("device IP not found")
 	}
 
-	cmd := "tar -cz -C /etc config | base64"
-	
+	// SSH soporta binario nativo — no necesitamos base64.
+	// /sbin/sysupgrade --create-backup - escribe tar.gz a stdout.
+	cmd := "/sbin/sysupgrade --create-backup -"
+
+
 	// Obtenemos la llave asimétrica para auth
 	keyBytes, err := loadControllerPrivateKey()
 	if err != nil {
@@ -56,15 +57,11 @@ func CreateBackup(deviceID string) error {
 	}
 	defer session.Close()
 
-	out, err := session.Output(cmd)
+	// session.Output() devuelve bytes crudos — el tar.gz de sysupgrade.
+	// SSH maneja binarios nativamente, no necesitamos base64.
+	rawBytes, err := session.Output(cmd)
 	if err != nil {
 		return fmt.Errorf("backup command fail: %w", err)
-	}
-
-	b64out := strings.TrimSpace(string(out))
-	rawBytes, err := base64.StdEncoding.DecodeString(b64out)
-	if err != nil {
-		return fmt.Errorf("base64 decode fail: %w", err)
 	}
 
 	// Calculate checksum
