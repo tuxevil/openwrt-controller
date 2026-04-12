@@ -42,7 +42,12 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/rf-optimization", middleware.WithAuth(handlers.GetRFOptimizationHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rf-fix", middleware.WithAuth(handlers.RunRFFixHandler))
 
-	// ── Orchestrator ──────────────────────────────────────────────────────────
+	// ── Vault / Firmware ──────────────────────────────────────────────────────
+	mux.HandleFunc("POST /api/devices/{device_id}/backup", middleware.WithAuth(handlers.CreateBackupTrigger))
+	mux.HandleFunc("GET /api/devices/{device_id}/backups", middleware.WithAuth(handlers.GetDeviceBackupsHandler))
+	mux.HandleFunc("GET /api/backups/{backup_id}/diff", middleware.WithAuth(handlers.DiffBackupHandler))
+	mux.HandleFunc("POST /api/firmwares", middleware.WithAuth(handlers.UploadFirmwareHandler))
+	mux.HandleFunc("POST /api/devices/{device_id}/sysupgrade", middleware.WithAuth(handlers.TriggerSysupgradeHandler))
 	mux.HandleFunc("GET /api/profiles", middleware.WithAuth(handlers.ListProfilesHandler))
 	mux.HandleFunc("POST /api/profiles", middleware.WithAuth(handlers.CreateProfileHandler))
 	mux.HandleFunc("DELETE /api/profiles/{profile_id}", middleware.WithAuth(handlers.DeleteProfileHandler))

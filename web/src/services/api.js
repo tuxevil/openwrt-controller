@@ -59,6 +59,25 @@ export default {
   getDeviceMetrics(deviceId) {
     return apiClient.get(`/devices/${deviceId}/metrics`)
   },
+  
+  // Vault / Backups / Firmware
+  getDeviceBackups(deviceId) {
+    return apiClient.get(`/devices/${deviceId}/backups`)
+  },
+  createBackup(deviceId) {
+    return apiClient.post(`/devices/${deviceId}/backup`)
+  },
+  diffBackups(b1, b2) {
+    return apiClient.get(`/backups/${b1}/diff?compare_with=${b2}`)
+  },
+  uploadFirmware(formData) {
+    return apiClient.post('/firmwares', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    })
+  },
+  triggerSysupgrade(deviceId) {
+    return apiClient.post(`/devices/${deviceId}/sysupgrade`)
+  },
 
   // RF Intelligence
   getRFOptimization(siteId) {

@@ -118,6 +118,23 @@ func createTables() error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS backups (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		device_id VARCHAR(50) REFERENCES devices(id),
+		checksum VARCHAR(64) NOT NULL,
+		content BYTEA,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS firmwares (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		filename VARCHAR(255) NOT NULL,
+		version VARCHAR(50),
+		model_compatibility VARCHAR(50),
+		data BYTEA,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
 	-- Migrate existing tables safely (idempotent)
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id);
 	`
