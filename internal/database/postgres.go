@@ -261,9 +261,11 @@ func UpsertDeviceState(deviceID string, stateJSON []byte, model string, lastIP s
 }
 
 type LogEntry struct {
-	Timestamp string `json:"timestamp"`
-	Level     string `json:"level"`
-	Message   string `json:"message"`
+	Timestamp  string `json:"timestamp"`
+	Level      string `json:"level"`
+	Message    string `json:"message"`
+	DeviceID   string `json:"device_id"`
+	DeviceName string `json:"device_name"`
 }
 
 func InsertDeviceLogs(deviceID string, logs []LogEntry) error {

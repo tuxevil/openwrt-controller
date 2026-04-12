@@ -144,7 +144,6 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	if logsStr, ok := raw["logs"].(string); ok && logsStr != "" {
 		lines := strings.Split(logsStr, "\n")
 		var parsedLogs []database.LogEntry
-		now := time.Now().Format(time.RFC3339)
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line == "" {
@@ -158,18 +157,46 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(lower, "err") || strings.Contains(lower, "fail") || strings.Contains(lower, "panic") || strings.Contains(lower, "crit") || strings.Contains(lower, "auth.error") {
 				severity = "ERROR"
 			}
-			
-			// Simple fallback for timestamp (in a real scenario we'd use regex, here we assume it's prepended or just use now)
+
+			// Parse the syslog timestamp from the log line.
+			// OpenWrt logread emits lines like:
+			//   "Mon Jan  2 15:04:05 2006 hostname daemon.info process: msg"
+			// We try several common formats. The reference time fields MUST match
+			// Go's magic reference (Mon=Mon Jan=Jan 2=2 15=15 04=04 05=05 2006=2006).
+			syslogFormats := []string{
+				"Mon Jan _2 15:04:05 2006", // OpenWrt default with year
+				"Mon Jan  2 15:04:05 2006", // double-space variant
+				"Jan _2 15:04:05",          // RFC3164 without year
+				"Jan  2 15:04:05",          // RFC3164 double-space
+				"2006-01-02T15:04:05Z07:00", // ISO-8601
+				"2006-01-02 15:04:05",       // SQL-ish
+			}
+			timestamp := time.Now().UTC().Format(time.RFC3339)
+			// Try to parse the leading portion of the line
+			for _, fmt := range syslogFormats {
+				prefixLen := len(fmt)
+				if len(line) >= prefixLen {
+					if t, err := time.Parse(fmt, line[:prefixLen]); err == nil {
+						// For formats without a year, assume the current year
+						if t.Year() == 0 {
+							t = t.AddDate(time.Now().Year(), 0, 0)
+						}
+						timestamp = t.UTC().Format(time.RFC3339)
+						break
+					}
+				}
+			}
+
 			parsedLogs = append(parsedLogs, database.LogEntry{
-				Timestamp: now,
+				Timestamp: timestamp,
 				Level:     severity,
 				Message:   line,
 			})
 		}
-		
+
 		go func(devID string, logs []database.LogEntry) {
 			if err := database.InsertDeviceLogs(devID, logs); err != nil {
-				log.Printf("Error inserting logs sequentially: %v\n", err)
+				log.Printf("Error inserting logs: %v\n", err)
 			}
 		}(deviceID, parsedLogs)
 	}

@@ -20,7 +20,8 @@ func GetLogsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Base query joining devices and system_logs
 	query := `
-		SELECT l.log_timestamp, l.severity, l.message 
+		SELECT l.log_timestamp, l.severity, l.message, d.id as device_id,
+		       COALESCE(NULLIF(d.state_json->'board'->>'hostname',''), NULLIF(d.name,''), d.id) as device_name
 		FROM system_logs l
 		JOIN devices d ON d.id = l.device_id
 		WHERE d.site_id = $1
@@ -53,10 +54,10 @@ func GetLogsHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var timestamp time.Time
 		var entry database.LogEntry
-		if err := rows.Scan(&timestamp, &entry.Level, &entry.Message); err != nil {
+		if err := rows.Scan(&timestamp, &entry.Level, &entry.Message, &entry.DeviceID, &entry.DeviceName); err != nil {
 			continue
 		}
-		entry.Timestamp = timestamp.Format(time.RFC3339)
+		entry.Timestamp = timestamp.UTC().Format(time.RFC3339)
 		logs = append(logs, entry)
 	}
 
