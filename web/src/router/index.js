@@ -17,6 +17,7 @@ import Login from '../views/Login.vue'
 import AgentMgmt from '../views/AgentMgmt.vue'
 import VPNMatrix from '../views/VPNMatrix.vue'
 import SecurityMatrix from '../views/SecurityMatrix.vue'
+import BandwidthSentry from '../views/BandwidthSentry.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -115,6 +116,12 @@ const router = createRouter({
       path: '/site/:site_id/vpn',
       name: 'site-vpn',
       component: VPNMatrix,
+      props: true
+    },
+    {
+      path: '/site/:site_id/bandwidth',
+      name: 'site-bandwidth',
+      component: BandwidthSentry,
       props: true
     },
     {

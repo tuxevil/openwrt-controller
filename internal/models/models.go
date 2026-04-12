@@ -62,6 +62,18 @@ type WLAN struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type TopTalker struct {
+	MAC       string `json:"mac"`
+	RateRx    int    `json:"rate_rx"`
+	RateTx    int    `json:"rate_tx"`
+	TotalRate int    `json:"total_rate"`
+}
+
+type IfaceStats struct {
+	RxBytes int64 `json:"rx_bytes"`
+	TxBytes int64 `json:"tx_bytes"`
+}
+
 type SiteSettings struct {
 	SiteID     string    `json:"site_id"`
 	DNSServers string    `json:"dns_servers"`

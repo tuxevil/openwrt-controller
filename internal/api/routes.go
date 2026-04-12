@@ -63,6 +63,10 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("DELETE /api/profiles/{profile_id}", middleware.WithAuth(handlers.DeleteProfileHandler))
 	mux.HandleFunc("POST /api/orchestrator/command", middleware.WithAuth(handlers.MassCommandHandler))
 
+	// ── Traffic Management ───────────────────────────────────────────────────
+	mux.HandleFunc("POST /api/bandwidth/limit", middleware.WithAuth(handlers.LimitBandwidthHandler))
+	mux.HandleFunc("GET /api/bandwidth/stats", middleware.WithAuth(handlers.BandwidthStatsHandler))
+
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Uses site-key auth inside the script context
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)
