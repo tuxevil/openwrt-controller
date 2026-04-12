@@ -18,7 +18,7 @@ var (
 
 // AnalyzeLogs hooks into the LogHarvester ingestion stream to act as the Reactive Pipeline.
 func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
-	triggers := []string{"panic", "OOM", "segfault", "auth.error", "denied", "hostapd: deauthenticated", "refused"}
+	triggers := []string{"panic", "OOM", "segfault", "auth.error", "denied", "hostapd: deauthenticated", "refused", "bad password"}
 
 	triggered := false
 	for _, l := range logs {

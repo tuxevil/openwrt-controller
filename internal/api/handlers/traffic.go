@@ -161,8 +161,29 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 		result = make([]map[string]interface{}, 0)
 	}
 
+	var shapedMacs []string
+	rowsShapes, err := database.DB.Query(`
+		SELECT sr.mac 
+		FROM shaping_rules sr
+		JOIN devices d ON sr.device_id = d.id
+		WHERE d.site_id = $1
+	`, siteID)
+	if err == nil {
+		defer rowsShapes.Close()
+		for rowsShapes.Next() {
+			var m string
+			if err := rowsShapes.Scan(&m); err == nil {
+				shapedMacs = append(shapedMacs, m)
+			}
+		}
+	}
+	if shapedMacs == nil {
+		shapedMacs = make([]string, 0)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data": result,
+		"shaped_macs": shapedMacs,
 	})
 }

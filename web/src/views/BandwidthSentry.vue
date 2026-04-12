@@ -83,6 +83,9 @@ const fetchData = async () => {
     const res = await api.client.get(`/bandwidth/stats?site_id=${route.params.site_id}`)
     if (res && res.data && res.data.data) {
       devices.value = res.data.data
+      if (res.data.shaped_macs) {
+        shapedMacs.value = res.data.shaped_macs
+      }
 
       const nowTime = Date.now() / 1000
       const dt = prevPollTime ? Math.max(1, nowTime - prevPollTime) : 10
@@ -228,6 +231,19 @@ const applySniper = async () => {
   }
   shaping.value = false
 }
+
+const clearSniper = async (device, client) => {
+  try {
+    await api.client.post('/bandwidth/sniper', {
+      device_id: device.device_id,
+      mac: client.mac,
+      clear: true
+    })
+    shapedMacs.value = shapedMacs.value.filter(m => m !== client.mac)
+  } catch (e) {
+    alert('Failed to clear sniper: ' + e)
+  }
+}
 </script>
 
 <template>
@@ -327,10 +343,18 @@ const applySniper = async () => {
                   <!-- Sniper button -->
                   <td class="py-3 text-center">
                     <button
+                      v-if="!shapedMacs.includes(client.mac)"
                       @click="openSniperModal(dev, client)"
                       class="px-3 py-1 text-xs border border-[#DC143C] text-[#DC143C] hover:bg-[#DC143C] hover:text-black transition-colors"
                     >
                       🎯 SNIPER
+                    </button>
+                    <button
+                      v-else
+                      @click="clearSniper(dev, client)"
+                      class="px-3 py-1 text-xs border border-[#39FF14] text-[#39FF14] hover:bg-[#39FF14] hover:text-black transition-colors"
+                    >
+                      ✅ CLEAR
                     </button>
                   </td>
                 </tr>
