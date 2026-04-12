@@ -69,11 +69,13 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/bandwidth/sniper", middleware.WithAuth(handlers.SniperBandwidthHandler))
 
 	// ── Agent Management ─────────────────────────────────────────────────────
-	// Uses site-key auth inside the script context
+	// Device-facing: authenticated by X-Site-Key header (no JWT)
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)
 	mux.HandleFunc("GET /api/agent/latest/raw", handlers.GetLatestAgentRawHandler)
+	// Dashboard-facing: JWT required
 	mux.HandleFunc("POST /api/agent/deploy", middleware.WithAuth(handlers.DeployAgentHandler))
 	mux.HandleFunc("GET /api/agent/status", middleware.WithAuth(handlers.GetAgentVersionsStatusHandler))
+	mux.HandleFunc("GET /api/agent/site/raw", middleware.WithAuth(handlers.GetSiteAgentRawHandler))
 
 	// ── SPA Static files ─────────────────────────────────────────────────────
 	fs := http.FileServer(http.Dir("./web/dist"))

@@ -213,6 +213,7 @@ func createTables() error {
 	// Idempotent migrations
 	migrations := []string{
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS api_key TEXT UNIQUE",
+		"ALTER TABLE agent_versions ADD COLUMN IF NOT EXISTS site_id UUID REFERENCES sites(id)",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
