@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"openwrt-controller/internal/database"
@@ -40,6 +41,50 @@ func LimitBandwidthHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "success"})
+}
+
+type SniperRequest struct {
+	DeviceID string `json:"device_id"`
+	MAC      string `json:"mac"`
+	Rate     int    `json:"rate_mbytes"`
+	Duration int    `json:"duration_minutes"` 
+	Clear    bool   `json:"clear,omitempty"`
+}
+
+func SniperBandwidthHandler(w http.ResponseWriter, r *http.Request) {
+	var req SniperRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid payload", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	if req.DeviceID == "" || req.MAC == "" {
+		http.Error(w, "device_id and mac are required", http.StatusBadRequest)
+		return
+	}
+
+	if req.Clear {
+		if err := services.ClearShaping(req.DeviceID, req.MAC); err != nil {
+			http.Error(w, fmt.Sprintf("Clear shaping failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]string{"status": "cleared"})
+		return
+	}
+
+	if err := services.ApplySniperShaping(req.DeviceID, req.MAC, req.Rate, req.Duration); err != nil {
+		if err.Error() == "Incompatible Engine: nftables not supported on this device" {
+			http.Error(w, err.Error(), http.StatusNotImplemented)
+		} else {
+			http.Error(w, fmt.Sprintf("Sniper shaping failed: %v", err), http.StatusInternalServerError)
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "applied"})
 }
 
 func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {

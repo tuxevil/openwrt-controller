@@ -33,6 +33,7 @@ func main() {
 	defer database.CloseInflux()
 
 	services.StartAlertEngine()
+	services.StartSniperReaper()
 
 	// Setup routes using the dedicated routes file
 	mux := api.SetupRoutes()

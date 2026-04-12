@@ -66,6 +66,7 @@ func SetupRoutes() *http.ServeMux {
 	// ── Traffic Management ───────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/bandwidth/limit", middleware.WithAuth(handlers.LimitBandwidthHandler))
 	mux.HandleFunc("GET /api/bandwidth/stats", middleware.WithAuth(handlers.BandwidthStatsHandler))
+	mux.HandleFunc("POST /api/bandwidth/sniper", middleware.WithAuth(handlers.SniperBandwidthHandler))
 
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Uses site-key auth inside the script context

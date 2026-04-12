@@ -46,6 +46,60 @@ func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
 	lastSentinelRun = time.Now()
 	sentinelMu.Unlock()
 
+	// Check if this was a local brute force to trigger Sniper
+	triggerSniper := false
+	var targetIP string
+	for _, l := range logs {
+		msg := l.Message
+		// E.g. Bad password attempt for 'root' from 192.168.1.100:1234
+		if strings.Contains(msg, "Bad password") && strings.Contains(msg, "from") {
+			parts := strings.Split(msg, "from ")
+			if len(parts) == 2 {
+				ipPort := strings.Fields(parts[1])[0]
+				ipOnly := strings.Split(ipPort, ":")[0]
+				if strings.HasPrefix(ipOnly, "192.168.") || strings.HasPrefix(ipOnly, "10.") {
+					targetIP = ipOnly
+					triggerSniper = true
+					break
+				}
+			}
+		}
+	}
+
+	if triggerSniper && targetIP != "" {
+		log.Printf("[SENTINEL_AI] Local Brute Force detected from %s. Deploying Preventive Sniper.", targetIP)
+		
+		// Attempt to resolve MAC from ARP table
+		var stateJSON []byte
+		err := database.DB.QueryRow("SELECT state_json FROM devices WHERE id = $1", deviceID).Scan(&stateJSON)
+		if err == nil && len(stateJSON) > 0 {
+			var state map[string]interface{}
+			if json.Unmarshal(stateJSON, &state) == nil {
+				if arp, ok := state["arp_table"].([]interface{}); ok {
+					var targetMac string
+					for _, entry := range arp {
+						if e, ok := entry.(map[string]interface{}); ok {
+							if ip, ok := e["ip"].(string); ok && ip == targetIP {
+								if m, ok := e["mac"].(string); ok {
+									targetMac = m
+									break
+								}
+							}
+						}
+					}
+					
+					if targetMac != "" {
+						err := ApplySniperShaping(deviceID, targetMac, 64, 5) // Hard limit 64 KB/s for 5 mins
+						if err == nil {
+							log.Printf("[SENTINEL_AI] Sniper Shaping applied to %s (%s)", targetIP, targetMac)
+							notifyTelegram(fmt.Sprintf("🛡️ *ACTIVE DEFENSE TRIGGERED*\n\nLocal brute force detected from %s (%s).\nSniper Shaping deployed for 5 minutes.", targetIP, targetMac))
+						}
+					}
+				}
+			}
+		}
+	}
+
 	go func(targetTime time.Time) {
 		log.Println("[SENTINEL_AI] Critical trigger detected. Gathering fleet context...")
 

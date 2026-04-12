@@ -53,13 +53,13 @@ func LimitBandwidth(deviceID, mac string, download, upload int) error {
 	// We'll proceed with SQM eth0 as instructed.
 	
 	cmd := fmt.Sprintf(`
-		uci set sqm.eth0=queue 
-		uci set sqm.eth0.interface='eth0'
-		uci set sqm.eth0.download='%d' 
-		uci set sqm.eth0.upload='%d'
-		uci set sqm.eth0.qdisc='cake' 
-		uci set sqm.eth0.script='piece_of_cake.qos'
-		uci set sqm.eth0.enabled='1'
+		uci set sqm.brlan=queue 
+		uci set sqm.brlan.interface='br-lan'
+		uci set sqm.brlan.download='%d' 
+		uci set sqm.brlan.upload='%d'
+		uci set sqm.brlan.qdisc='cake' 
+		uci set sqm.brlan.script='piece_of_cake.qos'
+		uci set sqm.brlan.enabled='1'
 		uci commit sqm
 		/etc/init.d/sqm restart >/dev/null 2>&1
 	`, download, upload)

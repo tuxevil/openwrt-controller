@@ -1,16 +1,15 @@
 #!/bin/sh
 
 # === CONFIGURACIÓN ===
-CONTROLLER_IP="10.0.0.6"
-PORT="3000"
-# Obtener MAC de la interfaz puente como ID único
-DEVICE_ID=$(cat /sys/class/net/br-lan/address | tr '[:lower:]' '[:upper:]')
 # LLAVE DE SITIO (Obtenida del Dashboard -> Settings)
 SITE_KEY="TU_API_KEY_AQUI"
-
+CONTROLLER_IP="10.0.0.6"
+PORT="3000"
 BASE_URL="http://$CONTROLLER_IP:$PORT/api"
 TELEMETRY_URL="$BASE_URL/telemetry"
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
+# Obtener MAC de la interfaz puente como ID único
+DEVICE_ID=$(cat /sys/class/net/br-lan/address | tr '[:lower:]' '[:upper:]')
 
 # Instalar dependencias si faltan (opcional)
 # opkg update && opkg install iwinfo curl
@@ -239,7 +238,7 @@ EOF
 
     if [ -n "$CONFIG_RESPONSE" ]; then
         # Extraer llave pública usando jsonfilter (nativo en OpenWrt)
-        PUBKEY=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.ssh_pubkey')
+        PUBKEY=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.ssh_pubkey' 2>/dev/null)
         
         if [ -n "$PUBKEY" ]; then
             # Crear archivo si no existe y asegurar permisos
@@ -254,7 +253,7 @@ EOF
         fi
 
         # 8. CONFIGURACIÓN DE WIREGUARD (SECURE_TUNNEL)
-        WG_ENABLED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.enabled')
+        WG_ENABLED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.enabled' 2>/dev/null)
         if [ "$WG_ENABLED" = "true" ]; then
             logger -t agent "WIREGUARD: Tunnel config received."
             
@@ -269,11 +268,11 @@ EOF
             if [ "$WG_EXISTS" != "wireguard" ]; then
                 logger -t agent "WIREGUARD: Configuring wg0 interface..."
                 
-                WG_PRIV=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.private_key')
-                WG_PUB=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.controller_pubkey')
-                WG_EP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.endpoint_ip')
-                WG_IP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.internal_ip')
-                WG_ALLOWED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.allowed_ips')
+                WG_PRIV=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.private_key' 2>/dev/null)
+                WG_PUB=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.controller_pubkey' 2>/dev/null)
+                WG_EP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.endpoint_ip' 2>/dev/null)
+                WG_IP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.internal_ip' 2>/dev/null)
+                WG_ALLOWED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.allowed_ips' 2>/dev/null)
                 
                 uci set network.wg0=interface
                 uci set network.wg0.proto='wireguard'

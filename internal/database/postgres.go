@@ -193,6 +193,16 @@ func createTables() error {
 		CHECK (id = 1)
 	);
 
+	CREATE TABLE IF NOT EXISTS shaping_rules (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		device_id VARCHAR(50) REFERENCES devices(id) ON DELETE CASCADE,
+		mac VARCHAR(50) NOT NULL,
+		rate_mbytes INT NOT NULL,
+		expires_at TIMESTAMP WITH TIME ZONE,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(device_id, mac)
+	);
+
 	INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 	`
 	_, err := DB.Exec(query)

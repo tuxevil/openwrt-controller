@@ -30,7 +30,7 @@ onUnmounted(() => {
 
 const fetchData = async () => {
   try {
-    const res = await api.client.get(`/api/bandwidth/stats?site_id=${route.params.site_id}`)
+    const res = await api.client.get(`/bandwidth/stats?site_id=${route.params.site_id}`)
     if (res && res.data && res.data.data) {
       devices.value = res.data.data
       
@@ -66,33 +66,34 @@ const fetchData = async () => {
   }
 }
 
-const currentLimitForm = ref({ mac: '', download: 5000, upload: 1000, deviceId: '' })
-const showLimitModal = ref(false)
-const limiting = ref(false)
+const currentLimitForm = ref({ mac: '', profileKbytes: 64, durationMin: 10, deviceId: '' })
+const showSniperModal = ref(false)
+const shaping = ref(false)
+const shapedMacs = ref([]) // Ideally we'd fetch this from the backend or the device payload. For UI immediate effect, store it.
 
-const openLimitModal = (device, talker) => {
+const openSniperModal = (device, talker) => {
   currentLimitForm.value.deviceId = device.device_id
   currentLimitForm.value.mac = talker.mac
-  // Default to 5M down, 1M up
-  currentLimitForm.value.download = 5000
-  currentLimitForm.value.upload = 1000
-  showLimitModal.value = true
+  currentLimitForm.value.profileKbytes = 640 // Default to Standard (5Mbps ~ 640KB/s)
+  currentLimitForm.value.durationMin = 10
+  showSniperModal.value = true
 }
 
-const applyLimit = async () => {
-  limiting.value = true
+const applySniper = async () => {
+  shaping.value = true
   try {
-    await api.client.post('/api/bandwidth/limit', {
+    await api.client.post('/bandwidth/sniper', {
       device_id: currentLimitForm.value.deviceId,
       mac: currentLimitForm.value.mac,
-      download: parseInt(currentLimitForm.value.download),
-      upload: parseInt(currentLimitForm.value.upload)
+      rate_mbytes: parseInt(currentLimitForm.value.profileKbytes), // Now kbytes sent in rate_mbytes var
+      duration_minutes: parseInt(currentLimitForm.value.durationMin)
     })
-    showLimitModal.value = false
+    shapedMacs.value.push(currentLimitForm.value.mac)
+    showSniperModal.value = false
   } catch (e) {
-    alert("Failed to apply limit: " + e)
+    alert("Failed to apply sniper: " + e)
   }
-  limiting.value = false
+  shaping.value = false
 }
 
 const chartData = ref({
@@ -187,13 +188,16 @@ const chartOptions = {
               </thead>
               <tbody>
                 <tr v-for="talker in dev.top_talkers" :key="talker.mac" class="border-b border-[#E4FF1A]/10 hover:bg-[#E4FF1A]/5">
-                  <td class="py-3 font-bold text-[#39FF14]">{{ talker.mac }}</td>
-                  <td class="py-3 text-right text-white">{{ (talker.rate_rx * 8 / 1024).toFixed(1) }} Kbps</td>
-                  <td class="py-3 text-right text-[#E4FF1A]">{{ (talker.rate_tx * 8 / 1024).toFixed(1) }} Kbps</td>
-                  <td class="py-3 text-right font-bold">{{ (talker.total_rate * 8 / 1024).toFixed(1) }} Kbps</td>
+                  <td class="py-3 font-bold flex items-center gap-2" :class="shapedMacs.includes(talker.mac) ? 'text-[#DC143C]' : 'text-[#39FF14]'">
+                    <span v-if="shapedMacs.includes(talker.mac)" title="Sniper Shaper Active">🎯</span>
+                    {{ talker.mac }}
+                  </td>
+                  <td class="py-3 text-right text-white" :class="shapedMacs.includes(talker.mac) ? 'text-[#DC143C]/80' : ''">{{ (talker.rate_rx * 8 / 1024).toFixed(1) }} Kbps</td>
+                  <td class="py-3 text-right" :class="shapedMacs.includes(talker.mac) ? 'text-[#DC143C]/80' : 'text-[#E4FF1A]'">{{ (talker.rate_tx * 8 / 1024).toFixed(1) }} Kbps</td>
+                  <td class="py-3 text-right font-bold" :class="shapedMacs.includes(talker.mac) ? 'text-[#DC143C]' : ''">{{ (talker.total_rate * 8 / 1024).toFixed(1) }} Kbps</td>
                   <td class="py-3 text-center">
-                    <button @click="openLimitModal(dev, talker)" class="px-3 py-1 text-xs border border-red-500 text-red-500 hover:bg-red-500 hover:text-black transition-colors rounded-sm">
-                      [ LIMIT ]
+                    <button @click="openSniperModal(dev, talker)" class="px-3 py-1 text-xs border border-red-500 text-red-500 hover:bg-red-500 hover:text-black transition-colors rounded-sm ml-2">
+                      [ SNIPER ]
                     </button>
                   </td>
                 </tr>
@@ -204,28 +208,36 @@ const chartOptions = {
       </template>
     </div>
 
-    <!-- Limit Modal -->
-    <div v-if="showLimitModal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm">
-      <div class="bg-[#0a0a0a] border border-red-500 p-6 w-[400px] flex flex-col gap-4 shadow-[0_0_20px_rgba(239,68,68,0.3)]">
-        <h2 class="text-xl text-red-500 font-bold mb-2">> INJECT TRAFFIC LIMIT</h2>
-        <div class="text-xs text-red-400 mb-4 opacity-80">
+    <!-- Sniper Modal -->
+    <div v-if="showSniperModal" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 backdrop-blur-sm">
+      <div class="bg-[#0a0a0a] border border-[#DC143C] p-6 w-[400px] flex flex-col gap-4 shadow-[0_0_20px_rgba(220,20,60,0.3)]">
+        <h2 class="text-xl text-[#DC143C] font-bold mb-2">> 🎯 DEPLOY SNIPER SHAPER</h2>
+        <div class="text-xs text-[#DC143C]/80 mb-4 opacity-80">
           Target MAC: <span class="text-white">{{ currentLimitForm.mac }}</span>
         </div>
         
         <div class="flex flex-col gap-2">
-          <label class="text-xs text-muted">DOWNLOAD LIMIT (Kbps)</label>
-          <input type="number" v-model="currentLimitForm.download" class="bg-black border border-red-500/50 p-2 text-white outline-none focus:border-red-500" />
+          <label class="text-xs text-muted">SHAPING PROFILE</label>
+          <select v-model="currentLimitForm.profileKbytes" class="bg-black border border-[#DC143C]/50 p-2 text-white outline-none focus:border-[#DC143C]">
+            <option value="128">Eco (1 Mbps)</option>
+            <option value="640">Standard (5 Mbps)</option>
+            <option value="64">Hard (512 Kbps)</option>
+          </select>
         </div>
         
         <div class="flex flex-col gap-2">
-          <label class="text-xs text-muted">UPLOAD LIMIT (Kbps)</label>
-          <input type="number" v-model="currentLimitForm.upload" class="bg-black border border-[#E4FF1A]/50 p-2 text-white outline-none focus:border-[#E4FF1A]" />
+          <label class="text-xs text-muted">DURATION</label>
+          <select v-model="currentLimitForm.durationMin" class="bg-black border border-[#DC143C]/50 p-2 text-white outline-none focus:border-[#DC143C]">
+            <option value="10">10 Minutes</option>
+            <option value="60">1 Hour</option>
+            <option value="0">Indefinite</option>
+          </select>
         </div>
 
         <div class="flex justify-end gap-3 mt-4">
-          <button @click="showLimitModal = false" class="px-4 py-2 text-sm border border-neutral-600 hover:bg-neutral-800 transition-colors">CANCEL</button>
-          <button @click="applyLimit" :disabled="limiting" class="px-4 py-2 text-sm bg-red-600 hover:bg-red-500 text-white font-bold transition-colors">
-            {{ limiting ? 'INJECTING...' : 'ENFORCE' }}
+          <button @click="showSniperModal = false" class="px-4 py-2 text-sm border border-neutral-600 hover:bg-neutral-800 transition-colors">CANCEL</button>
+          <button @click="applySniper" :disabled="shaping" class="px-4 py-2 text-sm bg-[#DC143C] hover:bg-[#DC143C]/80 text-white font-bold transition-colors">
+            {{ shaping ? 'DEPLOYING...' : 'LOCK TARGET' }}
           </button>
         </div>
       </div>
