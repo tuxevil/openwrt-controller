@@ -76,3 +76,14 @@ type Client struct {
 	IPAddress string `json:"ip_address"`
 	Signal    int    `json:"signal"`
 }
+
+type Incident struct {
+	ID           string    `json:"id"`
+	SiteID       string    `json:"site_id"`
+	DeviceID     string    `json:"device_id"`
+	IncidentType string    `json:"type"`     // NODE_DOWN, CPU_OVERLOAD, SIGNAL_CRITICAL
+	Severity     string    `json:"severity"` // CRITICAL, WARNING
+	Status       string    `json:"status"`   // OPEN, RESOLVED
+	CreatedAt    time.Time `json:"created_at"`
+	ResolvedAt   *time.Time `json:"resolved_at,omitempty"`
+}

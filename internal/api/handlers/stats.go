@@ -40,7 +40,7 @@ func GetSiteHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	if len(deviceIDs) == 0 {
 		log.Printf("GetSiteHistoryHandler: no devices found for site %s", siteID)
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]database.TimeValuePair{})
+		json.NewEncoder(w).Encode(map[string]interface{}{"data": []database.TimeValuePair{}})
 		return
 	}
 
@@ -53,5 +53,5 @@ func GetSiteHistoryHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("GetSiteHistoryHandler: site %s metric %s returning %d points", siteID, metric, len(data))
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": data})
 }

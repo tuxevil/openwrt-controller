@@ -6,6 +6,7 @@ import (
 
 	"openwrt-controller/internal/api"
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/services"
 )
 
 func main() {
@@ -19,6 +20,8 @@ func main() {
 		log.Printf("Warning: Influx config/init failed: %v\n", err)
 	}
 	defer database.CloseInflux()
+
+	services.StartAlertEngine()
 
 	// Setup routes using the dedicated routes file
 	mux := api.SetupRoutes()

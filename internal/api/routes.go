@@ -36,6 +36,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/sites/{site_id}/rotate-key", middleware.WithAuth(handlers.RotateSiteKeyHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/history", middleware.WithAuth(handlers.GetSiteHistoryHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/logs", middleware.WithAuth(handlers.GetLogsHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/incidents", middleware.WithAuth(handlers.GetIncidentsHandler))
 
 	// ── SPA Static files ─────────────────────────────────────────────────────
 	fs := http.FileServer(http.Dir("./web/dist"))

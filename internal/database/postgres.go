@@ -97,6 +97,17 @@ func createTables() error {
 		role VARCHAR(50) DEFAULT 'viewer',
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS incidents (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		site_id UUID REFERENCES sites(id),
+		device_id VARCHAR(50) REFERENCES devices(id),
+		incident_type VARCHAR(50) NOT NULL,
+		severity VARCHAR(20) NOT NULL,
+		status VARCHAR(20) DEFAULT 'OPEN',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		resolved_at TIMESTAMP WITH TIME ZONE
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/models"
+	"openwrt-controller/internal/services"
 )
 
 func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +132,11 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("Error writing metrics to influx: %v\n", err)
 		}
 	}(deviceID, metrics)
+
+	// 3. The Signal (Alerts Evaluation)
+	var sID string
+	_ = database.DB.QueryRow("SELECT site_id FROM devices WHERE id = $1", deviceID).Scan(&sID)
+	go services.ProcessTelemetry(deviceID, sID, metrics)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

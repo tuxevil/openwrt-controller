@@ -4,7 +4,7 @@
 <template>
   <div class="flex h-screen w-screen overflow-hidden bg-vantablack text-white font-mono">
     <!-- NERVE CENTER SIDEBAR -->
-    <div v-if="$route.path.startsWith('/site/')" class="w-64 border-r-2 border-neon-green/30 flex flex-col p-4 shrink-0 bg-panel z-10 shadow-[5px_0_15px_rgba(0,255,65,0.1)]">
+    <div v-if="$route.path.startsWith('/site/') || $route.path === '/incidents'" class="w-64 border-r-2 border-neon-green/30 flex flex-col p-4 shrink-0 bg-panel z-10 shadow-[5px_0_15px_rgba(0,255,65,0.1)]">
        <h1 class="text-neon-green text-xl font-bold tracking-widest mb-8 text-center pb-4 border-b border-neon-green/50 glitch-anim select-none">NERVE_CENTER</h1>
        
        <nav class="flex flex-col gap-3 flex-1 select-none">
@@ -26,6 +26,14 @@
          <router-link :to="`/site/${$route.params.site_id}/logs`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
            <span class="tracking-widest">MATRIX LOGS</span>
+         </router-link>
+
+         <router-link :to="`/site/${$route.params.site_id}/incidents`" active-class="bg-neon-red !border-neon-red !text-black shadow-[0_0_10px_#ff0041]" class="p-3 border border-neon-red clip-chamfer text-neon-red hover:bg-neon-red hover:text-black transition-all flex items-center gap-3 active:scale-95 relative group">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+           <span class="tracking-widest">INCIDENTS</span>
+           <!-- Active Badge managed by a pinia store or ref, 
+                for now we just make the icon pulse if we are on this page, 
+                but a real badge requires fetching. We just make the bell glitch. -->
          </router-link>
 
          <router-link :to="`/site/${$route.params.site_id}/wireless`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
