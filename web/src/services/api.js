@@ -109,8 +109,8 @@ export default {
   },
 
   // Logs
-  getSiteLogs(siteId) {
-    return apiClient.get(`/sites/${siteId}/logs`)
+  getSiteLogs(siteId, params = {}) {
+    return apiClient.get(`/sites/${siteId}/logs`, { params })
   },
 
   // Topology
