@@ -116,7 +116,10 @@ export default {
     return apiClient.delete(`/wlans/${wlanId}`)
   },
 
-  // Orchestrator
+  // Orchestrator & Global
+  getGlobalHealth() {
+    return apiClient.get('/global/health')
+  },
   getProfiles() {
     return apiClient.get('/profiles')
   },

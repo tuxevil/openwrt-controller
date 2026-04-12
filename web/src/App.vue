@@ -1,11 +1,40 @@
 <script setup>
+import { ref, onMounted, onUnmounted } from 'vue'
+import api from './services/api'
+
+const globalHealth = ref(0)
+let pulseInterval = null
+
+onMounted(async () => {
+  await fetchHealth()
+  pulseInterval = setInterval(fetchHealth, 10000)
+})
+
+onUnmounted(() => {
+  if (pulseInterval) clearInterval(pulseInterval)
+})
+
+const fetchHealth = async () => {
+  try {
+    const res = await api.getGlobalHealth()
+    globalHealth.value = res.data.health || 0
+  } catch (e) { console.error(e) }
+}
 </script>
 
 <template>
   <div class="flex h-screen w-screen overflow-hidden bg-vantablack text-white font-mono">
     <!-- NERVE CENTER SIDEBAR -->
     <div v-if="$route.path.startsWith('/site/') || $route.path === '/incidents'" class="w-64 border-r-2 border-neon-green/30 flex flex-col p-4 shrink-0 bg-panel z-10 shadow-[5px_0_15px_rgba(0,255,65,0.1)]">
-       <h1 class="text-neon-green text-xl font-bold tracking-widest mb-8 text-center pb-4 border-b border-neon-green/50 glitch-anim select-none">NERVE_CENTER</h1>
+       <h1 class="text-neon-green text-xl font-bold tracking-widest text-center select-none">NERVE_CENTER</h1>
+       
+       <div class="flex items-center justify-between mb-8 pb-4 border-b border-neon-green/50 mt-2 px-2">
+         <span class="text-[10px] text-neon-green/50 tracking-widest flex items-center gap-1">GLOBAL_PULSE</span>
+         <div class="flex items-center gap-2">
+           <span class="text-xs font-bold" :class="globalHealth < 50 ? 'text-neon-red drop-shadow-[0_0_8px_#ff0055]' : 'text-neon-green'">{{ globalHealth }}%</span>
+           <svg class="w-4 h-4" :class="globalHealth < 50 ? 'text-neon-red animate-pulse' : 'text-neon-green'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+         </div>
+       </div>
        
        <nav class="flex flex-col gap-3 flex-1 select-none">
          <router-link :to="`/site/${$route.params.site_id}`" exact-active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
@@ -66,7 +95,12 @@
           <router-link to="/orchestrator" class="text-xs px-3 py-2 border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
             ⚡ ORCHESTRATOR
           </router-link>
-          <router-link to="/global" class="text-xs text-muted hover:text-white transition-colors block text-center uppercase tracking-[0.2em]">Exit to Global</router-link>
+          
+          <router-link to="/runbook" class="text-xs px-3 py-2 border border-[#80ed99] text-[#80ed99] hover:bg-[#80ed99]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
+            [ RUNBOOK_MANUAL ]
+          </router-link>
+
+          <router-link to="/global" class="text-xs text-muted hover:text-white transition-colors block text-center uppercase tracking-[0.2em] mt-2">Exit to Global</router-link>
        </div>
     </div>
 

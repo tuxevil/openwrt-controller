@@ -11,6 +11,7 @@ import Topology from '../views/Topology.vue'
 import Orchestrator from '../views/Orchestrator.vue'
 import RFIntelligence from '../views/RFIntelligence.vue'
 import Vault from '../views/Vault.vue'
+import Runbook from '../views/Runbook.vue'
 import Login from '../views/Login.vue'
 
 const router = createRouter({
@@ -35,6 +36,11 @@ const router = createRouter({
       path: '/orchestrator',
       name: 'orchestrator',
       component: Orchestrator
+    },
+    {
+      path: '/runbook',
+      name: 'runbook',
+      component: Runbook
     },
     {
       path: '/site/:site_id/incidents',
