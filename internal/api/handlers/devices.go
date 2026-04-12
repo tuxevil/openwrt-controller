@@ -62,7 +62,7 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at FROM devices WHERE site_id = $1`
+	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json FROM devices WHERE site_id = $1`
 	rows, err := database.DB.Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -73,8 +73,9 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	var devices []map[string]interface{}
 	for rows.Next() {
 		var id string
-		var sID, name, model, status, lastSeen, lastPulled sql.NullString
-		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled); err == nil {
+		var sID, name, model, status, lastSeen, lastPulled, lastIP, agentVersion sql.NullString
+		var stateJSON []byte
+		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON); err == nil {
 			dev := map[string]interface{}{
 				"id":                    id,
 				"site_id":               siteID,
@@ -83,6 +84,14 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 				"status":                status.String,
 				"last_seen_at":          lastSeen.String,
 				"last_config_pulled_at": lastPulled.String,
+				"last_ip":               lastIP.String,
+				"agent_version":         agentVersion.String,
+			}
+			if len(stateJSON) > 0 {
+				var parsedState map[string]interface{}
+				if json.Unmarshal(stateJSON, &parsedState) == nil {
+					dev["state_json"] = parsedState
+				}
 			}
 			devices = append(devices, dev)
 		}

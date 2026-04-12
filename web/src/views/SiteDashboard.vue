@@ -49,6 +49,32 @@ const syncStatus = (device) => {
   return Math.abs(diffSeconds) < 30 ? 'SYNCED' : 'OUT_OF_SYNC'
 }
 
+const formatUptime = (seconds) => {
+  if (!seconds) return 'N/A'
+  const d = Math.floor(seconds / 86400)
+  const h = Math.floor((seconds % 86400) / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (d > 0) return `${d}d ${h}h`
+  if (h > 0) return `${h}h ${m}m`
+  return `${m}m`
+}
+
+const getHealth = (dev) => {
+  if (!dev.last_seen_at) return 'OFFLINE'
+  const seen = new Date(dev.last_seen_at).getTime()
+  const now = new Date().getTime()
+  const diffSeconds = (now - seen) / 1000
+  return diffSeconds < 120 ? 'ONLINE' : 'OFFLINE'
+}
+
+const selectedDeviceDetails = ref(null)
+const showDetails = (dev) => {
+  selectedDeviceDetails.value = dev
+}
+const closeDetails = () => {
+  selectedDeviceDetails.value = null
+}
+
 const goBack = () => router.push('/global')
 </script>
 
@@ -114,21 +140,32 @@ const goBack = () => router.push('/global')
       <table class="w-full text-left font-mono text-sm border-collapse">
         <thead class="text-neon-green border-b border-neon-green/50">
           <tr>
-            <th class="py-2">MAC_ID</th>
+            <th class="py-2">HOSTNAME / MAC_ID</th>
+            <th class="py-2">IP_ADDR</th>
             <th class="py-2">MODEL</th>
-            <th class="py-2">STATUS</th>
+            <th class="py-2">HEALTH / STATUS</th>
+            <th class="py-2">UPTIME</th>
             <th class="py-2">SYNC</th>
-            <th class="py-2">LAST_SEEN</th>
-            <th class="py-2 text-center">SHELL</th>
+            <th class="py-2 text-center">ACTIONS</th>
           </tr>
         </thead>
         <tbody>
           <tr v-for="dev in devices" :key="dev.id" class="border-b border-neon-green/10 hover:bg-neon-green/5 transition-colors">
-            <td class="py-3">{{ dev.id }}</td>
+            <td class="py-3">
+              <div class="flex flex-col">
+                <span class="text-neon-cyan font-bold" style="color: #0ff;">{{ dev.state_json?.board?.hostname || 'UNKNOWN' }}</span>
+                <span class="text-[10px] text-muted font-mono">{{ dev.id }}</span>
+              </div>
+            </td>
+            <td class="py-3 text-cyan-400 font-bold">{{ dev.last_ip || 'UNKNOWN' }}</td>
             <td class="py-3">{{ dev.model || 'UNKNOWN' }}</td>
             <td class="py-3">
-              <span class="px-2 py-0.5 bg-neon-green/20 text-neon-green border border-neon-green/50 clip-chamfer text-xs">{{ dev.status }}</span>
+              <div class="flex items-center gap-2">
+                <span :class="getHealth(dev) === 'ONLINE' ? 'bg-neon-green/20 text-neon-green border-neon-green/50' : 'bg-neon-red/20 text-neon-red border-neon-red/50'" class="px-2 py-0.5 border clip-chamfer text-xs">{{ getHealth(dev) }}</span>
+                <span class="px-2 py-0.5 bg-neon-green/20 text-neon-green border border-neon-green/50 clip-chamfer text-xs">{{ dev.status }}</span>
+              </div>
             </td>
+            <td class="py-3 text-muted">{{ dev.state_json?.system?.uptime ? formatUptime(dev.state_json.system.uptime) : 'N/A' }}</td>
             <td class="py-3">
               <span v-if="syncStatus(dev) === 'SYNCED'" class="px-2 py-0.5 bg-neon-green/20 text-neon-green border border-neon-green/50 clip-chamfer text-xs flex items-center gap-1 w-fit">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
@@ -137,8 +174,8 @@ const goBack = () => router.push('/global')
               <span v-else-if="syncStatus(dev) === 'OUT_OF_SYNC'" class="px-2 py-0.5 bg-neon-amber/20 text-neon-amber border border-neon-amber/50 clip-chamfer text-xs glitch-anim w-fit block">OUT_OF_SYNC</span>
               <span v-else class="text-muted text-xs">NO_PULL</span>
             </td>
-            <td class="py-3 text-muted text-xs">{{ new Date(dev.last_seen_at).toLocaleString() }}</td>
-            <td class="py-3 text-center">
+            <td class="py-3 text-center flex justify-center gap-2">
+              <button @click="showDetails(dev)" class="text-neon-cyan hover:bg-black border border-neon-cyan px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none" style="color: #0ff; border-color: #0ff;">INFO</button>
               <button @click="router.push(`/site/${site_id}/ssh/${dev.id}`)" class="text-neon-green hover:bg-neon-green hover:text-black border border-neon-green px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none">
                 >_
               </button>
@@ -149,6 +186,52 @@ const goBack = () => router.push('/global')
           </tr>
         </tbody>
       </table>
+    </div>
+
+    <!-- DEVICE DETAILS MODAL -->
+    <div v-if="selectedDeviceDetails" class="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+      <div class="neon-panel w-full max-w-4xl max-h-full flex flex-col pt-0 px-0 translate-y-0 transition-transform">
+        <div class="p-4 border-b border-neon-green/30 flex justify-between items-center bg-black/80 sticky top-0 z-10 backdrop-blur-sm">
+          <h2 class="text-xl text-neon-cyan font-mono" style="color: #0ff;">> NODE_INFO : {{ selectedDeviceDetails.state_json?.board?.hostname || 'UNKNOWN_HOST' }} <span class="text-sm text-neon-green ml-2">[{{ selectedDeviceDetails.id }}]</span></h2>
+          <button @click="closeDetails" class="text-neon-red hover:text-black hover:bg-neon-red px-3 py-1 font-mono border border-neon-red clip-chamfer transition-colors uppercase font-bold focus:outline-none">CLOSE</button>
+        </div>
+        <div class="p-6 overflow-y-auto font-mono text-sm space-y-6 flex-1">
+          <div class="grid grid-cols-2 md:grid-cols-3 gap-6 bg-black/40 p-4 border border-white/5 clip-chamfer">
+            <div class="flex flex-col"><span class="text-muted text-xs mb-1">STATE / HEALTH</span> <span :class="getHealth(selectedDeviceDetails) === 'ONLINE' ? 'text-neon-green' : 'text-neon-red font-bold animate-pulse'">{{ getHealth(selectedDeviceDetails) }}</span></div>
+            <div class="flex flex-col"><span class="text-muted text-xs mb-1">NODE_STATUS</span> <span class="text-neon-green">{{ selectedDeviceDetails.status }}</span></div>
+            <div class="flex flex-col"><span class="text-muted text-xs mb-1">IP_ADDRESS</span> <span class="text-cyan-400 font-bold tracking-wider">{{ selectedDeviceDetails.last_ip || 'UNKNOWN' }}</span></div>
+            <div class="flex flex-col"><span class="text-muted text-xs mb-1">HARDWARE_MODEL</span> <span>{{ selectedDeviceDetails.model || 'UNKNOWN' }}</span></div>
+            <div class="flex flex-col"><span class="text-muted text-xs mb-1">AGENT_VERSION</span> <span>{{ selectedDeviceDetails.agent_version || 'UNKNOWN' }}</span></div>
+            <div class="flex flex-col"><span class="text-muted text-xs mb-1">LAST_SEEN_AT</span> <span>{{ selectedDeviceDetails.last_seen_at ? new Date(selectedDeviceDetails.last_seen_at).toLocaleString() : 'NEVER' }}</span></div>
+          </div>
+          
+          <div v-if="selectedDeviceDetails.state_json" class="flex flex-col gap-5 mt-2">
+            <div>
+              <h3 class="text-neon-amber border-b border-neon-amber/30 pb-1 w-full uppercase text-sm mb-3">> HARDWARE_&_FIRMWARE</h3>
+              <div class="grid grid-cols-2 lg:grid-cols-3 gap-6 bg-black/40 p-4 border border-white/5 clip-chamfer">
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">SYSTEM_SOC_CHIP</span> <span class="text-neon-green font-bold">{{ selectedDeviceDetails.state_json.board?.system || 'UNKNOWN' }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">KERNEL_VERSION</span> <span class="text-cyan-400">{{ selectedDeviceDetails.state_json.board?.kernel || 'UNKNOWN' }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">FIRMWARE_RELEASE</span> <span>{{ selectedDeviceDetails.state_json.board?.release?.description || 'UNKNOWN' }}</span></div>
+              </div>
+            </div>
+
+            <div>
+              <h3 class="text-neon-amber border-b border-neon-amber/30 pb-1 w-full uppercase text-sm mb-3">> SYSTEM_METRICS</h3>
+              <div class="grid grid-cols-2 lg:grid-cols-4 gap-6 bg-black/40 p-4 border border-white/5 clip-chamfer">
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">UPTIME</span> <span class="text-neon-green font-bold">{{ formatUptime(selectedDeviceDetails.state_json.system?.uptime) }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">MEMORY_FREE</span> <span class="text-cyan-400">{{ selectedDeviceDetails.state_json.system?.memory?.free ? Math.round(selectedDeviceDetails.state_json.system.memory.free / 1024 / 1024) + ' MB' : 'N/A' }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">MEMORY_TOTAL</span> <span>{{ selectedDeviceDetails.state_json.system?.memory?.total ? Math.round(selectedDeviceDetails.state_json.system.memory.total / 1024 / 1024) + ' MB' : 'N/A' }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">LOAD_AVERAGE</span> <span>{{ selectedDeviceDetails.state_json.system?.load ? (selectedDeviceDetails.state_json.system.load[0] / 65536).toFixed(2) + ', ' + (selectedDeviceDetails.state_json.system.load[1] / 65536).toFixed(2) + ', ' + (selectedDeviceDetails.state_json.system.load[2] / 65536).toFixed(2) : 'N/A' }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">LOCAL_TIME</span> <span>{{ selectedDeviceDetails.state_json.system?.localtime ? new Date(selectedDeviceDetails.state_json.system.localtime * 1000).toLocaleString() : 'N/A' }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">ROOTFS_FREE</span> <span>{{ selectedDeviceDetails.state_json.system?.root?.free ? selectedDeviceDetails.state_json.system.root.free + ' KB' : 'N/A' }}</span></div>
+                <div class="flex flex-col"><span class="text-muted text-xs mb-1">TMPFS_FREE</span> <span>{{ selectedDeviceDetails.state_json.system?.tmp?.free ? selectedDeviceDetails.state_json.system.tmp.free + ' KB' : 'N/A' }}</span></div>
+              </div>
+            </div>
+          </div>
+          <div v-else class="text-neon-amber italic mt-4">> NO_TELEMETRY_DATA_FOUND_IN_VAULT</div>
+
+        </div>
+      </div>
     </div>
   </div>
 </template>

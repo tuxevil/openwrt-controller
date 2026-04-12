@@ -1,76 +1,113 @@
-# 📡 openwrt-controller: The Nerve Center \[V2.0\]
+# 📡 openwrt-controller: The Nerve Center \[V2.0 - Extended\]
 
-**openwrt-controller** es una plataforma de orquestación masiva y SD-WAN privada diseñada para la gestión de flotas OpenWrt en entornos críticos y remotos (como infraestructuras rurales u off-grid). El sistema evoluciona de un simple monitor a un **Cerebro de Red** capaz de autogestionarse, repararse y ofrecer túneles de cristal hacia el interior profundo de cada nodo.
-
-* * *
-
-## 🛰️ Módulos de Operación Avanzada
-
-| Módulo | Nombre Clave | Funcionalidad | Estatus |
-| --- | --- | --- | --- |
-| **VPN Overlay** | `SECURE_TUNNEL` | Red privada WireGuard (10.8.0.x) con acceso directo a LuCI. | **ACTIVO** |
-| **Auto-Update** | `AGENT_UPDATE` | Sistema de despliegue de código con A/B Rollback automático. | **ACTIVO** |
-| **Log Center** | `LOG_HARVESTER` | Centralización de Syslogs con búsqueda indexada (GIN Index). | **ACTIVO** |
-| **Orchestrator** | `COMMAND_CENTER` | Ejecución paralela vía SSH (sync.WaitGroups) y perfiles globales. | **ACTIVO** |
-| **RF Intel** | `RF_INTELLIGENCE` | Diagnóstico de SNR y optimización heurística de canales. | **ACTIVO** |
-| **Topology** | `THE_GRID` | Mapeo visual de nodos y clientes con trazas de tráfico animadas. | **ACTIVO** |
-| **Security** | `THE_VAULT` | Bóveda de backups SHA256 con visor diferencial (Diff). | **ACTIVO** |
-
-Exportar a Hojas de cálculo
-
-* * *
-
-## 🏗️ Stack Tecnológico de Grado Operativo
-
--   **Core (Backend):** Go (Golang) con concurrencia nativa para gestión de miles de hilos SSH.
--   **Data Lake:** InfluxDB 2.x (Series de tiempo) + PostgreSQL 16 (Relacional/Logs).
--   **Networking:** WireGuard (X25519) para el túnel de gestión cifrado.
--   **Frontend:** Vue 3 + Vite + Tailwind (Estética Vantablack/Cobalto).
--   **Node Agent:** `agent.sh` optimizado para `ash` (BusyBox) con integración `procd`.
-
-* * *
-
-## 🚀 Despliegue de la Red Overlay
-
-### 1\. Requisitos de Infraestructura
-
-El controlador debe correr en un entorno con Docker para la persistencia:
-
-Bash
+Plaintext
 
 ```
-docker-compose up -d  # Postgres & InfluxDB
+  _   _                       _____           _            
+ | \ | |                     / ____|         | |           
+ |  \| | ___ _ ____   _____ | |     ___ _ __ | |_ ___ _ __ 
+ | . ` |/ _ \ '__\ \ / / _ \| |    / _ \ '_ \| __/ _ \ '__|
+ | |\  |  __/ |   \ V /  __/| |___|  __/ | | | ||  __/ |   
+ |_| \_|\___|_|    \_/ \___| \_____\___|_| |_|\__\___|_|   
+ [ SYSTEM_STATUS: OMEGA_ACTIVE ] [ OVERLAY: WIREGUARD_ENCRYPTED ]
 ```
 
-### 2\. Configuración del Túnel (Secure Tunnel)
-
-El controlador genera automáticamente las llaves para cada router. Al añadir un dispositivo, el sistema le asigna una IP en el rango `10.8.0.0/24`.
-
--   **Endpoint:** Configura tu IP pública/dominio en `Settings -> VPN`.
--   **Handshake:** Los routers se auto-instalan `wireguard-tools` (vía `apk` o `opkg`) al recibir la configuración.
-
-### 3\. El Ciclo de Actualización (Safe Update)
-
-Para actualizar la lógica de toda la flota:
-
-1.  Edita el `agent.sh` en la vista **Agent Management**.
-2.  Presiona **\[PUSH\_DEPLOY\]**.
-3.  Los routers descargarán la versión, verificarán el Checksum y reiniciarán.
-4.  Si un router pierde conexión, volverá automáticamente a la versión anterior (**Rollback Guard**).
+**openwrt-controller** is an industrial-grade Command & Control (C&C) system designed for managing OpenWrt fleets operating in geographically dispersed and connectivity-challenged environments. It bridges the gap between simple monitoring and full-scale SD-WAN orchestration.
 
 * * *
 
-## 📑 Manual de Operaciones (Runbook de Emergencia)
+## 🏗️ Ecosystem Architecture
 
--   **Diagnóstico de Caídas:** Si un nodo entra en `OUT_OF_SYNC`, revisa el **Log Explorer**. Filtra por severidad `ERROR` para buscar fallos de kernel o kernel panics.
--   **Acceso de Emergencia:** Usa el botón **\[OPEN\_LUCI\]** en la Matrix VPN para entrar directamente a la IP 10.8.0.x del dispositivo. No necesitas abrir puertos en el router.
--   **Interferencia de Radio:** En caso de degradación de señal en Pallatanga, activa `RF_FIX` desde el panel de inteligencia para re-escanear el espectro.
+The system operates on a **Three-Tier Tactical Model**:
+
+### 1\. The Core (Backend - Go)
+
+-   **High Concurrency:** Leverages Go's `sync.WaitGroups` and channels for parallel SSH execution across hundreds of nodes without blocking the main event loop.
+-   **Cryptography:** Implements native `X25519` curves for the WireGuard overlay and `Ed25519` for terminal identities.
+-   **Middleware:** Robust JWT (JSON Web Token) authentication system with automatic key rotation and role-based access control.
+
+### 2\. The Grid (Data Lake - Influx & Postgres)
+
+-   **Time-Series Engine:** InfluxDB 2.x processes high-frequency telemetry (signal, noise floor, throughput).
+-   **Relational Layer:** PostgreSQL 16 handles persistence for device inventory, site profiles, and incident auditing.
+-   **Forensic Search:** Implements a GIN (Generalized Inverted Index) on the logs table for sub-millisecond full-text searches.
+
+### 3\. The Shadow Agent (Node - agent.sh)
+
+-   **Efficiency:** Written in pure `ash` (BusyBox), optimized for low-resource hardware (e.g., WNDR3700 with 32MB RAM).
+-   **Resilience:** Native `procd` process management with a built-in watchdog for self-healing.
 
 * * *
 
-## 🌲 Visión del Proyecto
+## 🛰️ Detailed Module Breakdown
 
-Este controlador es la columna vertebral de la infraestructura de **Sebastián Real**, integrando la telemetría de red con la resiliencia necesaria para operar en la montaña, asegurando que los 6 sitios de la corporación funcionen como una sola red local unificada y segura.
+### 🔒 \[SECURE\_TUNNEL\] - Cryptographic SD-WAN
 
-> **"Status: Omega Active. Traffic: Encrypted. Control: Absolute."**
+Creates an encrypted Overlay Network between the controller and the fleet.
+
+-   **Protocol:** WireGuard.
+-   **Addressing:** Static IP pool on the `10.8.0.0/24` subnet.
+-   **Direct Access:** Point-to-point tunneling allowing direct access to local LuCI web interfaces without port forwarding.
+-   **Auto-Provisioning:** The agent detects missing `wireguard-tools` and self-installs them via `apk/opkg` upon receiving the VPN profile.
+
+### 📈 \[LOG\_HARVESTER\] - Forensic Intelligence
+
+Centralizes the `logread` stream from the entire fleet for remote analysis.
+
+-   **Pattern Parser:** Heuristic algorithms to classify severity levels (Critical, Error, Warning, Info).
+-   **String Sanitization:** Advanced character escaping for injecting complex system logs into JSON without buffer corruption.
+-   **Alert Integration:** Directly linked to the incident engine; a "Kernel Panic" in a remote node triggers an instant notification.
+
+### 🔄 \[AGENT\_UPDATE\_SERVICE\] - Code Evolution
+
+Enables fleet-wide telemetry logic updates without physical or manual intervention.
+
+-   **Mechanism:** Raw-API binary/script pulling with SHA256 checksum verification.
+-   **A/B Partitioning:** Maintains a functional `.old` copy on the router.
+-   **Self-Healing Rollback:** If the new script fails to report successful telemetry three consecutive times, the router restores the previous version and restarts the service.
+
+### ☢️ \[RF\_INTELLIGENCE\] - Spectrum Optimization
+
+Heuristic analysis of the wireless physical layer.
+
+-   **SNR Analysis:** Dynamic calculation of the Signal-to-Noise Ratio for every connected client.
+-   **Remediation:** `RF_FIX` logic that suggests or executes channel reassignments (1, 6, 11) based on the lowest reported noise floor.
+
+### 🛡️ \[THE\_VAULT\] - Configuration Integrity
+
+A secure repository for `/etc/config` files with guaranteed integrity.
+
+-   **Snapshots:** Daily backups compressed in `.tar.gz` and stored with SHA256 hashes.
+-   **Visual Diff Engine:** A monospaced code viewer highlighting changes in Firewall, Network, or WiFi settings between specific dates.
+
+* * *
+
+## 📑 Tactical Operations Guide
+
+### Provisioning a New Node
+
+1.  **Handshake:** The router contacts the controller via the Provisioning API.
+2.  **Identity:** The controller generates WireGuard keys and assigns a `10.8.0.x` IP.
+3.  **Injection:** The agent downloads the site profile, installs dependencies, and raises the `wg0` interface.
+
+### Emergency Recovery Procedure
+
+1.  **Observation:** Check the **Global Health Score** on the Dashboard sidebar.
+2.  **Isolation:** Use the **Log Explorer** to search for synchronization errors or auth failures.
+3.  **Access:** Click **\[OPEN\_LUCI\]** to enter the router via its internal Tunnel IP.
+4.  **Recovery:** If configurations are corrupted, apply a `Restore` from **The Vault**.
+
+* * *
+
+## 🌲 Infrastructure Context (Pallatanga)
+
+The system is optimized for the user's specific environmental constraints:
+
+-   **Energy Efficiency:** Low-impact notifications to avoid unnecessary radio wake-ups in secondary nodes.
+-   **Connectivity:** Extreme tolerance for high latency and micro-outages common in mountain radio links.
+-   **Security:** Total isolation of the corporate sites via centralized firewall orchestration.
+
+* * *
+
+**Status:** `READY_FOR_PRODUCTION` **Binary:** `v2.0.4-omega` **Maintainer:** Sebastián Real
 
