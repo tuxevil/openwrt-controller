@@ -114,5 +114,7 @@ Centralizes the `logread` stream for remote analysis.
 
 Designed specifically for high-latency, multi-tenant rural infrastructures. The system guarantees that core corporate connectivity remains stable regardless of heavy client-side consumption, isolating faults autonomously before they impact the broader network.
 
-**Status:** `PRODUCTION_SOAKING` **Version:** `v2.5.0-sniper` **Lead Architect:** Sebastián Real
+**Status:** `PRODUCTION_SOAKING`
+**Version:** `v2.5.0-sniper`
+**Lead Architect:** Sebastián Real
 
