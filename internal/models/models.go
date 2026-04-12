@@ -81,6 +81,7 @@ type Incident struct {
 	ID           string     `json:"id"`
 	SiteID       string     `json:"site_id"`
 	DeviceID     string     `json:"device_id"`
+	DeviceName   string     `json:"device_name"`
 	IncidentType string     `json:"type"`
 	Severity     string     `json:"severity"`
 	Status       string     `json:"status"`

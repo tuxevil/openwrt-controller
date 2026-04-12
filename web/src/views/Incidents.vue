@@ -16,7 +16,7 @@ onUnmounted(() => { if (pollingInterval) clearInterval(pollingInterval) })
 
 const fetchIncidents = async () => {
   try {
-    const res = await api.get(`/sites/${props.site_id}/incidents`)
+    const res = await api.client.get(`/sites/${props.site_id}/incidents`)
     incidents.value = res.data.data || []
   } catch (err) {
     console.error(err)
@@ -41,43 +41,54 @@ const fetchIncidents = async () => {
         > NO_ACTIVE_INCIDENTS... ALL_SYSTEMS_NOMINAL
       </div>
 
-      <div v-else class="flex flex-col gap-3 font-mono text-sm z-10 relative">
+      <div v-else class="flex flex-col gap-3 font-mono text-sm z-10 relative p-4">
         <div v-for="inc in incidents" :key="inc.id" 
-             class="p-4 border clip-chamfer flex justify-between items-center bg-[#0d0d0d] transition-all"
+             class="p-4 border clip-chamfer flex justify-between items-center bg-[#111] transition-all"
              :class="{
-               'border-neon-red shadow-[0_0_10px_rgba(255,0,65,0.2)]': inc.severity === 'CRITICAL' && inc.status === 'OPEN',
-               'border-neon-amber shadow-[0_0_10px_rgba(255,176,0,0.2)]': inc.severity === 'WARNING' && inc.status === 'OPEN',
-               'border-muted text-muted': inc.status === 'RESOLVED'
+               'border-neon-red shadow-[0_0_12px_rgba(255,0,65,0.3)]': inc.severity === 'CRITICAL' && inc.status === 'OPEN',
+               'border-neon-amber shadow-[0_0_12px_rgba(255,176,0,0.3)]': inc.severity === 'WARNING' && inc.status === 'OPEN',
+               'border-white/10': inc.status === 'RESOLVED'
              }">
-          <div class="flex flex-col gap-1">
+          <div class="flex flex-col gap-1.5">
             <div class="flex items-center gap-2">
-              <span class="px-2 py-0.5 text-xs text-black"
+              <!-- Severity badge -->
+              <span class="px-2 py-0.5 text-xs font-bold tracking-widest"
                     :class="{
-                      'bg-neon-red': inc.severity === 'CRITICAL' && inc.status === 'OPEN',
-                      'bg-neon-amber': inc.severity === 'WARNING' && inc.status === 'OPEN',
-                      'bg-muted': inc.status === 'RESOLVED'
+                      'bg-neon-red text-black': inc.severity === 'CRITICAL' && inc.status === 'OPEN',
+                      'bg-neon-amber text-black': inc.severity === 'WARNING' && inc.status === 'OPEN',
+                      'bg-white/10 text-gray-400': inc.status === 'RESOLVED'
                     }">
                 {{ inc.severity }}
               </span>
-              <span class="font-bold tracking-wider" :class="{'text-white': inc.status !== 'RESOLVED'}">
+              <!-- Incident type -->
+              <span class="font-bold tracking-wider"
+                    :class="inc.status === 'OPEN' ? 'text-white' : 'text-gray-300'">
                 {{ inc.type }}
+              </span>
+              <!-- Status pill -->
+              <span v-if="inc.status === 'RESOLVED'"
+                    class="text-[10px] px-1.5 py-0.5 bg-neon-green/10 text-neon-green/60 border border-neon-green/20 tracking-widest">
+                ✓ RESOLVED
+              </span>
+              <span v-else class="text-[10px] px-1.5 py-0.5 bg-neon-red/10 text-neon-red border border-neon-red/30 tracking-widest glitch-anim">
+                ⚠ OPEN
               </span>
             </div>
             
-            <div class="text-xs pt-1" :class="inc.status === 'OPEN' ? 'text-neon-green/80' : 'text-muted/50'">
-              SITE: {{ inc.site_id.substring(0,8) }} | DEVICE: {{ inc.device_id }}
+            <div class="text-xs pt-0.5"
+                 :class="inc.status === 'OPEN' ? 'text-neon-green/80' : 'text-gray-500'">
+              SITE: {{ inc.site_id.substring(0,8) }} | DEVICE:
+              <span class="text-gray-300 font-bold">{{ inc.device_name || inc.device_id }}</span>
+              <span v-if="inc.device_name" class="text-gray-600 ml-1">({{ inc.device_id }})</span>
             </div>
           </div>
 
-          <div class="text-right flex flex-col gap-1">
-            <div class="text-xs" :class="inc.status === 'OPEN' ? 'text-white' : 'text-muted/50'">
+          <div class="text-right flex flex-col gap-1 shrink-0 ml-4">
+            <div class="text-xs" :class="inc.status === 'OPEN' ? 'text-white' : 'text-gray-400'">
               {{ new Date(inc.created_at).toLocaleString() }}
             </div>
-            <div v-if="inc.status === 'RESOLVED'" class="text-xs text-neon-green/50">
-              RESOLVED: {{ new Date(inc.resolved_at).toLocaleString() }}
-            </div>
-            <div v-else class="text-xs text-neon-red glitch-anim pt-1 font-bold">
-              [ STATUS: OPEN ]
+            <div v-if="inc.status === 'RESOLVED'" class="text-xs text-gray-500">
+              ↳ {{ new Date(inc.resolved_at).toLocaleString() }}
             </div>
           </div>
         </div>
