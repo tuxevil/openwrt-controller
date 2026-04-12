@@ -104,6 +104,10 @@ const fetchHealth = async () => {
             [ RUNBOOK_MANUAL ]
           </router-link>
 
+          <router-link to="/global/settings" class="text-xs px-3 py-2 border border-neon-cyan text-neon-cyan hover:bg-neon-cyan/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer mt-2">
+            ⚙️ PLATFORM_CONFIG
+          </router-link>
+
           <router-link to="/global" class="text-xs text-muted hover:text-white transition-colors block text-center uppercase tracking-[0.2em] mt-2">Exit to Global</router-link>
        </div>
     </div>

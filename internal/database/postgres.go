@@ -181,6 +181,19 @@ func createTables() error {
 		involved_devices JSONB,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS platform_settings (
+		id INT PRIMARY KEY DEFAULT 1,
+		ollama_host VARCHAR(255) DEFAULT '127.0.0.1:11434',
+		ollama_model VARCHAR(255) DEFAULT 'llama3',
+		sentinel_prompt TEXT DEFAULT 'You are a Fleet Security Analyst. Analyze this cross-device log stream. Look for coordinated attacks, lateral movements, or cascading hardware failures. If Device A shows a login failure and Device B shows a login success from the same IP, flag it as CRITICAL SUSPICION. Be technical, concise, and provide a ''Recommended Action''. The output must look like a high-level SOC report. No fluff.\n\nEnd your report with these two exact lines at the bottom for parsing:\nSEVERITY: [Critical, High, Medium, Low]\nDEVICES: [Device_Name_1, Device_Name_2]',
+		telegram_bot_token VARCHAR(255) DEFAULT '',
+		telegram_chat_id VARCHAR(255) DEFAULT '',
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		CHECK (id = 1)
+	);
+
+	INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 	`
 	_, err := DB.Exec(query)
 	if err != nil {

@@ -6,28 +6,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"openwrt-controller/internal/database"
 )
 
 // AnalyzeFleetContext sends the gathered logs to Ollama for analysis
 func AnalyzeFleetContext(contextLogs string) (diagnosis string, severity string, involvedDevices []string, err error) {
-	ollamaHost := os.Getenv("OLLAMA_HOST")
+	settings := database.GetPlatformSettings()
+
+	ollamaHost := settings.OllamaHost
 	if ollamaHost == "" {
 		ollamaHost = "127.0.0.1:11434"
 	}
-	model := os.Getenv("OLLAMA_MODEL")
+	model := settings.OllamaModel
 	if model == "" {
 		model = "llama3" // or mistral
 	}
 
-	systemPrompt := `You are a Fleet Security Analyst. Analyze this cross-device log stream. Look for coordinated attacks, lateral movements, or cascading hardware failures. If Device A shows a login failure and Device B shows a login success from the same IP, flag it as CRITICAL SUSPICION. Be technical, concise, and provide a 'Recommended Action'. The output must look like a high-level SOC report. No fluff.
+	systemPrompt := settings.SentinelPrompt
+	if systemPrompt == "" {
+		systemPrompt = `You are a Fleet Security Analyst. Analyze this cross-device log stream. Look for coordinated attacks, lateral movements, or cascading hardware failures. If Device A shows a login failure and Device B shows a login success from the same IP, flag it as CRITICAL SUSPICION. Be technical, concise, and provide a 'Recommended Action'. The output must look like a high-level SOC report. No fluff.
 
 End your report with these two exact lines at the bottom for parsing:
 SEVERITY: [Critical, High, Medium, Low]
 DEVICES: [Device_Name_1, Device_Name_2]
 `
+	}
 
 	payload := map[string]interface{}{
 		"model": model,

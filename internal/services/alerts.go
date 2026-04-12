@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"os"
 	"sync"
 	"time"
 
@@ -119,8 +118,9 @@ func ResolveIncident(incidentType, deviceID string) {
 }
 
 func notifyTelegram(message string) {
-	token := os.Getenv("TELEGRAM_BOT_TOKEN")
-	chatID := os.Getenv("TELEGRAM_CHAT_ID")
+	settings := database.GetPlatformSettings()
+	token := settings.TelegramBotToken
+	chatID := settings.TelegramChatID
 	if token == "" || chatID == "" {
 		return
 	}

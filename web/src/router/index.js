@@ -12,6 +12,7 @@ import Orchestrator from '../views/Orchestrator.vue'
 import RFIntelligence from '../views/RFIntelligence.vue'
 import Vault from '../views/Vault.vue'
 import Runbook from '../views/Runbook.vue'
+import GlobalSettings from '../views/GlobalSettings.vue'
 import Login from '../views/Login.vue'
 import AgentMgmt from '../views/AgentMgmt.vue'
 import VPNMatrix from '../views/VPNMatrix.vue'
@@ -120,6 +121,11 @@ const router = createRouter({
       path: '/global/sentinel',
       name: 'global-sentinel',
       component: SecurityMatrix
+    },
+    {
+      path: '/global/settings',
+      name: 'global-settings',
+      component: GlobalSettings
     }
   ]
 })
