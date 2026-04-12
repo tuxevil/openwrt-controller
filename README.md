@@ -1,6 +1,4 @@
-# 📡 openwrt-controller: The Nerve Center \[V2.0 - Extended\]
-
-Plaintext
+# 📡 openwrt-controller: The Nerve Center \[V2.5 - Omega Sniper\]
 
 ```
   _   _                       _____           _            
@@ -9,105 +7,112 @@ Plaintext
  | . ` |/ _ \ '__\ \ / / _ \| |    / _ \ '_ \| __/ _ \ '__|
  | |\  |  __/ |   \ V /  __/| |___|  __/ | | | ||  __/ |   
  |_| \_|\___|_|    \_/ \___| \_____\___|_| |_|\__\___|_|   
- [ SYSTEM_STATUS: OMEGA_ACTIVE ] [ OVERLAY: WIREGUARD_ENCRYPTED ]
+ [ SYSTEM: OMEGA_ACTIVE ] [ AI: SENTINEL_ONLINE ] [ SHAPING: LETHAL ]
 ```
 
-**openwrt-controller** is an industrial-grade Command & Control (C&C) system designed for managing OpenWrt fleets operating in geographically dispersed and connectivity-challenged environments. It bridges the gap between simple monitoring and full-scale SD-WAN orchestration.
+**openwrt-controller** is an industrial-grade, AI-driven Command & Control (C&C) system designed for managing distributed OpenWrt fleets. Engineered for geographically challenging environments and off-grid deployments, it bridges the gap between passive monitoring and autonomous, surgical network defense.
 
 * * *
 
 ## 🏗️ Ecosystem Architecture
 
-The system operates on a **Three-Tier Tactical Model**:
+The system operates on a **Four-Tier Tactical Model**:
 
 ### 1\. The Core (Backend - Go)
 
--   **High Concurrency:** Leverages Go's `sync.WaitGroups` and channels for parallel SSH execution across hundreds of nodes without blocking the main event loop.
--   **Cryptography:** Implements native `X25519` curves for the WireGuard overlay and `Ed25519` for terminal identities.
--   **Middleware:** Robust JWT (JSON Web Token) authentication system with automatic key rotation and role-based access control.
+-   **High Concurrency:** Leverages Go `sync.WaitGroups` for parallel, non-blocking SSH execution across the fleet.
+-   **Cryptography:** Native `X25519` curves for WireGuard overlay and `Ed25519` for terminal identities.
+-   **Idempotent Execution:** Atomic orchestrator capable of evaluating target kernel capabilities (e.g., `nftables` support) before command injection.
 
-### 2\. The Grid (Data Lake - Influx & Postgres)
+### 2\. The Intelligence Layer (Sentinel AI)
 
--   **Time-Series Engine:** InfluxDB 2.x processes high-frequency telemetry (signal, noise floor, throughput).
--   **Relational Layer:** PostgreSQL 16 handles persistence for device inventory, site profiles, and incident auditing.
--   **Forensic Search:** Implements a GIN (Generalized Inverted Index) on the logs table for sub-millisecond full-text searches.
+-   **Local LLM Integration:** Hooks directly into a local Ollama instance (llama3/mistral).
+-   **Fleet-Wide Correlation:** Analyzes logs across all nodes within a rolling ±2 minute window to detect coordinated lateral movements.
+-   **Autonomous Defense:** AI is authorized to execute preemptive strikes (e.g., bandwidth throttling) when specific threat vectors are identified.
 
-### 3\. The Shadow Agent (Node - agent.sh)
+### 3\. The Grid (Data Lake - Influx & Postgres)
 
--   **Efficiency:** Written in pure `ash` (BusyBox), optimized for low-resource hardware (e.g., WNDR3700 with 32MB RAM).
--   **Resilience:** Native `procd` process management with a built-in watchdog for self-healing.
+-   **Time-Series Engine:** InfluxDB 2.x processes high-frequency telemetry (signal, noise floor, top-talker throughput).
+-   **Relational Layer:** PostgreSQL 16 handles persistence for device inventory, configuration Vaults, and active shaping rules.
+
+### 4\. The Shadow Agent (Node - `agent.sh`)
+
+-   **Ultra-Lightweight:** Written in pure `ash` (BusyBox) with `awk` sliding-window calculations to minimize CPU/RAM footprint on legacy hardware.
+-   **Resilience:** Native `procd` process management with a built-in watchdog and A/B partition rollback for self-healing.
 
 * * *
 
-## 🛰️ Detailed Module Breakdown
+## 🛰️ Tactical Modules
+
+### 💻 \[MATRIX\_SHELL\] - Embedded Web Terminal
+
+Zero-trust, clientless SSH access directly from the browser to any node in the fleet.
+
+-   **Engine:** WebSockets bridged to Go's `crypto/ssh` package, rendered via `xterm.js`.
+-   **Security:** No plain-text passwords. Authentication relies exclusively on the controller's injected `Ed25519` identity keys.
+-   **Functionality:** Full TTY support, allowing real-time interaction with native OpenWrt CLI tools (`logread -f`, `htop`, `wifi`).
+
+### ⚡ \[COMMAND\_CENTER\] - Mass Orchestrator
+
+The primary engine for fleet-wide logic execution and state synchronization.
+
+-   **Parallel Execution:** Dispatches UCI configurations, shell scripts, or firmware upgrades to multiple routers simultaneously via Goroutines.
+-   **Global Profiles:** Syncs universal settings (e.g., NTP servers, logging endpoints, firewall zones) across the entire corporate network in a single operation.
+-   **Atomic Feedback:** Returns detailed execution logs per node, instantly highlighting successes or syntax failures during mass deployments.
+
+### 🎯 \[SNIPER\_SHAPING\] - Surgical Traffic Control
+
+Dynamic, MAC-based bandwidth throttling injected directly into the Linux kernel's data plane.
+
+-   **Engine:** `nftables` hooked into OpenWrt's `fw4` framework.
+-   **Zero-Impact:** Dedicated `sentinel_shaping` table ensures rules don't overlap with standard firewall operations.
+-   **SniperReaper:** A background garbage-collection process that automatically revokes expired shaping rules.
+-   **AI Preemptive Strike:** Automatically restricts bandwidth to 512Kbps for MACs associated with brute-force attempts.
+
+### 🧠 \[SENTINEL\_AI: FLEET\_SENSE\] - Autonomous SOC
+
+The "brain" of the network, correlating multi-device telemetry.
+
+-   **Reactive Pipeline:** Parses logs instantly. A "Kernel Panic" or "OOM Kill" triggers an immediate AI diagnostic loop.
+-   **Alerting:** Generates high-level SOC markdown reports dispatched directly via Telegram.
 
 ### 🔒 \[SECURE\_TUNNEL\] - Cryptographic SD-WAN
 
 Creates an encrypted Overlay Network between the controller and the fleet.
 
--   **Protocol:** WireGuard.
--   **Addressing:** Static IP pool on the `10.8.0.0/24` subnet.
--   **Direct Access:** Point-to-point tunneling allowing direct access to local LuCI web interfaces without port forwarding.
--   **Auto-Provisioning:** The agent detects missing `wireguard-tools` and self-installs them via `apk/opkg` upon receiving the VPN profile.
+-   **Protocol:** WireGuard (`10.8.0.0/24`).
+-   **Auto-Provisioning:** Agents self-install `wireguard-tools` and raise the `wg0` interface upon receiving their cryptographic profile.
 
 ### 📈 \[LOG\_HARVESTER\] - Forensic Intelligence
 
-Centralizes the `logread` stream from the entire fleet for remote analysis.
+Centralizes the `logread` stream for remote analysis.
 
--   **Pattern Parser:** Heuristic algorithms to classify severity levels (Critical, Error, Warning, Info).
--   **String Sanitization:** Advanced character escaping for injecting complex system logs into JSON without buffer corruption.
--   **Alert Integration:** Directly linked to the incident engine; a "Kernel Panic" in a remote node triggers an instant notification.
+-   **Search Engine:** GIN (Generalized Inverted Index) on PostgreSQL enables sub-millisecond full-text searches.
 
-### 🔄 \[AGENT\_UPDATE\_SERVICE\] - Code Evolution
+### 🔄 \[AGENT\_UPDATE\_SERVICE\] - Fleet Evolution
 
-Enables fleet-wide telemetry logic updates without physical or manual intervention.
-
--   **Mechanism:** Raw-API binary/script pulling with SHA256 checksum verification.
--   **A/B Partitioning:** Maintains a functional `.old` copy on the router.
--   **Self-Healing Rollback:** If the new script fails to report successful telemetry three consecutive times, the router restores the previous version and restarts the service.
-
-### ☢️ \[RF\_INTELLIGENCE\] - Spectrum Optimization
-
-Heuristic analysis of the wireless physical layer.
-
--   **SNR Analysis:** Dynamic calculation of the Signal-to-Noise Ratio for every connected client.
--   **Remediation:** `RF_FIX` logic that suggests or executes channel reassignments (1, 6, 11) based on the lowest reported noise floor.
+-   **Mechanism:** Raw-API script pulling with SHA256 checksums.
+-   **Self-Healing Rollback:** Restores the `.old` version if an update breaks telemetry for 3 consecutive cycles.
 
 ### 🛡️ \[THE\_VAULT\] - Configuration Integrity
 
-A secure repository for `/etc/config` files with guaranteed integrity.
-
 -   **Snapshots:** Daily backups compressed in `.tar.gz` and stored with SHA256 hashes.
--   **Visual Diff Engine:** A monospaced code viewer highlighting changes in Firewall, Network, or WiFi settings between specific dates.
+-   **Visual Diff:** A Vantablack monospaced code viewer highlighting changes in configurations between dates.
 
 * * *
 
-## 📑 Tactical Operations Guide
+## 📑 Emergency Runbook
 
-### Provisioning a New Node
-
-1.  **Handshake:** The router contacts the controller via the Provisioning API.
-2.  **Identity:** The controller generates WireGuard keys and assigns a `10.8.0.x` IP.
-3.  **Injection:** The agent downloads the site profile, installs dependencies, and raises the `wg0` interface.
-
-### Emergency Recovery Procedure
-
-1.  **Observation:** Check the **Global Health Score** on the Dashboard sidebar.
-2.  **Isolation:** Use the **Log Explorer** to search for synchronization errors or auth failures.
-3.  **Access:** Click **\[OPEN\_LUCI\]** to enter the router via its internal Tunnel IP.
-4.  **Recovery:** If configurations are corrupted, apply a `Restore` from **The Vault**.
+1.  **AI Throttling Event:** If you receive a Telegram alert stating an IP has been penalized, check the **Bandwidth Sentry** dashboard. The offending MAC will be marked with a Crimson Red crosshair `[ 🎯 ]`. You can manually lift or extend the ban from the UI.
+2.  **Node Isolation:** If a node enters `OUT_OF_SYNC`, use the **Log Explorer** filtering by `ERROR`. If LuCI is still responsive, use the `[OPEN_LUCI]` button in the VPN Matrix to access the internal `10.8.0.x` IP directly.
+3.  **Radio Saturation:** If clients capacity peaks and the SNR drops, trigger `RF_FIX` via the Intelligence module to heuristically reassign 2.4GHz channels.
+4.  **CLI Intervention:** For advanced debugging, open the **Matrix Shell** from the node's dropdown menu to gain direct root access without leaving the dashboard.
 
 * * *
 
-## 🌲 Infrastructure Context (Pallatanga)
+## 🌲 Operational Context
 
-The system is optimized for the user's specific environmental constraints:
+Designed specifically for high-latency, multi-tenant rural infrastructures. The system guarantees that core corporate connectivity remains stable regardless of heavy client-side consumption, isolating faults autonomously before they impact the broader network.
 
--   **Energy Efficiency:** Low-impact notifications to avoid unnecessary radio wake-ups in secondary nodes.
--   **Connectivity:** Extreme tolerance for high latency and micro-outages common in mountain radio links.
--   **Security:** Total isolation of the corporate sites via centralized firewall orchestration.
-
-* * *
-
-**Status:** `READY_FOR_PRODUCTION` **Binary:** `v2.0.4-omega` **Maintainer:** Sebastián Real
+**Status:** `PRODUCTION_SOAKING` **Version:** `v2.5.0-sniper` **Lead Architect:** Sebastián Real
 
