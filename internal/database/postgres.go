@@ -70,6 +70,7 @@ func createTables() error {
 	-- Migrate existing tables safely (idempotent)
 	ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_token VARCHAR(255);
 	ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_config_pulled_at TIMESTAMP WITH TIME ZONE;
+	ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_ip VARCHAR(50);
 
 	CREATE TABLE IF NOT EXISTS wlans (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -168,17 +169,17 @@ func seedSiteAPIKeys() error {
 	return nil
 }
 
-func UpsertDeviceState(deviceID string, stateJSON []byte, model string) error {
+func UpsertDeviceState(deviceID string, stateJSON []byte, model string, lastIP string) error {
 	query := `
-		INSERT INTO devices (id, state_json, model, last_seen_at, updated_at) 
-		VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-		ON CONFLICT (id) 
-		DO UPDATE SET 
-			state_json = EXCLUDED.state_json, 
+		INSERT INTO devices (id, state_json, model, last_ip, last_seen_at, updated_at) 
+		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		ON CONFLICT (id) DO UPDATE SET 
+			state_json = EXCLUDED.state_json,
 			model = EXCLUDED.model,
-			last_seen_at = EXCLUDED.last_seen_at,
-			updated_at = EXCLUDED.updated_at;
+			last_ip = EXCLUDED.last_ip,
+			last_seen_at = CURRENT_TIMESTAMP,
+			updated_at = CURRENT_TIMESTAMP
 	`
-	_, err := DB.Exec(query, deviceID, string(stateJSON), model)
+	_, err := DB.Exec(query, deviceID, stateJSON, model, lastIP)
 	return err
 }

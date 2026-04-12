@@ -5,6 +5,7 @@ import ClientList from '../views/ClientList.vue'
 import SiteSettings from '../views/SiteSettings.vue'
 import LogConsole from '../views/LogConsole.vue'
 import WirelessManager from '../views/WirelessManager.vue'
+import Terminal from '../views/Terminal.vue'
 import Login from '../views/Login.vue'
 
 const router = createRouter({
@@ -53,6 +54,12 @@ const router = createRouter({
       path: '/site/:site_id/wireless',
       name: 'site-wireless',
       component: WirelessManager,
+      props: true
+    },
+    {
+      path: '/site/:site_id/ssh/:device_id?',
+      name: 'site-ssh',
+      component: Terminal,
       props: true
     }
   ]

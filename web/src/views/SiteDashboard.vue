@@ -99,6 +99,7 @@ const goBack = () => router.push('/global')
             <th class="py-2">STATUS</th>
             <th class="py-2">SYNC</th>
             <th class="py-2">LAST_SEEN</th>
+            <th class="py-2 text-center">SHELL</th>
           </tr>
         </thead>
         <tbody>
@@ -117,9 +118,14 @@ const goBack = () => router.push('/global')
               <span v-else class="text-muted text-xs">NO_PULL</span>
             </td>
             <td class="py-3 text-muted text-xs">{{ new Date(dev.last_seen_at).toLocaleString() }}</td>
+            <td class="py-3 text-center">
+              <button @click="router.push(`/site/${site_id}/ssh/${dev.id}`)" class="text-neon-green hover:bg-neon-green hover:text-black border border-neon-green px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none">
+                >_
+              </button>
+            </td>
           </tr>
           <tr v-if="devices.length === 0">
-            <td colspan="5" class="text-center py-8 text-neon-red glitch-anim text-lg">&gt;&gt;&gt; NO_NODES_FOUND</td>
+            <td colspan="6" class="text-center py-8 text-neon-red glitch-anim text-lg">&gt;&gt;&gt; NO_NODES_FOUND</td>
           </tr>
         </tbody>
       </table>
