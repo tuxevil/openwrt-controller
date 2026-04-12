@@ -47,3 +47,14 @@ type DeviceMetrics struct {
 	Uptime      int64   `json:"uptime"`
 	DHCPClients int     `json:"dhcp_clients"`
 }
+
+type WLAN struct {
+	ID        string    `json:"id"`
+	SiteID    string    `json:"site_id"`
+	SSID      string    `json:"ssid"`
+	Security  string    `json:"security"`
+	Password  string    `json:"password"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}

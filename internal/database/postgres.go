@@ -61,6 +61,17 @@ func createTables() error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS wlans (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		site_id UUID REFERENCES sites(id),
+		ssid VARCHAR(255) NOT NULL,
+		security VARCHAR(50) NOT NULL,
+		password VARCHAR(255),
+		enabled BOOLEAN DEFAULT true,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {
