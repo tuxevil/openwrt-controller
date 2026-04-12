@@ -197,11 +197,11 @@ const lineClass = (line) => {
         <h2 class="text-neon-white text-sm tracking-[0.2em]">VISUAL_DIFF</h2>
         <div class="flex gap-2">
           <select v-model="selectedCompare1" class="flex-1 bg-black border border-[#333] text-xs px-2 py-1 text-white">
-            <option v-for="b in backups" :key="b.id" :value="b.id">{{ new Date(b.created_at).toLocaleTimeString() }}</option>
+            <option v-for="b in backups" :key="b.id" :value="b.id">{{ new Date(b.created_at).toLocaleString() }}</option>
           </select>
           <span class="text-muted">VS</span>
           <select v-model="selectedCompare2" class="flex-1 bg-black border border-[#333] text-xs px-2 py-1 text-white">
-            <option v-for="b in backups" :key="b.id" :value="b.id">{{ new Date(b.created_at).toLocaleTimeString() }}</option>
+            <option v-for="b in backups" :key="b.id" :value="b.id">{{ new Date(b.created_at).toLocaleString() }}</option>
           </select>
           <button @click="getDiff" class="border border-neon-white px-2 py-1 text-xs hover:bg-neon-white hover:text-black">COMPARE</button>
         </div>
