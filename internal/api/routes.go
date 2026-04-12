@@ -22,5 +22,20 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/wlans", handlers.GetWLANsHandler)
 	mux.HandleFunc("GET /api/devices/{device_id}/config", handlers.GetDeviceConfigHandler)
 
+	fs := http.FileServer(http.Dir("./web/dist"))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Single Page Application Fallback
+		if r.URL.Path == "/" || r.URL.Path == "" {
+			fs.ServeHTTP(w, r)
+			return
+		}
+		// Try serving the actual file, if not found, serve index.html
+		_, err := http.Dir("./web/dist").Open(r.URL.Path)
+		if err != nil {
+			r.URL.Path = "/"
+		}
+		fs.ServeHTTP(w, r)
+	})
+
 	return mux
 }

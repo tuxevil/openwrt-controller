@@ -1,0 +1,51 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-vantablack text-white font-mono m-0 p-0 overflow-x-hidden;
+    background-image: repeating-linear-gradient(
+      transparent,
+      transparent 2px,
+      rgba(0, 255, 65, 0.05) 2px,
+      rgba(0, 255, 65, 0.05) 4px
+    );
+    background-attachment: fixed;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply uppercase tracking-widest font-mono text-neon-green;
+  }
+}
+
+@layer components {
+  .clip-chamfer {
+    clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  }
+
+  .neon-text-green {
+    text-shadow: 0 0 5px #00ff41, 0 0 10px #00ff41;
+  }
+  
+  .glitch-anim {
+    animation: glitch 1s infinite alternate;
+  }
+
+  .neon-panel {
+    @apply bg-panel border-2 border-neon-green clip-chamfer p-4 shadow-lg shadow-neon-green/20;
+    position: relative;
+  }
+
+  .neon-btn {
+    @apply bg-transparent text-neon-green border border-neon-green clip-chamfer px-4 py-2 hover:bg-neon-green hover:text-black hover:shadow-[0_0_15px_#00ff41] transition-all cursor-pointer font-bold tracking-widest uppercase outline-none;
+  }
+}
+
+@keyframes glitch {
+  0% { transform: skewX(0deg); }
+  1% { transform: skewX(2deg) translate(-2px, 1px); }
+  2% { transform: skewX(-2deg) translate(2px, -1px); }
+  3% { transform: skewX(0deg); }
+  100% { transform: skewX(0deg); }
+}
