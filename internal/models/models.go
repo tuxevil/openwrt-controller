@@ -58,3 +58,18 @@ type WLAN struct {
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
+
+type SiteSettings struct {
+	SiteID     string    `json:"site_id"`
+	DNSServers string    `json:"dns_servers"`
+	DHCPServer bool      `json:"dhcp_server"`
+	UpdatedAt  time.Time `json:"updated_at"`
+}
+
+type Client struct {
+	MAC       string `json:"mac"`
+	Hostname  string `json:"hostname"`
+	DeviceID  string `json:"device_id"`
+	IPAddress string `json:"ip_address"`
+	Signal    int    `json:"signal"`
+}

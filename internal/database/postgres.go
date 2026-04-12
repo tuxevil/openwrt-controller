@@ -57,10 +57,16 @@ func createTables() error {
 		model VARCHAR(255),
 		status VARCHAR(50),
 		state_json JSONB,
+		device_token VARCHAR(255),
+		last_config_pulled_at TIMESTAMP WITH TIME ZONE,
 		last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	-- Migrate existing tables safely (idempotent)
+	ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_token VARCHAR(255);
+	ALTER TABLE devices ADD COLUMN IF NOT EXISTS last_config_pulled_at TIMESTAMP WITH TIME ZONE;
 
 	CREATE TABLE IF NOT EXISTS wlans (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -72,6 +78,13 @@ func createTables() error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS site_settings (
+		site_id UUID PRIMARY KEY REFERENCES sites(id),
+		dns_servers VARCHAR(255) DEFAULT '9.9.9.9,1.1.1.1',
+		dhcp_server BOOLEAN DEFAULT true,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {
@@ -81,16 +94,17 @@ func createTables() error {
 	return nil
 }
 
-func UpsertDeviceState(deviceID string, stateJSON []byte) error {
+func UpsertDeviceState(deviceID string, stateJSON []byte, model string) error {
 	query := `
-		INSERT INTO devices (id, state_json, last_seen_at, updated_at) 
-		VALUES ($1, $2, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		INSERT INTO devices (id, state_json, model, last_seen_at, updated_at) 
+		VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT (id) 
 		DO UPDATE SET 
 			state_json = EXCLUDED.state_json, 
+			model = EXCLUDED.model,
 			last_seen_at = EXCLUDED.last_seen_at,
 			updated_at = EXCLUDED.updated_at;
 	`
-	_, err := DB.Exec(query, deviceID, string(stateJSON))
+	_, err := DB.Exec(query, deviceID, string(stateJSON), model)
 	return err
 }

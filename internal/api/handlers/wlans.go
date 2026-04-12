@@ -7,6 +7,29 @@ import (
 	"openwrt-controller/internal/database"
 )
 
+func DeleteWLANHandler(w http.ResponseWriter, r *http.Request) {
+	wlanID := r.PathValue("wlan_id")
+	if wlanID == "" {
+		http.Error(w, `{"error": "wlan_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	res, err := database.DB.Exec("DELETE FROM wlans WHERE id = $1", wlanID)
+	if err != nil {
+		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, `{"error": "wlan not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
+}
+
 type createWLANRequest struct {
 	SSID     string `json:"ssid"`
 	Security string `json:"security"`
@@ -51,9 +74,7 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data": map[string]interface{}{
-			"id": newID,
-		},
+		"data":  map[string]interface{}{"id": newID},
 		"error": nil,
 	})
 }
@@ -65,7 +86,7 @@ func GetWLANsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, site_id, ssid, security, password, enabled FROM wlans WHERE site_id = $1`
+	query := `SELECT id, site_id, ssid, security, enabled FROM wlans WHERE site_id = $1`
 	rows, err := database.DB.Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -75,15 +96,14 @@ func GetWLANsHandler(w http.ResponseWriter, r *http.Request) {
 
 	var wlans []map[string]interface{}
 	for rows.Next() {
-		var id, sID, ssid, security, password string
+		var id, sID, ssid, security string
 		var enabled bool
-		if err := rows.Scan(&id, &sID, &ssid, &security, &password, &enabled); err == nil {
+		if err := rows.Scan(&id, &sID, &ssid, &security, &enabled); err == nil {
 			wlans = append(wlans, map[string]interface{}{
 				"id":       id,
 				"site_id":  sID,
 				"ssid":     ssid,
 				"security": security,
-				"password": password,
 				"enabled":  enabled,
 			})
 		}

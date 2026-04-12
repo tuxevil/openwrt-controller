@@ -20,7 +20,14 @@ func SetupRoutes() *http.ServeMux {
 
 	mux.HandleFunc("POST /api/sites/{site_id}/wlans", handlers.CreateWLANHandler)
 	mux.HandleFunc("GET /api/sites/{site_id}/wlans", handlers.GetWLANsHandler)
+	mux.HandleFunc("DELETE /api/wlans/{wlan_id}", handlers.DeleteWLANHandler)
 	mux.HandleFunc("GET /api/devices/{device_id}/config", handlers.GetDeviceConfigHandler)
+	mux.HandleFunc("GET /api/devices/{device_id}/metrics", handlers.GetDeviceMetricsHandler)
+
+	mux.HandleFunc("GET /api/sites/{site_id}/clients", handlers.GetClientsHandler)
+	mux.HandleFunc("GET /api/sites/{site_id}/settings", handlers.GetSiteSettingsHandler)
+	mux.HandleFunc("POST /api/sites/{site_id}/settings", handlers.UpdateSiteSettingsHandler)
+	mux.HandleFunc("GET /api/sites/{site_id}/logs", handlers.GetLogsHandler)
 
 	fs := http.FileServer(http.Dir("./web/dist"))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

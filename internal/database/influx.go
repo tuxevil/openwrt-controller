@@ -64,6 +64,41 @@ func WriteMetrics(deviceID string, metrics *models.DeviceMetrics) error {
 	return WriteAPI.WritePoint(context.Background(), p)
 }
 
+func GetDeviceMetrics(deviceID string, duration string) ([]float64, error) {
+	if InfluxClient == nil {
+		return nil, fmt.Errorf("influx client not initialized")
+	}
+
+	queryAPI := InfluxClient.QueryAPI(org)
+	query := fmt.Sprintf(`
+		from(bucket: "%s")
+		|> range(start: %s)
+		|> filter(fn: (r) => r["_measurement"] == "device_metrics")
+		|> filter(fn: (r) => r["device_id"] == "%s")
+		|> filter(fn: (r) => r["_field"] == "cpu_load")
+		|> aggregateWindow(every: 10s, fn: mean, createEmpty: false)
+		|> yield(name: "mean")
+	`, bucket, duration, deviceID)
+
+	result, err := queryAPI.Query(context.Background(), query)
+	if err != nil {
+		return nil, err
+	}
+
+	var metrics []float64
+	for result.Next() {
+		if val, ok := result.Record().Value().(float64); ok {
+			metrics = append(metrics, val)
+		}
+	}
+
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+
+	return metrics, nil
+}
+
 func CloseInflux() {
 	if InfluxClient != nil {
 		InfluxClient.Close()

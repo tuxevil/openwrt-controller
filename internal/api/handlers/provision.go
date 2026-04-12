@@ -15,10 +15,21 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// --- Módulo 3: Hardening - Validar X-Device-Token ---
+	token := r.Header.Get("X-Device-Token")
+	if token != "" {
+		// Solo valida si se envía un token; sin token = acceso sin auth (modo legado)
+		var storedToken sql.NullString
+		err := database.DB.QueryRow("SELECT device_token FROM devices WHERE id = $1", deviceID).Scan(&storedToken)
+		if err == nil && storedToken.Valid && storedToken.String != "" && storedToken.String != token {
+			http.Error(w, `{"error": "invalid device token"}`, http.StatusUnauthorized)
+			return
+		}
+	}
+
 	var siteID sql.NullString
-	// 1. Busca el device_id, verifica su estado
 	err := database.DB.QueryRow("SELECT site_id FROM devices WHERE id = $1", deviceID).Scan(&siteID)
-	
+
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error": "device not found"}`, http.StatusNotFound)
 		return
@@ -29,7 +40,6 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
-	// 2. Si no está adoptado (site_id es null)
 	if !siteID.Valid {
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"action":  "wait",
@@ -38,8 +48,16 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 3. Busca en la tabla wlans TODAS las redes asociadas a ese site_id
-	rows, err := database.DB.Query("SELECT ssid, security, password FROM wlans WHERE site_id = $1 AND enabled = true", siteID.String)
+	// --- Módulo 2: Actualizar last_config_pulled_at ---
+	_, _ = database.DB.Exec(
+		"UPDATE devices SET last_config_pulled_at = CURRENT_TIMESTAMP WHERE id = $1",
+		deviceID,
+	)
+
+	rows, err := database.DB.Query(
+		"SELECT ssid, security, password FROM wlans WHERE site_id = $1 AND enabled = true",
+		siteID.String,
+	)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -65,7 +83,6 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		wlansList = make([]map[string]string, 0)
 	}
 
-	// 4. Devuelve payload JSON estructurado con WLANs
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"action": "apply",
 		"config": map[string]interface{}{

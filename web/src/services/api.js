@@ -23,5 +23,32 @@ export default {
   },
   getSiteDevices(siteId) {
     return apiClient.get(`/sites/${siteId}/devices`)
+  },
+  getDeviceMetrics(deviceId) {
+    return apiClient.get(`/devices/${deviceId}/metrics`)
+  },
+  getSiteClients(siteId) {
+    return apiClient.get(`/sites/${siteId}/clients`)
+  },
+  getSiteSettings(siteId) {
+    return apiClient.get(`/sites/${siteId}/settings`)
+  },
+  updateSiteSettings(siteId, settings) {
+    return apiClient.post(`/sites/${siteId}/settings`, settings)
+  },
+  getSiteLogs(siteId) {
+    return apiClient.get(`/sites/${siteId}/logs`)
+  },
+  getSiteWLANs(siteId) {
+    return apiClient.get(`/sites/${siteId}/wlans`)
+  },
+  createWLAN(siteId, payload) {
+    return apiClient.post(`/sites/${siteId}/wlans`, payload)
+  },
+  deleteWLAN(wlanId) {
+    return apiClient.delete(`/wlans/${wlanId}`)
+  },
+  getSiteDevicesWithSync(siteId) {
+    return apiClient.get(`/sites/${siteId}/devices`)
   }
 }

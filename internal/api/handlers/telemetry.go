@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"io"
 	"log"
 	"net/http"
 
@@ -15,49 +16,62 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var payload models.TelemetryPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	var raw map[string]interface{}
+	if err := json.Unmarshal(body, &raw); err != nil {
 		http.Error(w, "Bad request: invalid json", http.StatusBadRequest)
 		return
 	}
 
-	if payload.DeviceID == "" {
+	deviceID, ok := raw["device_id"].(string)
+	if !ok || deviceID == "" {
 		http.Error(w, "Bad request: missing device_id", http.StatusBadRequest)
 		return
 	}
 
-	// Combine Hardware and Network into a single state map to store as JSONB
-	stateMap := map[string]interface{}{}
-	if len(payload.Hardware) > 0 {
-		var hw map[string]interface{}
-		_ = json.Unmarshal(payload.Hardware, &hw)
-		stateMap["hardware"] = hw
-	}
-	if len(payload.Network) > 0 {
-		var nw map[string]interface{}
-		_ = json.Unmarshal(payload.Network, &nw)
-		stateMap["network"] = nw
+	modelStr := "UNKNOWN"
+	if boardInfo, ok := raw["board"].(map[string]interface{}); ok {
+		if model, ok := boardInfo["model"].(string); ok {
+			modelStr = model
+		}
 	}
 
-	stateJSON, err := json.Marshal(stateMap)
-	if err != nil {
-		http.Error(w, "Internal server error: processing state", http.StatusInternalServerError)
-		return
-	}
-
-	// 1. Goroutine for PostgreSQL (upsert state)
-	go func(devID string, state []byte) {
-		if err := database.UpsertDeviceState(devID, state); err != nil {
+	// 1. Goroutine for PostgreSQL (upsert state and explicit model)
+	go func(devID string, state []byte, mod string) {
+		if err := database.UpsertDeviceState(devID, state, mod); err != nil {
 			log.Printf("Error upserting device state to postgres: %v\n", err)
 		}
-	}(payload.DeviceID, stateJSON)
+	}(deviceID, body, modelStr)
+
+	// Extract Metrics cleanly bypassing struct matching
+	var metrics models.DeviceMetrics
+	if sys, ok := raw["system"].(map[string]interface{}); ok {
+		if loadArr, ok := sys["load"].([]interface{}); ok && len(loadArr) > 0 {
+			if v, ok := loadArr[0].(float64); ok {
+				metrics.CPULoad = v / 65536.0
+			}
+		}
+		if mem, ok := sys["memory"].(map[string]interface{}); ok {
+			if free, ok := mem["free"].(float64); ok {
+				metrics.RAMFree = int64(free)
+			}
+		}
+		if uptime, ok := sys["uptime"].(float64); ok {
+			metrics.Uptime = int64(uptime)
+		}
+	}
 
 	// 2. Goroutine for InfluxDB (metrics)
-	go func(devID string, metrics models.DeviceMetrics) {
-		if err := database.WriteMetrics(devID, &metrics); err != nil {
+	go func(devID string, mets models.DeviceMetrics) {
+		if err := database.WriteMetrics(devID, &mets); err != nil {
 			log.Printf("Error writing metrics to influx: %v\n", err)
 		}
-	}(payload.DeviceID, payload.Metrics)
+	}(deviceID, metrics)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
