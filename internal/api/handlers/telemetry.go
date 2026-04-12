@@ -198,6 +198,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			if err := database.InsertDeviceLogs(devID, logs); err != nil {
 				log.Printf("Error inserting logs: %v\n", err)
 			}
+			services.AnalyzeLogs(devID, logs)
 		}(deviceID, parsedLogs)
 	}
 

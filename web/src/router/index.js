@@ -15,6 +15,7 @@ import Runbook from '../views/Runbook.vue'
 import Login from '../views/Login.vue'
 import AgentMgmt from '../views/AgentMgmt.vue'
 import VPNMatrix from '../views/VPNMatrix.vue'
+import SecurityMatrix from '../views/SecurityMatrix.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -114,6 +115,11 @@ const router = createRouter({
       name: 'site-vpn',
       component: VPNMatrix,
       props: true
+    },
+    {
+      path: '/global/sentinel',
+      name: 'global-sentinel',
+      component: SecurityMatrix
     }
   ]
 })

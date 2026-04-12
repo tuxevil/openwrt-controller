@@ -172,6 +172,15 @@ func createTables() error {
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS wg_endpoint VARCHAR(255);
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS wg_pubkey VARCHAR(255);
 	ALTER TABLE sites ADD COLUMN IF NOT EXISTS wg_privkey VARCHAR(255);
+
+	CREATE TABLE IF NOT EXISTS ai_insights (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		correlation_id VARCHAR(100),
+		diagnosis TEXT,
+		severity VARCHAR(20),
+		involved_devices JSONB,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {

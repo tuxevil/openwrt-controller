@@ -18,6 +18,7 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── Protected API routes ─────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/global/health", middleware.WithAuth(handlers.GetGlobalHealthHandler))
+	mux.HandleFunc("GET /api/global/sentinel", middleware.WithAuth(handlers.GetSentinelInsightsHandler))
 	mux.HandleFunc("GET /api/sites", middleware.WithAuth(handlers.GetSitesHandler))
 	mux.HandleFunc("POST /api/sites", middleware.WithAuth(handlers.CreateSiteHandler))
 
