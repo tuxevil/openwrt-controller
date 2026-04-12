@@ -72,7 +72,7 @@ const options = {
 const fetchData = async () => {
   loading.value = true
   try {
-    const res = await api.get(`/sites/${props.site_id}/history?metric=${props.metric}`)
+    const res = await api.getSiteHistory(props.site_id, props.metric)
     let data = []
     if (res.data && Array.isArray(res.data.data)) {
       data = res.data.data

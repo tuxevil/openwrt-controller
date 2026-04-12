@@ -59,6 +59,9 @@ export default {
   getDeviceMetrics(deviceId) {
     return apiClient.get(`/devices/${deviceId}/metrics`)
   },
+  getSiteHistory(siteId, metric) {
+    return apiClient.get(`/sites/${siteId}/history?metric=${metric}`)
+  },
   
   // Vault / Backups / Firmware
   getDeviceBackups(deviceId) {
