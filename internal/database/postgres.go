@@ -108,6 +108,18 @@ func createTables() error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		resolved_at TIMESTAMP WITH TIME ZONE
 	);
+
+	CREATE TABLE IF NOT EXISTS profiles (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		name VARCHAR(255) NOT NULL,
+		description TEXT,
+		config_json JSONB DEFAULT '{}',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
+	-- Migrate existing tables safely (idempotent)
+	ALTER TABLE sites ADD COLUMN IF NOT EXISTS profile_id UUID REFERENCES profiles(id);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {

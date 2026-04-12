@@ -52,7 +52,10 @@
          </router-link>
        </nav>
 
-       <div class="mt-auto pt-4 border-t border-neon-green/30">
+       <div class="mt-auto pt-4 border-t border-neon-green/30 flex flex-col gap-2">
+          <router-link to="/orchestrator" class="text-xs px-3 py-2 border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
+            ⚡ ORCHESTRATOR
+          </router-link>
           <router-link to="/global" class="text-xs text-muted hover:text-white transition-colors block text-center uppercase tracking-[0.2em]">Exit to Global</router-link>
        </div>
     </div>

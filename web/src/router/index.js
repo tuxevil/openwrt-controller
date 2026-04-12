@@ -8,6 +8,7 @@ import WirelessManager from '../views/WirelessManager.vue'
 import Terminal from '../views/Terminal.vue'
 import Incidents from '../views/Incidents.vue'
 import Topology from '../views/Topology.vue'
+import Orchestrator from '../views/Orchestrator.vue'
 import Login from '../views/Login.vue'
 
 const router = createRouter({
@@ -27,6 +28,11 @@ const router = createRouter({
       path: '/global',
       name: 'global',
       component: GlobalDashboard
+    },
+    {
+      path: '/orchestrator',
+      name: 'orchestrator',
+      component: Orchestrator
     },
     {
       path: '/site/:site_id/incidents',

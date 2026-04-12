@@ -87,5 +87,22 @@ export default {
   },
   deleteWLAN(wlanId) {
     return apiClient.delete(`/wlans/${wlanId}`)
+  },
+
+  // Orchestrator
+  getProfiles() {
+    return apiClient.get('/profiles')
+  },
+  createProfile(payload) {
+    return apiClient.post('/profiles', payload)
+  },
+  deleteProfile(profileId) {
+    return apiClient.delete(`/profiles/${profileId}`)
+  },
+  assignSiteProfile(siteId, profileId) {
+    return apiClient.put(`/sites/${siteId}/profile`, { profile_id: profileId })
+  },
+  massCommand(siteId, command) {
+    return apiClient.post('/orchestrator/command', { site_id: siteId, command })
   }
 }

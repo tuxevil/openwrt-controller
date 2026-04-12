@@ -78,12 +78,21 @@ type Client struct {
 }
 
 type Incident struct {
-	ID           string    `json:"id"`
-	SiteID       string    `json:"site_id"`
-	DeviceID     string    `json:"device_id"`
-	IncidentType string    `json:"type"`     // NODE_DOWN, CPU_OVERLOAD, SIGNAL_CRITICAL
-	Severity     string    `json:"severity"` // CRITICAL, WARNING
-	Status       string    `json:"status"`   // OPEN, RESOLVED
-	CreatedAt    time.Time `json:"created_at"`
+	ID           string     `json:"id"`
+	SiteID       string     `json:"site_id"`
+	DeviceID     string     `json:"device_id"`
+	IncidentType string     `json:"type"`
+	Severity     string     `json:"severity"`
+	Status       string     `json:"status"`
+	CreatedAt    time.Time  `json:"created_at"`
 	ResolvedAt   *time.Time `json:"resolved_at,omitempty"`
+}
+
+type Profile struct {
+	ID          string          `json:"id"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	ConfigJSON  json.RawMessage `json:"config_json"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }

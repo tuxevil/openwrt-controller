@@ -9,6 +9,27 @@ import (
 	"openwrt-controller/internal/database"
 )
 
+// deepMerge merges src into dst. dst values have priority.
+func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{})
+	for k, sv := range src {
+		result[k] = sv
+	}
+	for k, dv := range dst {
+		if sv, ok := src[k]; ok {
+			// Both have the key — recurse if both maps
+			dstMap, dstIsMap := dv.(map[string]interface{})
+			srcMap, srcIsMap := sv.(map[string]interface{})
+			if dstIsMap && srcIsMap {
+				result[k] = deepMerge(dstMap, srcMap)
+				continue
+			}
+		}
+		result[k] = dv
+	}
+	return result
+}
+
 func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
 	if deviceID == "" {
