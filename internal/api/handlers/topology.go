@@ -81,6 +81,37 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Fetch custom hostnames
+	customHostnames := make(map[string]string)
+	hRows, err := database.DB.Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	if err == nil {
+		defer hRows.Close()
+		for hRows.Next() {
+			var m, h string
+			if err := hRows.Scan(&m, &h); err == nil {
+				customHostnames[m] = h
+			}
+		}
+	}
+
+	// Extract DHCP hostnames
+	dhcpHostnames := make(map[string]string)
+	for _, dev := range allDevices {
+		if dhcpBlock, ok := dev["dhcp"].(map[string]interface{}); ok {
+			if leases, ok := dhcpBlock["leases"].([]interface{}); ok {
+				for _, leaseRaw := range leases {
+					if lease, ok := leaseRaw.(map[string]interface{}); ok {
+						mac, _ := lease["mac"].(string)
+						hostname, _ := lease["hostname"].(string)
+						if mac != "" && hostname != "" && hostname != "*" {
+							dhcpHostnames[mac] = hostname
+						}
+					}
+				}
+			}
+		}
+	}
+
 	edgeCounter := 0
 	// 3. Process each router
 	for _, dev := range allDevices {
@@ -140,9 +171,16 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 							clientMAC, okMac := cMap["mac"].(string)
 							if okMac {
 								if _, exists := graph.Nodes[clientMAC]; !exists {
+									clientName := "CLIENT_" + clientMAC[len(clientMAC)-5:]
+									if name, ok := customHostnames[clientMAC]; ok && name != "" {
+										clientName = name
+									} else if name, ok := dhcpHostnames[clientMAC]; ok && name != "" {
+										clientName = name
+									}
+
 									graph.Nodes[clientMAC] = GraphNode{
 										ID:       clientMAC,
-										Name:     "CLIENT_" + clientMAC[len(clientMAC)-5:],
+										Name:     clientName,
 										Type:     "client",
 										HasAlert: false, 
 									}
