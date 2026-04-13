@@ -7,6 +7,8 @@ const settings = ref({ dns_servers: '', dhcp_server: false })
 const apiKey = ref('')
 const saving = ref(false)
 const generating = ref(false)
+const autoAdopt = ref(false)
+const togglingAdopt = ref(false)
 
 onMounted(async () => {
   const res = await api.getSiteSettings(props.site_id)
@@ -16,6 +18,12 @@ onMounted(async () => {
   if (res.data.api_key) {
     apiKey.value = res.data.api_key
   }
+  // Load auto_adopt state from sites list
+  try {
+    const sitesRes = await api.getSites()
+    const site = (sitesRes.data.data || []).find(s => s.id === props.site_id)
+    if (site) autoAdopt.value = site.auto_adopt || false
+  } catch(e) { /* non-critical */ }
 })
 
 const save = async () => {
@@ -36,6 +44,18 @@ const rotateKey = async () => {
     console.error("Key rotation failed", e)
   } finally {
     setTimeout(() => generating.value = false, 500)
+  }
+}
+
+const toggleAutoAdopt = async () => {
+  togglingAdopt.value = true
+  try {
+    await api.toggleAutoAdopt(props.site_id, !autoAdopt.value)
+    autoAdopt.value = !autoAdopt.value
+  } catch(e) {
+    console.error('Auto-adopt toggle failed', e)
+  } finally {
+    togglingAdopt.value = false
   }
 }
 </script>
@@ -85,6 +105,37 @@ const rotateKey = async () => {
              {{ generating ? 'ROTATING...' : '[ REGENERATE_KEY ]' }}
           </button>
         </div>
+      </div>
+    </div>
+
+    <!-- ZERO_TOUCH PROVISIONING section -->
+    <h2 class="text-3xl glitch-anim border-b border-sky-500/30 pb-4 inline-block w-fit text-sky-400 mt-8">> ZERO_TOUCH_PROVISIONING</h2>
+    
+    <div class="neon-panel border-sky-500/50 flex flex-col gap-6 mt-4 bg-sky-950/10">
+      <div class="text-xs text-muted tracking-widest leading-relaxed">
+        WHEN ENABLED: Any router broadcasting the <span class="text-white">SITE_API_KEY</span> will be <br/>
+        automatically ADOPTED without manual dashboard intervention. <br/>
+        <span class="text-yellow-400">CAUTION: Embed the correct API_KEY in the firmware image before enabling.</span>
+      </div>
+
+      <div class="flex items-center gap-6">
+        <div
+          class="flex border clip-chamfer w-fit cursor-pointer select-none overflow-hidden transition-all"
+          :class="autoAdopt ? 'border-sky-400' : 'border-gray-600'"
+          @click="toggleAutoAdopt"
+        >
+          <div
+            class="px-5 py-3 font-bold transition-colors text-sm tracking-widest"
+            :class="!autoAdopt ? 'bg-gray-700 text-black shadow-[0_0_10px_#666]' : 'bg-transparent text-gray-500'"
+          >[ OFF ] MANUAL</div>
+          <div
+            class="px-5 py-3 font-bold transition-colors text-sm tracking-widest"
+            :class="autoAdopt ? 'bg-sky-500 text-black shadow-[0_0_15px_#38bdf8]' : 'bg-transparent text-gray-500'"
+          >[ ON ] ZERO_TOUCH ⚡</div>
+        </div>
+        <span v-if="togglingAdopt" class="text-sky-400 text-xs animate-pulse">UPDATING...</span>
+        <span v-else-if="autoAdopt" class="text-sky-300 text-xs tracking-widest">ARMED — NEW DEVICES WILL AUTO-ENROLL</span>
+        <span v-else class="text-gray-500 text-xs tracking-widest">SAFE — MANUAL ADOPTION REQUIRED</span>
       </div>
     </div>
   </div>

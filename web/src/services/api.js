@@ -147,5 +147,15 @@ export default {
   },
   massCommand(siteId, command) {
     return apiClient.post('/orchestrator/command', { site_id: siteId, command })
+  },
+
+  // Audit
+  getAuditLogs(limit=50, offset=0) {
+    return apiClient.get(`/audit-logs?limit=${limit}&offset=${offset}`)
+  },
+
+  // Zero-Touch Provisioning
+  toggleAutoAdopt(siteId, enabled) {
+    return apiClient.patch(`/sites/${siteId}/auto-adopt`, { enabled })
   }
 }

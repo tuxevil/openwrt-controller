@@ -127,6 +127,10 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 
 	// f) Inicia un pipe bidireccional
 	// ws -> ssh
+	var inputBuffer []byte
+	username := GetUsernameFromReq(r)
+	clientIP := r.RemoteAddr
+
 	go func() {
 		for {
 			_, msg, err := ws.ReadMessage()
@@ -134,6 +138,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 				sshConn.Close()
 				break
 			}
+			inputBuffer = append(inputBuffer, msg...)
 			sshIn.Write(msg)
 		}
 	}()
@@ -165,4 +170,8 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Wait for the session to finish
 	session.Wait()
+
+	if username != "system" && len(inputBuffer) > 0 {
+		database.InsertAuditLog(username, "MATRIX_SHELL_SESSION", "DEVICE", deviceID, string(inputBuffer), clientIP)
+	}
 }

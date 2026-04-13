@@ -139,6 +139,11 @@ const router = createRouter({
       path: '/global/identity',
       name: 'global-identity',
       component: IdentityMatrix
+    },
+    {
+      path: '/global/panopticon',
+      name: 'global-panopticon',
+      component: () => import('../views/PanopticonView.vue')
     }
   ]
 })

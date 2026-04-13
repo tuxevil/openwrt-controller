@@ -31,7 +31,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/users/{id}/role", middleware.WithAuth(middleware.RequireAdmin(handlers.UpdateUserRoleHandler)))
 	mux.HandleFunc("PUT /api/users/{id}/password", middleware.WithAuth(middleware.RequireAdmin(handlers.UpdateUserPasswordHandler)))
 	mux.HandleFunc("DELETE /api/users/{id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteUserHandler)))
-
+	mux.HandleFunc("GET /api/audit-logs", middleware.WithAuth(middleware.RequireAdmin(handlers.GetAuditLogsHandler)))
 
 	mux.HandleFunc("GET /api/devices", middleware.WithAuth(handlers.GetDevicesHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/devices", middleware.WithAuth(handlers.GetSiteDevicesHandler))
@@ -48,6 +48,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/settings", middleware.WithAuth(handlers.GetSiteSettingsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/settings", middleware.WithAuth(handlers.UpdateSiteSettingsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rotate-key", middleware.WithAuth(handlers.RotateSiteKeyHandler))
+	mux.HandleFunc("PATCH /api/sites/{site_id}/auto-adopt", middleware.WithAuth(middleware.RequireAdmin(handlers.ToggleAutoAdoptHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/history", middleware.WithAuth(handlers.GetSiteHistoryHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/logs", middleware.WithAuth(handlers.GetLogsHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/incidents", middleware.WithAuth(handlers.GetIncidentsHandler))

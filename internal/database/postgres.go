@@ -203,6 +203,17 @@ func createTables() error {
 		UNIQUE(device_id, mac)
 	);
 
+	CREATE TABLE IF NOT EXISTS audit_logs (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		username VARCHAR(100) NOT NULL,
+		action VARCHAR(255) NOT NULL,
+		resource_type VARCHAR(100),
+		resource_id VARCHAR(255),
+		payload TEXT,
+		ip_addr VARCHAR(50),
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
 	INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
 	`
 	_, err := DB.Exec(query)
@@ -217,6 +228,7 @@ func createTables() error {
 		"UPDATE users SET role = UPPER(role)",
 		"ALTER TABLE ai_insights ADD COLUMN IF NOT EXISTS llm_model VARCHAR(255)",
 		"ALTER TABLE ai_insights ADD COLUMN IF NOT EXISTS tokens_used INT DEFAULT 0",
+		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS auto_adopt BOOLEAN DEFAULT false",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {

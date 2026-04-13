@@ -101,6 +101,12 @@ func MassCommandHandler(w http.ResponseWriter, r *http.Request) {
 	results := services.RunMassCommand(body.SiteID, body.Command)
 	elapsed := time.Since(start).Milliseconds()
 
+	username := GetUsernameFromReq(r)
+	if username != "system" {
+		database.InsertAuditLog(username, "MASS_COMMAND_DISPATCHED", "SITE", body.SiteID, body.Command, r.RemoteAddr)
+	}
+
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"elapsed_ms": elapsed,

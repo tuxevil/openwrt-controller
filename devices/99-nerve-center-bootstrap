@@ -1,0 +1,135 @@
+#!/bin/sh
+# =============================================================================
+# NERVE CENTER - ZERO-TOUCH FIRST BOOT SCRIPT
+# Location in image: /etc/uci-defaults/99-nerve-center-bootstrap
+#
+# This script runs ONCE on first boot via the uci-defaults mechanism.
+# After it exits 0, OpenWrt deletes it automatically — it never runs again.
+#
+# Fill in the variables below before building the image in OpenWrt Image Builder.
+# =============================================================================
+
+# ── MANDATORY CONFIGURATION ──────────────────────────────────────────────────
+CONTROLLER_IP="10.0.0.6"
+CONTROLLER_PORT="3000"
+SITE_KEY="REPLACE_WITH_SITE_API_KEY"    # From Dashboard → Site Settings
+
+# ── OPTIONAL CONFIGURATION ───────────────────────────────────────────────────
+ROOT_PASSWORD="REPLACE_WITH_SECURE_PASSWORD"   # Set a secure root password
+# PPPoE credentials (leave blank if WAN is DHCP)
+PPPOE_USERNAME=""
+PPPOE_PASSWORD=""
+
+# =============================================================================
+# DO NOT EDIT BELOW THIS LINE
+# =============================================================================
+exec >/tmp/nerve-bootstrap.log 2>&1
+
+BASE_URL="http://$CONTROLLER_IP:$CONTROLLER_PORT/api"
+AGENT_URL="$BASE_URL/agent/latest/raw"
+AGENT_DEST="/usr/sbin/nerve-agent.sh"
+
+echo "[*] NERVE CENTER ZERO-TOUCH BOOTSTRAP STARTING..."
+
+# 1. Set root password
+if [ -n "$ROOT_PASSWORD" ]; then
+  (echo "$ROOT_PASSWORD"; sleep 1; echo "$ROOT_PASSWORD") | passwd >/dev/null 2>&1
+  echo "[+] Root password configured."
+fi
+
+# 2. Configure PPPoE WAN if credentials provided
+if [ -n "$PPPOE_USERNAME" ] && [ -n "$PPPOE_PASSWORD" ]; then
+  uci set network.wan.proto=pppoe
+  uci set network.wan.username="$PPPOE_USERNAME"
+  uci set network.wan.password="$PPPOE_PASSWORD"
+  uci commit network
+  echo "[+] PPPoE WAN configured."
+fi
+
+# 3. Disable the default OpenWrt SSID on first boot
+#    The controller will push the correct SSID via config after adoption.
+uci set wireless.@wifi-device[0].disabled='1' 2>/dev/null
+uci commit wireless 2>/dev/null
+echo "[+] Wireless disabled pending controller configuration."
+
+# 4. Wait for WAN connectivity (check DNS or controller IP)
+echo "[*] Waiting for network connectivity..."
+MAX_WAIT=120
+WAITED=0
+while ! ping -c 1 -W 2 "$CONTROLLER_IP" >/dev/null 2>&1; do
+  sleep 3
+  WAITED=$((WAITED + 3))
+  if [ $WAITED -ge $MAX_WAIT ]; then
+    echo "[!] Timeout waiting for controller IP $CONTROLLER_IP. Bootstrap deferred."
+    # Exit 1 so the script is NOT deleted and retries on next boot
+    exit 1
+  fi
+done
+echo "[+] Controller reachable at $CONTROLLER_IP."
+
+# 5. Download the latest agent from the Nerve Center
+echo "[*] Downloading Nerve Center agent..."
+if curl -m 15 -s \
+    -H "X-Site-Key: $SITE_KEY" \
+    -o "${AGENT_DEST}.tmp" \
+    "$AGENT_URL"; then
+
+  # Verify the download is non-empty
+  if [ -s "${AGENT_DEST}.tmp" ]; then
+    mv "${AGENT_DEST}.tmp" "$AGENT_DEST"
+    chmod +x "$AGENT_DEST"
+    echo "[+] Agent downloaded → $AGENT_DEST"
+  else
+    echo "[!] Agent download empty. Bootstrap deferred."
+    rm -f "${AGENT_DEST}.tmp"
+    exit 1
+  fi
+else
+  echo "[!] Agent download failed. Bootstrap deferred."
+  exit 1
+fi
+
+# 6. Inject SITE_KEY into the downloaded agent
+#    The agent uses SITE_KEY to authenticate all subsequent API calls.
+sed -i "s|SITE_KEY=\"TU_API_KEY_AQUI\"|SITE_KEY=\"$SITE_KEY\"|g" "$AGENT_DEST"
+sed -i "s|CONTROLLER_IP=\"10.0.0.6\"|CONTROLLER_IP=\"$CONTROLLER_IP\"|g" "$AGENT_DEST"
+sed -i "s|PORT=\"3000\"|PORT=\"$CONTROLLER_PORT\"|g" "$AGENT_DEST"
+echo "[+] Agent configured with site credentials."
+
+# 7. Register service via procd (rc.local fallback for simplicity)
+#    Creates a procd-compatible init script so the agent survives reboots.
+cat > /etc/init.d/nerve-agent << 'EOF'
+#!/bin/sh /etc/rc.common
+START=99
+STOP=10
+USE_PROCD=1
+
+start_service() {
+  procd_open_instance
+  procd_set_param command /usr/sbin/nerve-agent.sh
+  procd_set_param respawn 60 5 0
+  procd_set_param stdout 1
+  procd_set_param stderr 1
+  procd_close_instance
+}
+EOF
+chmod +x /etc/init.d/nerve-agent
+/etc/init.d/nerve-agent enable
+/etc/init.d/nerve-agent start
+
+echo "[+] Nerve agent service registered and started."
+
+# 8. Send initial telemetry immediately (the controller will auto-adopt
+#    this device if the site has Zero-Touch Provisioning enabled)
+DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
+curl -m 10 -s -X POST \
+  -H "Content-Type: application/json" \
+  -H "X-Site-Key: $SITE_KEY" \
+  -d "{\"device_id\":\"$DEVICE_ID\",\"agent_version\":\"bootstrap\",\"timestamp\":$(date +%s),\"board\":{},\"system\":{}}" \
+  "http://$CONTROLLER_IP:$CONTROLLER_PORT/api/telemetry" >/dev/null
+
+echo "[+] Initial registration beacon sent."
+echo "[✓] NERVE CENTER ZERO-TOUCH BOOTSTRAP COMPLETE."
+
+# Exit 0 → OpenWrt deletes this script. It will NOT run again on next boot.
+exit 0

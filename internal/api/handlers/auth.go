@@ -84,3 +84,27 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 // JWTSecret exposes the secret for use in middleware
 func JWTSecret() []byte { return jwtSecret }
+
+func GetUsernameFromReq(r *http.Request) string {
+	tokenStr := r.URL.Query().Get("token")
+	if tokenStr == "" {
+		ah := r.Header.Get("Authorization")
+		if len(ah) > 7 && ah[:7] == "Bearer " {
+			tokenStr = ah[7:]
+		}
+	}
+	if tokenStr == "" {
+		return "system"
+	}
+	token, _ := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		return jwtSecret, nil
+	})
+	if token != nil {
+		if claims, ok := token.Claims.(jwt.MapClaims); ok {
+			if sub, ok := claims["sub"].(string); ok {
+				return sub
+			}
+		}
+	}
+	return "system"
+}

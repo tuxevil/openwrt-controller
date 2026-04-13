@@ -52,6 +52,27 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// ── ZERO_TOUCH: Auto-Adoption ─────────────────────────────────────────────
+	// If the device has no site_id yet, check if the X-Site-Key matches a site
+	// with auto_adopt=true. If so, adopt the device automatically.
+	if err != nil && providedKey != "" {
+		var autoSiteID string
+		var autoAdopt bool
+		zeroTouchErr := database.DB.QueryRow(`
+			SELECT id, auto_adopt FROM sites WHERE api_key = $1
+		`, providedKey).Scan(&autoSiteID, &autoAdopt)
+
+		if zeroTouchErr == nil && autoAdopt {
+			_, _ = database.DB.Exec(
+				"UPDATE devices SET site_id = $1, status = 'Adopted' WHERE id = $2",
+				autoSiteID, deviceID,
+			)
+			log.Printf("[ZERO_TOUCH] Device %s auto-adopted to site %s", deviceID, autoSiteID)
+			go database.InsertAuditLog("system", "ZERO_TOUCH_ADOPTION", "DEVICE", deviceID, "auto-adopted to site: "+autoSiteID, r.RemoteAddr)
+		}
+	}
+	// ─────────────────────────────────────────────────────────────────────────
+
 	modelStr := "UNKNOWN"
 	if boardInfo, ok := raw["board"].(map[string]interface{}); ok {
 		if model, ok := boardInfo["model"].(string); ok {

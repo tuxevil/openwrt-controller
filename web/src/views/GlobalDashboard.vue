@@ -64,6 +64,10 @@ const jumpToSite = (siteId) => {
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           [ IDENTITY MATRIX ]
         </router-link>
+        <router-link v-if="isAdmin()" to="/global/panopticon" class="px-4 py-2 border border-gray-400 text-gray-400 hover:text-white hover:border-white transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_gray] active:scale-95 flex items-center gap-2 clip-chamfer">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3 9c7 0 10-9 10-9s-3-9-10-9-10 9-10 9 3 9 10 9z"/></svg>
+          [ PANÓPTICO ]
+        </router-link>
       </div>
     </div>
     
