@@ -9,6 +9,18 @@ const pendingDevices = ref([])
 const newSiteName = ref('')
 const selectedSite = ref('')
 
+const isAdmin = () => {
+  try {
+    const token = localStorage.getItem('jwt_token')
+    if (!token) return false
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return payload.role && payload.role.toUpperCase() === 'ADMIN'
+  } catch (e) {
+    return false
+  }
+}
+
+
 onMounted(async () => {
   await fetchData()
 })
@@ -45,7 +57,15 @@ const jumpToSite = (siteId) => {
 
 <template>
   <div class="p-8 h-screen w-full flex flex-col gap-8">
-    <h1 class="text-4xl shadow-neon pb-2 border-b border-neon-green/30 glitch-anim w-fit">GLOBAL_DASHBOARD</h1>
+    <div class="flex justify-between items-center pb-2 border-b border-neon-green/30">
+      <h1 class="text-4xl shadow-neon glitch-anim w-fit">GLOBAL_DASHBOARD</h1>
+      <div class="flex gap-4">
+        <router-link v-if="isAdmin()" to="/global/identity" class="px-4 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_#bc13fe] active:scale-95 flex items-center gap-2 clip-chamfer">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          [ IDENTITY MATRIX ]
+        </router-link>
+      </div>
+    </div>
     
     <div class="grid grid-cols-1 md:grid-cols-2 gap-8 flex-1">
       <!-- SITES PANEL -->

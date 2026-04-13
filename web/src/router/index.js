@@ -18,6 +18,7 @@ import AgentMgmt from '../views/AgentMgmt.vue'
 import VPNMatrix from '../views/VPNMatrix.vue'
 import SecurityMatrix from '../views/SecurityMatrix.vue'
 import BandwidthSentry from '../views/BandwidthSentry.vue'
+import IdentityMatrix from '../views/IdentityMatrix.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -133,6 +134,11 @@ const router = createRouter({
       path: '/global/settings',
       name: 'global-settings',
       component: GlobalSettings
+    },
+    {
+      path: '/global/identity',
+      name: 'global-identity',
+      component: IdentityMatrix
     }
   ]
 })

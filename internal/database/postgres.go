@@ -98,7 +98,7 @@ func createTables() error {
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		username VARCHAR(100) UNIQUE NOT NULL,
 		password_hash VARCHAR(255) NOT NULL,
-		role VARCHAR(50) DEFAULT 'viewer',
+		role VARCHAR(50) DEFAULT 'VIEWER',
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -214,6 +214,7 @@ func createTables() error {
 	migrations := []string{
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS api_key TEXT UNIQUE",
 		"ALTER TABLE agent_versions ADD COLUMN IF NOT EXISTS site_id UUID REFERENCES sites(id)",
+		"UPDATE users SET role = UPPER(role)",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
@@ -238,7 +239,7 @@ func seedAdminUser() error {
 		return fmt.Errorf("failed to hash bootstrap password: %w", err)
 	}
 	_, err = DB.Exec(
-		"INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'admin')",
+		"INSERT INTO users (username, password_hash, role) VALUES ($1, $2, 'ADMIN')",
 		"admin", string(hash),
 	)
 	if err != nil {

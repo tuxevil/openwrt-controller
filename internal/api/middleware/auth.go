@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -8,6 +9,9 @@ import (
 
 	"openwrt-controller/internal/api/handlers"
 )
+
+type contextKey string
+const claimsKey = contextKey("jwt_claims")
 
 // WithAuth wraps a handler requiring a valid JWT Bearer token
 func WithAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -41,6 +45,38 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
 			w.Write([]byte(`{"error":"UNAUTHORIZED: invalid token"}`))
+			return
+		}
+
+		claims, ok := token.Claims.(jwt.MapClaims)
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"UNAUTHORIZED: invalid claims"}`))
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), claimsKey, claims)
+		next(w, r.WithContext(ctx))
+	}
+}
+
+// RequireAdmin enforces that the JWT claims contain role == "ADMIN"
+func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(claimsKey).(jwt.MapClaims)
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"FORBIDDEN: missing claims"}`))
+			return
+		}
+
+		role, ok := claims["role"].(string)
+		if !ok || strings.ToUpper(role) != "ADMIN" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"ACCESS_DENIED"}`))
 			return
 		}
 

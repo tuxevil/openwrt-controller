@@ -24,6 +24,14 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites", middleware.WithAuth(handlers.GetSitesHandler))
 	mux.HandleFunc("POST /api/sites", middleware.WithAuth(handlers.CreateSiteHandler))
 
+	// ── Users / RBAC ────────────────────────────────────────────────────────
+	mux.HandleFunc("GET /api/users", middleware.WithAuth(middleware.RequireAdmin(handlers.GetUsersHandler)))
+	mux.HandleFunc("POST /api/users", middleware.WithAuth(middleware.RequireAdmin(handlers.CreateUserHandler)))
+	mux.HandleFunc("PUT /api/users/{id}/role", middleware.WithAuth(middleware.RequireAdmin(handlers.UpdateUserRoleHandler)))
+	mux.HandleFunc("PUT /api/users/{id}/password", middleware.WithAuth(middleware.RequireAdmin(handlers.UpdateUserPasswordHandler)))
+	mux.HandleFunc("DELETE /api/users/{id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteUserHandler)))
+
+
 	mux.HandleFunc("GET /api/devices", middleware.WithAuth(handlers.GetDevicesHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/devices", middleware.WithAuth(handlers.GetSiteDevicesHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/adopt", middleware.WithAuth(handlers.AdoptDeviceHandler))
