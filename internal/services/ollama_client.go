@@ -93,26 +93,40 @@ DEVICES: [Device_Name_1, Device_Name_2]
 	tokensUsed = result.PromptEvalCount + result.EvalCount
 
 	// Parse out SEVERITY and DEVICES
+	// Use SplitN(2) so MAC address colons don't get mistakenly split
 	lines := strings.Split(content, "\n")
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
-		if strings.HasPrefix(strings.ToUpper(line), "SEVERITY:") {
-			parts := strings.Split(line, ":")
-			if len(parts) > 1 {
-				severity = strings.TrimSpace(strings.ReplaceAll(parts[1], "]", ""))
-				severity = strings.ReplaceAll(severity, "[", "")
+		lineUpper := strings.ToUpper(line)
+
+		if idx := strings.Index(lineUpper, "SEVERITY:"); idx != -1 {
+			after := strings.TrimSpace(line[idx+len("SEVERITY:"):])
+			// If DEVICES: is also on the same line, cut before it
+			if devIdx := strings.Index(strings.ToUpper(after), "DEVICES:"); devIdx != -1 {
+				after = strings.TrimSpace(after[:devIdx])
 			}
-		} else if strings.HasPrefix(strings.ToUpper(line), "DEVICES:") {
-			parts := strings.Split(line, ":")
-			if len(parts) > 1 {
-				devStr := strings.TrimSpace(strings.ReplaceAll(parts[1], "]", ""))
-				devStr = strings.ReplaceAll(devStr, "[", "")
-				devs := strings.Split(devStr, ",")
-				for _, d := range devs {
-					d = strings.TrimSpace(d)
-					if d != "" {
-						involvedDevices = append(involvedDevices, d)
-					}
+			after = strings.ReplaceAll(after, "[", "")
+			after = strings.ReplaceAll(after, "]", "")
+			after = strings.ReplaceAll(after, "*", "")
+			after = strings.ReplaceAll(after, "_", "")
+			after = strings.ReplaceAll(after, "`", "")
+			after = strings.TrimSpace(after)
+			if after != "" {
+				severity = after
+			}
+		}
+
+		if idx := strings.Index(lineUpper, "DEVICES:"); idx != -1 {
+			after := strings.TrimSpace(line[idx+len("DEVICES:"):])
+			after = strings.ReplaceAll(after, "[", "")
+			after = strings.ReplaceAll(after, "]", "")
+			after = strings.ReplaceAll(after, "*", "")
+			after = strings.ReplaceAll(after, "`", "")
+			devs := strings.Split(after, ",")
+			for _, d := range devs {
+				d = strings.TrimSpace(d)
+				if d != "" {
+					involvedDevices = append(involvedDevices, d)
 				}
 			}
 		}
