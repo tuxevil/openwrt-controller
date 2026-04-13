@@ -36,7 +36,7 @@ func TriggerManualSentinelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	diagnosis, severity, involvedDevices, err := services.AnalyzeFleetContext(contextLogs)
+	diagnosis, severity, involvedDevices, llmModel, tokensUsed, err := services.AnalyzeFleetContext(contextLogs)
 	if err != nil {
 		log.Printf("[SENTINEL_AI_MANUAL] Inference engine error: %v", err)
 		http.Error(w, "AI inference failed: "+err.Error(), http.StatusInternalServerError)
@@ -49,9 +49,9 @@ func TriggerManualSentinelHandler(w http.ResponseWriter, r *http.Request) {
 
 	var insightID string
 	err = database.DB.QueryRow(`
-		INSERT INTO ai_insights (correlation_id, diagnosis, severity, involved_devices)
-		VALUES ($1, $2, $3, $4) RETURNING id
-	`, correlationID, diagnosis, severity, string(involvedJSON)).Scan(&insightID)
+		INSERT INTO ai_insights (correlation_id, diagnosis, severity, involved_devices, llm_model, tokens_used)
+		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
+	`, correlationID, diagnosis, severity, string(involvedJSON), llmModel, tokensUsed).Scan(&insightID)
 
 	if err != nil {
 		log.Printf("[SENTINEL_AI_MANUAL] DB Insert error: %v", err)
@@ -68,6 +68,8 @@ func TriggerManualSentinelHandler(w http.ResponseWriter, r *http.Request) {
 			Diagnosis:       diagnosis,
 			Severity:        severity,
 			InvolvedDevices: involvedDevices,
+			LLMModel:        llmModel,
+			TokensUsed:      tokensUsed,
 			CreatedAt:       targetTime.Format(time.RFC3339),
 		},
 	})
@@ -79,6 +81,8 @@ type AIInsightResponse struct {
 	Diagnosis       string   `json:"diagnosis"`
 	Severity        string   `json:"severity"`
 	InvolvedDevices []string `json:"involved_devices"`
+	LLMModel        string   `json:"llm_model"`
+	TokensUsed      int      `json:"tokens_used"`
 	CreatedAt       string   `json:"created_at"`
 }
 
@@ -89,7 +93,10 @@ func GetSentinelInsightsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `
-		SELECT id, correlation_id, diagnosis, severity, involved_devices, created_at
+		SELECT id, correlation_id, diagnosis, severity, involved_devices,
+		       COALESCE(llm_model, '') AS llm_model,
+		       COALESCE(tokens_used, 0) AS tokens_used,
+		       created_at
 		FROM ai_insights
 		ORDER BY created_at DESC
 		LIMIT 50
@@ -112,10 +119,11 @@ func GetSentinelInsightsHandler(w http.ResponseWriter, r *http.Request) {
 			&insight.Diagnosis,
 			&insight.Severity,
 			&devicesJSON,
+			&insight.LLMModel,
+			&insight.TokensUsed,
 			&insight.CreatedAt,
 		)
 		if err == nil {
-			// Extract JSON array
 			var devs []string
 			if err := json.Unmarshal([]byte(devicesJSON), &devs); err == nil {
 				insight.InvolvedDevices = devs

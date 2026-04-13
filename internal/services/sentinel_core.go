@@ -113,7 +113,7 @@ func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
 			return
 		}
 
-		diagnosis, severity, involvedDevices, err := AnalyzeFleetContext(contextLogs)
+		diagnosis, severity, involvedDevices, _, _, err := AnalyzeFleetContext(contextLogs)
 		if err != nil {
 			log.Printf("[SENTINEL_AI] Inference engine error: %v", err)
 			return

@@ -35,6 +35,14 @@
         
         <div class="metrics">
           <span class="severity-badge" :class="insight.severity.toLowerCase()">{{ insight.severity }} RISK</span>
+          <div class="meta-row" v-if="insight.llm_model || insight.tokens_used">
+            <span class="meta-tag" v-if="insight.llm_model">
+              <span class="meta-icon">🤖</span> {{ insight.llm_model }}
+            </span>
+            <span class="meta-tag" v-if="insight.tokens_used > 0">
+              <span class="meta-icon">⚡</span> {{ insight.tokens_used.toLocaleString() }} tokens
+            </span>
+          </div>
         </div>
 
         <div class="diagnosis-block">
@@ -265,6 +273,33 @@ h1 {
 
 .metrics {
   margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.meta-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.meta-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  background: rgba(0, 255, 255, 0.05);
+  border: 1px solid rgba(0, 255, 255, 0.25);
+  color: #7af;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-family: 'Courier New', monospace;
+}
+
+.meta-icon {
+  font-size: 0.85rem;
 }
 
 .severity-badge {
@@ -273,6 +308,7 @@ h1 {
   font-weight: bold;
   font-size: 0.85rem;
   display: inline-block;
+  align-self: flex-start;
 }
 
 .severity-badge.critical {

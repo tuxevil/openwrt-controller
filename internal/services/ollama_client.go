@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -13,7 +14,7 @@ import (
 )
 
 // AnalyzeFleetContext sends the gathered logs to Ollama for analysis
-func AnalyzeFleetContext(contextLogs string) (diagnosis string, severity string, involvedDevices []string, err error) {
+func AnalyzeFleetContext(contextLogs string) (diagnosis string, severity string, involvedDevices []string, llmModel string, tokensUsed int, err error) {
 	settings := database.GetPlatformSettings()
 
 	ollamaHost := settings.OllamaHost
@@ -33,6 +34,9 @@ End your report with these two exact lines at the bottom for parsing:
 SEVERITY: [Critical, High, Medium, Low]
 DEVICES: [Device_Name_1, Device_Name_2]
 `
+		log.Printf("[SENTINEL_AI] WARNING: No sentinel_prompt in DB, using hardcoded default.")
+	} else {
+		log.Printf("[SENTINEL_AI] Using DB sentinel_prompt: %.80q...", systemPrompt)
 	}
 
 	payload := map[string]interface{}{
@@ -53,32 +57,40 @@ DEVICES: [Device_Name_1, Device_Name_2]
 	b, _ := json.Marshal(payload)
 	url := fmt.Sprintf("http://%s/api/chat", ollamaHost)
 
-	client := &http.Client{Timeout: 90 * time.Second}
+	client := &http.Client{Timeout: 300 * time.Second}
 	resp, err := client.Post(url, "application/json", bytes.NewBuffer(b))
 	if err != nil {
-		return "", "Low", []string{}, fmt.Errorf("ollama request failed: %w", err)
+		return "", "Low", []string{}, "", 0, fmt.Errorf("ollama request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", "Low", []string{}, fmt.Errorf("failed to read ollama response: %w", err)
+		return "", "Low", []string{}, "", 0, fmt.Errorf("failed to read ollama response: %w", err)
 	}
 
 	var result struct {
+		Model   string `json:"model"`
 		Message struct {
 			Content string `json:"content"`
 		} `json:"message"`
+		PromptEvalCount int `json:"prompt_eval_count"`
+		EvalCount       int `json:"eval_count"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", "Low", []string{}, fmt.Errorf("failed to unmarshal ollama json: %w", err)
+		return "", "Low", []string{}, "", 0, fmt.Errorf("failed to unmarshal ollama json: %w", err)
 	}
 
 	content := strings.TrimSpace(result.Message.Content)
 	diagnosis = content
 	severity = "Low"
 	involvedDevices = []string{}
+	llmModel = result.Model
+	if result.Model == "" {
+		llmModel = model
+	}
+	tokensUsed = result.PromptEvalCount + result.EvalCount
 
 	// Parse out SEVERITY and DEVICES
 	lines := strings.Split(content, "\n")
@@ -110,5 +122,5 @@ DEVICES: [Device_Name_1, Device_Name_2]
 		severity = "Low"
 	}
 
-	return diagnosis, severity, involvedDevices, nil
+	return diagnosis, severity, involvedDevices, llmModel, tokensUsed, nil
 }

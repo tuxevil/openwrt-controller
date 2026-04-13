@@ -85,11 +85,6 @@ const fetchHealth = async () => {
            <span class="tracking-widest">THE_VAULT</span>
          </router-link>
 
-         <router-link :to="`/site/${$route.params.site_id}/ssh`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
-           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-           <span class="tracking-widest">TERMINAL</span>
-         </router-link>
-
          <router-link :to="`/site/${$route.params.site_id}/bandwidth`" active-class="bg-[#39FF14] !text-black shadow-[0_0_10px_#39FF14]" class="p-3 border border-[#39FF14] clip-chamfer text-[#39FF14] hover:bg-[#39FF14] hover:text-black transition-all flex items-center gap-3 active:scale-95">
            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
            <span class="tracking-widest">BW_SENTRY</span>

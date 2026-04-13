@@ -215,6 +215,8 @@ func createTables() error {
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS api_key TEXT UNIQUE",
 		"ALTER TABLE agent_versions ADD COLUMN IF NOT EXISTS site_id UUID REFERENCES sites(id)",
 		"UPDATE users SET role = UPPER(role)",
+		"ALTER TABLE ai_insights ADD COLUMN IF NOT EXISTS llm_model VARCHAR(255)",
+		"ALTER TABLE ai_insights ADD COLUMN IF NOT EXISTS tokens_used INT DEFAULT 0",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
