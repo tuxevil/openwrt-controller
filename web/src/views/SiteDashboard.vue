@@ -197,12 +197,12 @@ const goBack = () => router.push('/global')
         </div>
         <div class="p-6 overflow-y-auto font-mono text-sm space-y-6 flex-1">
           <div class="grid grid-cols-2 md:grid-cols-3 gap-6 bg-black/40 p-4 border border-white/5 clip-chamfer">
-            <div class="flex flex-col"><span class="text-muted text-xs mb-1">STATE / HEALTH</span> <span :class="getHealth(selectedDeviceDetails) === 'ONLINE' ? 'text-neon-green' : 'text-neon-red font-bold animate-pulse'">{{ getHealth(selectedDeviceDetails) }}</span></div>
-            <div class="flex flex-col"><span class="text-muted text-xs mb-1">NODE_STATUS</span> <span class="text-neon-green">{{ selectedDeviceDetails.status }}</span></div>
-            <div class="flex flex-col"><span class="text-muted text-xs mb-1">IP_ADDRESS</span> <span class="text-cyan-400 font-bold tracking-wider">{{ selectedDeviceDetails.last_ip || 'UNKNOWN' }}</span></div>
-            <div class="flex flex-col"><span class="text-muted text-xs mb-1">HARDWARE_MODEL</span> <span>{{ selectedDeviceDetails.model || 'UNKNOWN' }}</span></div>
-            <div class="flex flex-col"><span class="text-muted text-xs mb-1">AGENT_VERSION</span> <span>{{ selectedDeviceDetails.agent_version || 'UNKNOWN' }}</span></div>
-            <div class="flex flex-col"><span class="text-muted text-xs mb-1">LAST_SEEN_AT</span> <span>{{ selectedDeviceDetails.last_seen_at ? new Date(selectedDeviceDetails.last_seen_at).toLocaleString() : 'NEVER' }}</span></div>
+            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">STATE / HEALTH</span> <span :class="getHealth(selectedDeviceDetails) === 'ONLINE' ? 'text-neon-green' : 'text-neon-red font-bold animate-pulse'" class="truncate">{{ getHealth(selectedDeviceDetails) }}</span></div>
+            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">NODE_STATUS</span> <span class="text-neon-green truncate">{{ selectedDeviceDetails.status }}</span></div>
+            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">IP_ADDRESS</span> <span class="text-cyan-400 font-bold tracking-wider truncate">{{ selectedDeviceDetails.last_ip || 'UNKNOWN' }}</span></div>
+            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">HARDWARE_MODEL</span> <span class="truncate" :title="selectedDeviceDetails.model">{{ selectedDeviceDetails.model || 'UNKNOWN' }}</span></div>
+            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">AGENT_VERSION</span> <span class="truncate" :title="selectedDeviceDetails.agent_version">{{ selectedDeviceDetails.agent_version || 'UNKNOWN' }}</span></div>
+            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">LAST_SEEN_AT</span> <span class="truncate">{{ selectedDeviceDetails.last_seen_at ? new Date(selectedDeviceDetails.last_seen_at).toLocaleString() : 'NEVER' }}</span></div>
           </div>
           
           <div v-if="selectedDeviceDetails.state_json" class="flex flex-col gap-5 mt-2">

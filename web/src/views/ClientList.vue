@@ -1,6 +1,6 @@
 <script setup>
 // CLIENT_MATRIX v2 — wireless_stations + arp_table join
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import api from '../services/api'
 
 const props = defineProps(['site_id'])
@@ -10,6 +10,39 @@ const showModal = ref(false)
 const editHostname = ref('')
 const isSaving = ref(false)
 let pollInterval
+
+const sortedClients = computed(() => {
+  return [...clients.value].sort((a, b) => {
+    const ipA = a.ip_address || '';
+    const ipB = b.ip_address || '';
+
+    if (ipA && !ipB) return -1;
+    if (!ipA && ipB) return 1;
+
+    if (ipA && ipB) {
+      const partsA = ipA.split('.');
+      const partsB = ipB.split('.');
+      if (partsA.length === 4 && partsB.length === 4) {
+        for (let i = 0; i < 4; i++) {
+          const numA = parseInt(partsA[i], 10) || 0;
+          const numB = parseInt(partsB[i], 10) || 0;
+          if (numA !== numB) {
+            return numA - numB;
+          }
+        }
+      } else {
+        if (ipA < ipB) return -1;
+        if (ipA > ipB) return 1;
+      }
+    }
+
+    const macA = (a.mac || '').toLowerCase();
+    const macB = (b.mac || '').toLowerCase();
+    if (macA < macB) return -1;
+    if (macA > macB) return 1;
+    return 0;
+  });
+});
 
 onMounted(async () => {
   await fetchClients()
@@ -121,7 +154,7 @@ async function saveHostname() {
         </thead>
         <tbody>
           <tr
-            v-for="c in clients"
+            v-for="c in sortedClients"
             :key="c.mac"
             @click="selectClient(c)"
             class="border-b border-neon-green/8 transition-colors cursor-pointer"
@@ -211,20 +244,20 @@ async function saveHostname() {
         <div class="py-6 flex-1 overflow-auto space-y-6">
           <!-- Identity -->
           <div class="grid grid-cols-2 gap-4">
-            <div class="space-y-1">
-              <label class="text-xs text-muted block">> ASSIGNED_HOSTNAME</label>
+            <div class="space-y-2 col-span-2 border-b border-white/5 pb-4 mb-2">
+              <label class="text-xs text-neon-green block">> ASSIGNED_HOSTNAME</label>
               <div class="flex gap-2">
                 <input 
                   type="text" 
                   v-model="editHostname" 
-                  class="flex-1 bg-black/50 border border-neon-green/30 px-3 py-1.5 text-white font-mono text-sm focus:border-neon-green focus:outline-none clip-chamfer"
+                  class="flex-1 min-w-0 bg-black/50 border border-neon-green/30 px-3 py-1.5 text-white font-mono text-sm focus:border-neon-green focus:outline-none clip-chamfer"
                   placeholder="Enter hostname"
                   @keyup.enter="saveHostname"
                 />
                 <button 
                   @click="saveHostname" 
                   :disabled="isSaving"
-                  class="px-3 bg-neon-green/10 text-neon-green border border-neon-green/40 hover:bg-neon-green/20 disabled:opacity-50 clip-chamfer font-mono text-sm uppercase transition-colors"
+                  class="px-6 bg-neon-green/10 text-neon-green border border-neon-green/40 hover:bg-neon-green/20 disabled:opacity-50 clip-chamfer font-mono text-sm uppercase transition-colors whitespace-nowrap shrink-0"
                 >
                   {{ isSaving ? '...' : 'SAVE' }}
                 </button>

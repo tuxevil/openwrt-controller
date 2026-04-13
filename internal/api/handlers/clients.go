@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"openwrt-controller/internal/database"
 )
@@ -57,7 +58,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 		for hRows.Next() {
 			var m, h string
 			if err := hRows.Scan(&m, &h); err == nil {
-				customHostnames[m] = h
+				customHostnames[strings.ToUpper(m)] = h
 			}
 		}
 	}
@@ -104,7 +105,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 						if !ok {
 							continue
 						}
-						mac := strVal(st, "mac")
+						mac := strings.ToUpper(strVal(st, "mac"))
 						if mac == "" {
 							continue
 						}
@@ -162,7 +163,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 						if !ok {
 							continue
 						}
-						mac := strVal(st, "mac")
+						mac := strings.ToUpper(strVal(st, "mac"))
 						if mac == "" {
 							continue
 						}
@@ -199,7 +200,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 				if !ok {
 					continue
 				}
-				mac := strVal(entry, "mac")
+				mac := strings.ToUpper(strVal(entry, "mac"))
 				ip := strVal(entry, "ip")
 				if mac == "" || mac == "00:00:00:00:00:00" {
 					continue
@@ -232,7 +233,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 					if !ok {
 						continue
 					}
-					mac := strVal(entry, "mac")
+					mac := strings.ToUpper(strVal(entry, "mac"))
 					if mac == "" || mac == "00:00:00:00:00:00" {
 						continue
 					}
@@ -256,7 +257,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 					if !ok {
 						continue
 					}
-					mac := strVal(lease, "mac")
+					mac := strings.ToUpper(strVal(lease, "mac"))
 					ip := strVal(lease, "ip")
 					hostname := strVal(lease, "hostname")
 					if mac == "" {
@@ -303,7 +304,7 @@ type UpdateClientHostnamePayload struct {
 
 func UpdateClientHostnameHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
-	mac := r.PathValue("mac")
+	mac := strings.ToUpper(r.PathValue("mac"))
 
 	if siteID == "" || mac == "" {
 		http.Error(w, `{"error": "site_id and mac are required"}`, http.StatusBadRequest)
