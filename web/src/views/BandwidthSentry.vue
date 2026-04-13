@@ -121,17 +121,7 @@ const fetchData = async () => {
         }
       })
 
-      // Fallback: if iface delta = 0 (first poll / no state yet), use wireless_stations rx_rate sum (Mbps strings)
-      if (totalRxBps === 0 && totalTxBps === 0) {
-        res.data.data.forEach(dev => {
-          if (dev.wireless_clients) {
-            dev.wireless_clients.forEach(c => {
-              totalRxBps += (parseFloat(c.rx_rate) || 0) * 1024 / 8  // Mbps → bytes/s
-              totalTxBps += (parseFloat(c.tx_rate) || 0) * 1024 / 8
-            })
-          }
-        })
-      }
+      // DO NOT fallback to rx_rate if delta is 0. If traffic is 0, it should be 0.
 
       // Bytes/s → Mbps
       const rxMbps = +(totalRxBps * 8 / 1024 / 1024).toFixed(3)
@@ -188,12 +178,12 @@ const devicesWithRates = computed(() => {
       return {
         ...c,
         mac,
-        // Use actual throughput if available, else show PHY link speed
-        rate_rx: actualRx > 0 ? actualRx : phyRxBytesPerSec,
-        rate_tx: actualTx > 0 ? actualTx : phyTxBytesPerSec,
-        total_rate: (actualRx + actualTx) > 0 ? (actualRx + actualTx) : (phyRxBytesPerSec + phyTxBytesPerSec),
+        // Show actual throughput. DO NOT fallback to PHY link speed for actual traffic rates
+        rate_rx: actualRx,
+        rate_tx: actualTx,
+        total_rate: actualRx + actualTx,
         // Flag to indicate if we're showing PHY speed vs actual throughput
-        is_phy_rate: actualRx === 0 && actualTx === 0
+        is_phy_rate: false
       }
     })
     return { ...dev, clients }
