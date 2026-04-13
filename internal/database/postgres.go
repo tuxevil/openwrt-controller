@@ -315,7 +315,22 @@ func InsertDeviceLogs(deviceID string, logs []LogEntry) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare("INSERT INTO system_logs (device_id, log_timestamp, severity, message) VALUES ($1, $2, $3, $4)")
+	stmt, err := tx.Prepare(`
+		WITH input AS (
+			SELECT CAST($1 AS VARCHAR) as device_id,
+			       CAST($2 AS TIMESTAMP WITH TIME ZONE) as log_timestamp,
+			       CAST($3 AS VARCHAR) as severity,
+			       CAST($4 AS TEXT) as message
+		)
+		INSERT INTO system_logs (device_id, log_timestamp, severity, message)
+		SELECT device_id, log_timestamp, severity, message FROM input
+		WHERE NOT EXISTS (
+			SELECT 1 FROM system_logs 
+			WHERE device_id = input.device_id 
+			  AND log_timestamp = input.log_timestamp 
+			  AND message = input.message
+		)
+	`)
 	if err != nil {
 		return err
 	}
