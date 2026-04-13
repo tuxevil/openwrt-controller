@@ -18,44 +18,20 @@ var (
 
 // AnalyzeLogs hooks into the LogHarvester ingestion stream to act as the Reactive Pipeline.
 func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
-	triggers := []string{"panic", "OOM", "segfault", "auth.error", "denied", "hostapd: deauthenticated", "refused", "bad password"}
-
-	triggered := false
-	for _, l := range logs {
-		msgLower := strings.ToLower(l.Message)
-		for _, t := range triggers {
-			if strings.Contains(msgLower, strings.ToLower(t)) {
-				triggered = true
-				break
-			}
-		}
-		if triggered {
-			break
-		}
-	}
-
-	if !triggered {
-		return
-	}
-
-	sentinelMu.Lock()
-	if time.Since(lastSentinelRun) < 5*time.Minute {
-		sentinelMu.Unlock()
-		return
-	}
-	lastSentinelRun = time.Now()
-	sentinelMu.Unlock()
-
-	// Check if this was a local brute force to trigger Sniper
+	// 1. Evaluate Sniper Shaping (Active Defense) BEFORE any debounce or AI trigger logic
 	triggerSniper := false
 	var targetIP string
 	for _, l := range logs {
 		msg := l.Message
+		msgLower := strings.ToLower(msg)
 		// E.g. Bad password attempt for 'root' from 192.168.1.100:1234
-		if strings.Contains(msg, "Bad password") && strings.Contains(msg, "from") {
-			parts := strings.Split(msg, "from ")
+		// Or: Exit before auth from <10.0.0.144:46794>
+		if strings.Contains(msgLower, "bad password") && strings.Contains(msgLower, "from") {
+			parts := strings.Split(msgLower, "from ")
+			// parts[1] will be something like "10.0.0.144:46794" or "<10.0.0.144:46794>..."
 			if len(parts) == 2 {
 				ipPort := strings.Fields(parts[1])[0]
+				ipPort = strings.Trim(ipPort, "<>") // Strip potential < > brackets from dropbear logs
 				ipOnly := strings.Split(ipPort, ":")[0]
 				if strings.HasPrefix(ipOnly, "192.168.") || strings.HasPrefix(ipOnly, "10.") {
 					targetIP = ipOnly
@@ -100,10 +76,39 @@ func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
 		}
 	}
 
+	// 2. Evaluate AI Inference triggers
+	triggers := []string{"panic", "OOM", "segfault", "auth.error", "denied", "hostapd: deauthenticated", "refused", "bad password", "exit before auth"}
+
+	triggered := false
+	for _, l := range logs {
+		msgLower := strings.ToLower(l.Message)
+		for _, t := range triggers {
+			if strings.Contains(msgLower, strings.ToLower(t)) {
+				triggered = true
+				break
+			}
+		}
+		if triggered {
+			break
+		}
+	}
+
+	if !triggered {
+		return
+	}
+
+	sentinelMu.Lock()
+	if time.Since(lastSentinelRun) < 5*time.Minute {
+		sentinelMu.Unlock()
+		return
+	}
+	lastSentinelRun = time.Now()
+	sentinelMu.Unlock()
+
 	go func(targetTime time.Time) {
 		log.Println("[SENTINEL_AI] Critical trigger detected. Gathering fleet context...")
 
-		contextLogs := database.GetGlobalContext(targetTime)
+		contextLogs := database.GetGlobalContext(targetTime, 100)
 		if contextLogs == "" {
 			return
 		}

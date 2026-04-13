@@ -5,6 +5,18 @@
       <p class="subtitle">Automated Multi-Device Anomaly Correlation</p>
     </div>
 
+    <div class="manual-trigger-panel">
+      <div class="trigger-controls">
+        <label for="log-limit">Log Review Limit:</label>
+        <input type="number" id="log-limit" v-model="triggerLimit" min="10" max="1000" class="neon-input" />
+        <button @click="triggerManual" :disabled="triggering" class="action-btn neon-btn">
+          <span v-if="triggering" class="internal-spinner"></span>
+          <span v-else>Execute Sentinel AI</span>
+        </button>
+      </div>
+      <p v-if="triggerError" class="error-msg">{{ triggerError }}</p>
+    </div>
+
     <div v-if="loading" class="loading">
       <div class="spinner"></div>
       <p>Establishing neural link...</p>
@@ -26,7 +38,7 @@
         </div>
 
         <div class="diagnosis-block">
-          <p class="diagnosis-text">{{ insight.diagnosis }}</p>
+          <div class="diagnosis-text" v-html="renderMarkdown(insight.diagnosis)"></div>
         </div>
 
         <div class="involved-devices">
@@ -44,10 +56,20 @@
 
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
+import { marked } from 'marked';
+
+const renderMarkdown = (text) => {
+  if (!text) return '';
+  return marked.parse(text);
+};
 
 const insights = ref([]);
 const loading = ref(true);
 let pollInterval = null;
+
+const triggerLimit = ref(100);
+const triggering = ref(false);
+const triggerError = ref('');
 
 const fetchInsights = async () => {
   try {
@@ -64,6 +86,37 @@ const fetchInsights = async () => {
     console.error('Sentinel fetch error:', e);
   } finally {
     loading.value = false;
+  }
+};
+
+const triggerManual = async () => {
+  if (triggering.value) return;
+  triggering.value = true;
+  triggerError.value = '';
+  
+  try {
+    const token = localStorage.getItem('jwt_token');
+    const res = await fetch('/api/global/sentinel/trigger', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ limit: triggerLimit.value })
+    });
+    
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(errorText || 'Manual execution failed');
+    }
+    
+    // Refresh insights table to show new diagnosis
+    await fetchInsights();
+  } catch (e) {
+    console.error('Manual trigger error:', e);
+    triggerError.value = e.message;
+  } finally {
+    triggering.value = false;
   }
 };
 
@@ -147,7 +200,8 @@ h1 {
   display: flex;
   flex-direction: column;
   gap: 2rem;
-  max-width: 900px;
+  width: 95%;
+  max-width: 95%;
   margin: 0 auto;
   position: relative;
 }
@@ -256,7 +310,82 @@ h1 {
 .diagnosis-text {
   margin: 0;
   line-height: 1.6;
-  white-space: pre-wrap;
+  color: #eee;
+}
+
+/* Markdown prose styles scoped within the diagnosis block */
+.diagnosis-block :deep(h1),
+.diagnosis-block :deep(h2),
+.diagnosis-block :deep(h3),
+.diagnosis-block :deep(h4) {
+  color: #bc13fe;
+  margin: 1rem 0 0.5rem;
+  text-shadow: 0 0 8px rgba(188, 19, 254, 0.4);
+}
+.diagnosis-block :deep(p) {
+  margin: 0.5rem 0;
+  color: #eee;
+}
+.diagnosis-block :deep(ul),
+.diagnosis-block :deep(ol) {
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+  color: #eee;
+}
+.diagnosis-block :deep(li) {
+  margin: 0.25rem 0;
+}
+.diagnosis-block :deep(strong) {
+  color: #00ffff;
+}
+.diagnosis-block :deep(em) {
+  color: #e0b0ff;
+}
+.diagnosis-block :deep(code) {
+  background: rgba(0,255,255,0.1);
+  color: #00ffff;
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-family: 'Courier New', monospace;
+  font-size: 0.9em;
+}
+.diagnosis-block :deep(pre) {
+  background: rgba(0,0,0,0.5);
+  border: 1px solid rgba(0,255,255,0.2);
+  border-radius: 4px;
+  padding: 0.75rem;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+}
+.diagnosis-block :deep(pre code) {
+  background: none;
+  padding: 0;
+}
+.diagnosis-block :deep(blockquote) {
+  border-left: 3px solid #bc13fe;
+  margin: 0.5rem 0;
+  padding-left: 1rem;
+  color: #aaa;
+}
+.diagnosis-block :deep(hr) {
+  border: none;
+  border-top: 1px solid rgba(188, 19, 254, 0.3);
+  margin: 1rem 0;
+}
+.diagnosis-block :deep(table) {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 0.5rem 0;
+}
+.diagnosis-block :deep(th) {
+  background: rgba(188, 19, 254, 0.2);
+  color: #00ffff;
+  padding: 0.4rem 0.75rem;
+  border: 1px solid rgba(188, 19, 254, 0.4);
+}
+.diagnosis-block :deep(td) {
+  padding: 0.4rem 0.75rem;
+  border: 1px solid rgba(188, 19, 254, 0.2);
   color: #eee;
 }
 
@@ -292,4 +421,84 @@ h1 {
   border-radius: 50%;
   box-shadow: 0 0 5px #00ffff;
 }
+
+.manual-trigger-panel {
+  width: 95%;
+  max-width: 95%;
+  margin: 0 auto 3rem auto;
+  padding: 1.5rem;
+  background: rgba(188, 19, 254, 0.05);
+  border: 1px solid rgba(188, 19, 254, 0.4);
+  border-radius: 8px;
+  text-align: center;
+}
+
+.trigger-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.trigger-controls label {
+  color: #00ffff;
+  font-weight: bold;
+}
+
+.neon-input {
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid #bc13fe;
+  color: #e0b0ff;
+  padding: 0.5rem;
+  border-radius: 4px;
+  width: 100px;
+  text-align: center;
+}
+
+.neon-input:focus {
+  outline: none;
+  box-shadow: 0 0 10px rgba(188, 19, 254, 0.5);
+}
+
+.action-btn {
+  padding: 0.5rem 1.5rem;
+  background: transparent;
+  color: #00ffff;
+  border: 1px solid #00ffff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 180px;
+}
+
+.action-btn:hover:not(:disabled) {
+  background: rgba(0, 255, 255, 0.1);
+  box-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+}
+
+.action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error-msg {
+  color: #ff0032;
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.internal-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(0, 255, 255, 0.3);
+  border-top-color: #00ffff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
 </style>
