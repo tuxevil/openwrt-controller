@@ -157,5 +157,18 @@ export default {
   // Zero-Touch Provisioning
   toggleAutoAdopt(siteId, enabled) {
     return apiClient.patch(`/sites/${siteId}/auto-adopt`, { enabled })
+  },
+
+  // FLOW_SENSE
+  getSiteFlowSense(siteId) {
+    return apiClient.get(`/sites/${siteId}/flow-sense`)
+  },
+
+  // VAULT_AUDIT
+  triggerVaultAudit(deviceId) {
+    return apiClient.post(`/devices/${deviceId}/audit`)
+  },
+  getDeviceAuditResults(deviceId) {
+    return apiClient.get(`/devices/${deviceId}/audit`)
   }
 }

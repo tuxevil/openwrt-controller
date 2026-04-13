@@ -49,6 +49,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/sites/{site_id}/settings", middleware.WithAuth(handlers.UpdateSiteSettingsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rotate-key", middleware.WithAuth(handlers.RotateSiteKeyHandler))
 	mux.HandleFunc("PATCH /api/sites/{site_id}/auto-adopt", middleware.WithAuth(middleware.RequireAdmin(handlers.ToggleAutoAdoptHandler)))
+	mux.HandleFunc("GET /api/sites/{site_id}/flow-sense", middleware.WithAuth(handlers.GetSiteFlowSenseHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/history", middleware.WithAuth(handlers.GetSiteHistoryHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/logs", middleware.WithAuth(handlers.GetLogsHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/incidents", middleware.WithAuth(handlers.GetIncidentsHandler))
@@ -65,6 +66,8 @@ func SetupRoutes() *http.ServeMux {
 	// ── Vault / Firmware ──────────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/devices/{device_id}/backup", middleware.WithAuth(handlers.CreateBackupTrigger))
 	mux.HandleFunc("GET /api/devices/{device_id}/backups", middleware.WithAuth(handlers.GetDeviceBackupsHandler))
+	mux.HandleFunc("POST /api/devices/{device_id}/audit", middleware.WithAuth(handlers.TriggerVaultAuditHandler))
+	mux.HandleFunc("GET /api/devices/{device_id}/audit", middleware.WithAuth(handlers.GetDeviceAuditResultsHandler))
 	mux.HandleFunc("GET /api/backups/{backup_id}/diff", middleware.WithAuth(handlers.DiffBackupHandler))
 	mux.HandleFunc("POST /api/firmwares", middleware.WithAuth(handlers.UploadFirmwareHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/sysupgrade", middleware.WithAuth(handlers.TriggerSysupgradeHandler))

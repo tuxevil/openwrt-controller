@@ -108,6 +108,12 @@ const router = createRouter({
       props: true
     },
     {
+      path: '/site/:site_id/flow-radar',
+      name: 'site-flow-radar',
+      component: () => import('../views/FlowRadar.vue'),
+      props: true
+    },
+    {
       path: '/site/:site_id/vault',
       name: 'site-vault',
       component: Vault,

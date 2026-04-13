@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../services/api'
 
@@ -22,6 +22,12 @@ const isDragging = ref(false)
 const fwFile = ref(null)
 const fwStatus = ref('')
 const fwUploading = ref(false)
+
+// VAULT_AUDIT state
+const auditLoading = ref(false)
+const auditStatus = ref('')
+const auditResults = ref([])
+const auditPollTimer = ref(null)
 
 onMounted(async () => {
   await fetchDevices()
@@ -140,6 +146,62 @@ const lineClass = (line) => {
   if (line.startsWith('-')) return 'text-neon-red line-through opacity-70'
   return 'text-white/60'
 }
+
+// VAULT_AUDIT
+const fetchAuditResults = async () => {
+  if (!activeDevice.value) return
+  try {
+    const res = await api.getDeviceAuditResults(activeDevice.value)
+    auditResults.value = (res.data && res.data.data) ? res.data.data : []
+  } catch(e) { /* non-critical */ }
+}
+
+const triggerAudit = async () => {
+  if (!activeDevice.value || auditLoading.value) return
+  auditLoading.value = true
+  auditStatus.value = 'DISPATCHING SENTINEL AI...  SCANNING VAULT SNAPSHOT...'
+  try {
+    await api.triggerVaultAudit(activeDevice.value)
+    // Poll for result every 5s up to 90s
+    let attempts = 0
+    const prevCount = auditResults.value.length
+    auditPollTimer.value = setInterval(async () => {
+      attempts++
+      await fetchAuditResults()
+      if (auditResults.value.length > prevCount || attempts >= 18) {
+        clearInterval(auditPollTimer.value)
+        auditLoading.value = false
+        auditStatus.value = auditResults.value.length > prevCount
+          ? 'AUDIT COMPLETE — REPORT RECEIVED'
+          : 'TIMEOUT: LLM may still be processing. Retry in a moment.'
+        setTimeout(() => auditStatus.value = '', 5000)
+      }
+    }, 5000)
+  } catch(e) {
+    auditStatus.value = 'ERROR: ' + (e.message || e)
+    auditLoading.value = false
+  }
+}
+
+const severityClass = (sev) => {
+  const s = (sev || '').toLowerCase()
+  if (s === 'critical' || s === 'high') return 'text-neon-red border-neon-red'
+  if (s === 'medium') return 'text-yellow-400 border-yellow-400'
+  if (s === 'nominal') return 'text-neon-green border-neon-green'
+  return 'text-gray-400 border-gray-600'
+}
+
+const auditLineClass = (line) => {
+  if (line.startsWith('[ VULNERABILITY')) return 'text-neon-red font-bold'
+  if (line.startsWith('[ RISK LEVEL ]')) {
+    if (line.includes('Critical') || line.includes('High')) return 'text-neon-red'
+    if (line.includes('Medium')) return 'text-yellow-400'
+    return 'text-gray-300'
+  }
+  if (line.startsWith('[ REMEDIATION ]')) return 'text-neon-green'
+  if (line === 'NOMINAL STATE') return 'text-neon-green font-bold'
+  return 'text-white/70'
+}
 </script>
 
 <template>
@@ -216,8 +278,65 @@ const lineClass = (line) => {
         </div>
       </section>
 
-      <!-- ── HIGH RISK FLASH ────────────────────────────────────────────── -->
-      <section class="lg:col-span-2 border border-neon-red/30 bg-[#1a0505] p-6 flex flex-col gap-4 items-center justify-center relative overflow-hidden clip-chamfer">
+    <!-- ── SENTINEL AI: VAULT AUDIT ──────────────────────────────────────── -->
+    <section class="lg:col-span-2 border border-yellow-400/30 bg-[#0d0a00] p-6 flex flex-col gap-4">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-2 h-2 rounded-full bg-yellow-400 shadow-[0_0_8px_#facc15] animate-pulse"></div>
+          <h2 class="text-yellow-400 text-sm tracking-[0.2em] font-bold">SENTINEL_AI: VAULT_AUDIT</h2>
+        </div>
+        <button
+          @click="triggerAudit"
+          :disabled="auditLoading || backups.length === 0"
+          class="text-xs px-4 py-2 border font-bold tracking-widest transition flex items-center gap-2"
+          :class="auditLoading
+            ? 'border-yellow-400/30 text-yellow-400/40 cursor-not-allowed'
+            : 'border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black'"
+        >
+          <svg v-if="auditLoading" class="w-3 h-3 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="10" stroke-width="3" stroke-dasharray="30 70"/>
+          </svg>
+          {{ auditLoading ? 'ANALYZING...' : '\u25B6 EJECUTAR AUDITORÍA DE CUMPLIMIENTO' }}
+        </button>
+      </div>
+
+      <div v-if="auditStatus" class="text-yellow-400/70 text-xs font-mono animate-pulse">{{ auditStatus }}</div>
+      <div v-if="backups.length === 0" class="text-gray-600 text-xs">No vault snapshots found. SNAP a backup first.</div>
+
+      <!-- Audit Results -->
+      <div v-if="auditResults.length === 0 && !auditLoading" class="text-gray-600 text-xs italic">
+        No audit reports yet. Run the auditor to analyze the latest snapshot.
+      </div>
+
+      <div v-for="(report, idx) in auditResults" :key="idx"
+        class="border bg-[#080500] p-4 flex flex-col gap-2"
+        :class="severityClass(report.severity)"
+      >
+        <!-- Report header -->
+        <div class="flex justify-between items-center pb-2 border-b border-current/20 text-[10px] tracking-widest">
+          <span :class="severityClass(report.severity)" class="font-bold">
+            [[ SEVERITY: {{ (report.severity || 'LOW').toUpperCase() }} ]]
+          </span>
+          <span class="text-gray-500">
+            {{ new Date(report.created_at).toLocaleString() }}
+            &nbsp;|&nbsp;{{ report.llm_model }}
+            &nbsp;|&nbsp;{{ report.tokens_used }} tokens
+          </span>
+        </div>
+
+        <!-- Report body rendered line by line -->
+        <div class="text-xs leading-6 font-mono">
+          <div
+            v-for="(line, li) in report.diagnosis.split('\n')"
+            :key="li"
+            :class="auditLineClass(line.trim())"
+          >{{ line || '\u00a0' }}</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── HIGH RISK FLASH ────────────────────────────────────────────── -->
+    <section class="lg:col-span-2 border border-neon-red/30 bg-[#1a0505] p-6 flex flex-col gap-4 items-center justify-center relative overflow-hidden clip-chamfer">
         <!-- Stripes overlay effect -->
         <div class="absolute inset-0 pointer-events-none opacity-5 bg-[repeating-linear-gradient(45deg,transparent,transparent_10px,#ff0000_10px,#ff0000_20px)]"></div>
         

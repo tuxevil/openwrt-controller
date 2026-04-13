@@ -89,6 +89,15 @@ const fetchHealth = async () => {
            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
            <span class="tracking-widest">BW_SENTRY</span>
          </router-link>
+
+         <router-link :to="`/site/${$route.params.site_id}/flow-radar`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <circle cx="12" cy="12" r="10" stroke-width="2"/>
+             <circle cx="12" cy="12" r="5" stroke-width="1.5" opacity="0.6"/>
+             <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+           </svg>
+           <span class="tracking-widest">FLOW_RADAR</span>
+         </router-link>
        </nav>
 
        <div class="mt-auto pt-4 border-t border-neon-green/30 flex flex-col gap-2">

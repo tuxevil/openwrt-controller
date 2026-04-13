@@ -228,6 +228,39 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	_ = database.DB.QueryRow("SELECT site_id FROM devices WHERE id = $1", deviceID).Scan(&sID)
 	go services.ProcessTelemetry(deviceID, sID, metrics)
 
+	// 5. FLOW_SENSE — process conntrack snapshot
+	if rawFlows, ok := raw["flow_sense"].([]interface{}); ok && len(rawFlows) > 0 {
+		controllerIP := r.Host
+		if idx := strings.LastIndex(controllerIP, ":"); idx != -1 {
+			controllerIP = controllerIP[:idx]
+		}
+		go func(devID string, flows []interface{}, ctrlIP string, rawPayload []byte) {
+			enriched := services.ProcessFlowSense(devID, flows, ctrlIP)
+			if len(enriched) == 0 {
+				return
+			}
+			enrichedJSON, err := json.Marshal(enriched)
+			if err != nil {
+				return
+			}
+			// Merge enriched flow_sense back into state_json for querying
+			var state map[string]interface{}
+			if err := json.Unmarshal(rawPayload, &state); err == nil {
+				var enrichedList []interface{}
+				if err2 := json.Unmarshal(enrichedJSON, &enrichedList); err2 == nil {
+					state["flow_sense"] = enrichedList
+					if merged, err3 := json.Marshal(state); err3 == nil {
+						rawPayload = merged
+					}
+				}
+			}
+			database.DB.Exec(
+				"UPDATE devices SET state_json = $1 WHERE id = $2",
+				rawPayload, devID,
+			)
+		}(deviceID, rawFlows, controllerIP, body)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"accepted"}`))

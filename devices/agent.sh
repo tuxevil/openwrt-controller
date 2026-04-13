@@ -185,8 +185,61 @@ while true; do
     # 4. DHCP LEASES
     DHCP_LEASES=$(ubus call dhcp ipv4leases 2>/dev/null || echo "{\"leases\":[]}")
 
-    # 5. LOGS RECIENTES (Últimas 20 líneas de syslog)
+    # 5. LOGS RECIENTES (Últimas 50 líneas de syslog)
     SYS_LOGS=$(logread | tail -n 50 | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{printf "%s\\n", $0}')
+
+    # 5.5 FLOW_SENSE – Top 20 destinos activos desde /proc/net/nf_conntrack (ZERO CPU overhead)
+    # Lee únicamente conexiones ESTABLISHED, extrae dst_ip y dst_port, agrupa y cuenta.
+    # Sin exports IPFIX, sin fprobe, sin softflowd — puro awk sobre el pseudo-filesystem del kernel.
+    FLOW_SENSE_DATA="[]"
+    if [ -f /proc/net/nf_conntrack ]; then
+        FLOW_SENSE_DATA=$(awk '
+            /ESTABLISHED/ {
+                proto = ""
+                src = ""; dst = ""; dport = "0"
+                # Determine protocol from field 1 (tcp/udp/icmp)
+                proto = $3
+                # Walk fields looking for dst= and dport=
+                for (i = 1; i <= NF; i++) {
+                    n = split($i, kv, "=")
+                    if (n == 2) {
+                        if (kv[1] == "dst" && dst == "") dst = kv[2]      # first dst = src-side reply dst
+                        if (kv[1] == "src" && src == "") src = kv[2]      # first src = originator
+                        if (kv[1] == "dport" && dport == "0") dport = kv[2]
+                    }
+                }
+                # Skip loopback and link-local
+                if (dst ~ /^127\./ || dst ~ /^169\.254/) next
+                key = proto ":" dst ":" dport
+                count[key]++
+                # Store first-seen src for context
+                if (!(key in srcs)) srcs[key] = src
+            }
+            END {
+                # Sort by count descending (bubble sort, max 20 top entries)
+                n = 0
+                for (k in count) { keys[n] = k; n++ }
+                for (i = 0; i < n; i++) {
+                    for (j = i+1; j < n; j++) {
+                        if (count[keys[j]] > count[keys[i]]) {
+                            t = keys[i]; keys[i] = keys[j]; keys[j] = t
+                        }
+                    }
+                }
+                limit = (n < 20) ? n : 20
+                printf "["
+                for (i = 0; i < limit; i++) {
+                    k = keys[i]
+                    split(k, parts, ":")
+                    if (i > 0) printf ","
+                    printf "{\"proto\":\"%s\",\"dst\":\"%s\",\"dport\":%s,\"conns\":%d,\"sample_src\":\"%s\"}",
+                        parts[1], parts[2], parts[3], count[k], srcs[k]
+                }
+                printf "]"
+            }
+        ' /proc/net/nf_conntrack 2>/dev/null)
+        [ -z "$FLOW_SENSE_DATA" ] && FLOW_SENSE_DATA="[]"
+    fi
 
     # 6. CONSTRUCCIÓN DEL PAYLOAD
     PAYLOAD=$(cat <<EOF
@@ -202,6 +255,7 @@ while true; do
     "arp_table": $ARP_TABLE,
     "bridge_table": $BRIDGE_TABLE,
     "dhcp": $DHCP_LEASES,
+    "flow_sense": $FLOW_SENSE_DATA,
     "logs": "$SYS_LOGS"
 }
 EOF
