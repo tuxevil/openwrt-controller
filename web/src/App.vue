@@ -17,7 +17,7 @@ const sectorRoutes = {
   CORE_VISIBILITY:    [/^\/site\/[^/]+$/, /topology/, /clients/, /edge-nexus/],
   ACTIVE_DEFENSE_SOC: [/threat-shield/, /flow-radar/, /bandwidth/, /incidents/],
   RF_TELEMETRY:       [/wireless/, /\/rf$/],
-  SYSTEM_OPS:         [/vault/, /logs/, /settings/],
+  SYSTEM_OPS:         [/vault/, /logs/, /settings/, /central-config/, /orchestrator/],
 }
 
 function detectSector(path) {
@@ -186,7 +186,7 @@ const fetchHealth = async () => {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
           </button>
-          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'SYSTEM_OPS' ? 'max-height:220px;opacity:1' : 'max-height:0;opacity:0'">
+          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'SYSTEM_OPS' ? 'max-height:380px;opacity:1' : 'max-height:0;opacity:0'">
             <div class="flex flex-col gap-1 pt-1 pb-1">
               <router-link :to="`/site/${$route.params.site_id}/vault`" active-class="bg-white !text-black shadow-[0_0_15px_#ffffff]" class="p-2.5 border border-white clip-chamfer text-white hover:bg-white hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
@@ -199,6 +199,14 @@ const fetchHealth = async () => {
               <router-link :to="`/site/${$route.params.site_id}/settings`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="square" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 <span class="tracking-widest">SETTINGS</span>
+              </router-link>
+              <router-link :to="`/site/${$route.params.site_id}/central-config`" active-class="bg-purple-500 !text-white shadow-[0_0_12px_rgba(168,85,247,0.5)]" class="p-2.5 border border-purple-500/50 clip-chamfer text-purple-400 hover:bg-purple-500 hover:text-white transition-all flex items-center gap-2.5 active:scale-95 text-sm">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+                <span class="tracking-widest">CENTRAL_LUCI</span>
+              </router-link>
+              <router-link :to="`/site/${$route.params.site_id}/orchestrator`" active-class="bg-amber-500 !text-black shadow-[0_0_12px_rgba(245,158,11,0.5)]" class="p-2.5 border border-amber-500/50 clip-chamfer text-amber-400 hover:bg-amber-500 hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                <span class="tracking-widest">ORCHESTRATOR</span>
               </router-link>
             </div>
           </div>

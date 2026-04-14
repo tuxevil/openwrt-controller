@@ -163,6 +163,30 @@ const router = createRouter({
       name: 'site-edge-nexus',
       component: EdgeNexus,
       props: true
+    },
+    {
+      path: '/site/:site_id/device/:device_id/uci',
+      name: 'site-uci',
+      component: () => import('../views/UciOps.vue'),
+      props: true
+    },
+    {
+      path: '/site/:site_id/device/:device_id/central-config',
+      name: 'site-central-config-device',
+      component: () => import('../views/CentralConfig.vue'),
+      props: true
+    },
+    {
+      path: '/site/:site_id/central-config',
+      name: 'site-central-config',
+      component: () => import('../views/CentralConfig.vue'),
+      props: true
+    },
+    {
+      path: '/site/:site_id/orchestrator',
+      name: 'site-orchestrator',
+      component: () => import('../views/GlobalOrchestrator.vue'),
+      props: true
     }
   ]
 })

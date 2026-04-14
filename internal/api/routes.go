@@ -96,6 +96,24 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.GetEdgeFirewallHandler))
 	mux.HandleFunc("PUT /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.PutEdgeFirewallHandler))
 
+	// ── UCI_OPS / Universal Configuration Manager ────────────────────────────
+	mux.HandleFunc("GET /api/devices/{device_id}/uci", middleware.WithAuth(middleware.RequireAdmin(handlers.GetUciHandler)))
+	mux.HandleFunc("PUT /api/devices/{device_id}/uci", middleware.WithAuth(middleware.RequireAdmin(handlers.PutUciHandler)))
+
+	// ── CENTRAL_LUCI / Low-Level Configuration Interface ─────────────────
+	mux.HandleFunc("GET /api/devices/{device_id}/central-config", middleware.WithAuth(middleware.RequireAdmin(handlers.GetCentralConfigHandler)))
+	mux.HandleFunc("GET /api/devices/{device_id}/central-configs", middleware.WithAuth(middleware.RequireAdmin(handlers.ListCentralConfigsHandler)))
+	mux.HandleFunc("PUT /api/devices/{device_id}/central-config", middleware.WithAuth(middleware.RequireAdmin(handlers.PutCentralConfigHandler)))
+	mux.HandleFunc("POST /api/central-config/preview", middleware.WithAuth(middleware.RequireAdmin(handlers.PreviewCentralConfigHandler)))
+
+	// ── SITE_ORCHESTRATOR / Global Fleet Templates ───────────────────────
+	mux.HandleFunc("GET /api/sites/{site_id}/site-config", middleware.WithAuth(middleware.RequireAdmin(handlers.GetSiteConfigHandler)))
+	mux.HandleFunc("PUT /api/sites/{site_id}/site-config", middleware.WithAuth(middleware.RequireAdmin(handlers.PutSiteConfigHandler)))
+	mux.HandleFunc("GET /api/sites/{site_id}/device-roles", middleware.WithAuth(middleware.RequireAdmin(handlers.GetSiteDeviceRolesHandler)))
+	mux.HandleFunc("PUT /api/devices/{device_id}/role", middleware.WithAuth(middleware.RequireAdmin(handlers.PutDeviceRoleHandler)))
+	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/preview", middleware.WithAuth(middleware.RequireAdmin(handlers.PreviewSyncHandler)))
+	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/sync", middleware.WithAuth(middleware.RequireAdmin(handlers.SyncFleetHandler)))
+
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Device-facing: authenticated by X-Site-Key header (no JWT)
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	
+	"openwrt-controller/internal/services"
 	"openwrt-controller/internal/database"
 )
 
@@ -10,13 +13,12 @@ func main() {
 		log.Fatal(err)
 	}
 
-	_, err := database.DB.Exec(`
-		INSERT INTO ai_insights (correlation_id, diagnosis, severity, involved_devices)
-		VALUES ($1, $2, $3, $4)
-	`, "AI-CORR-99999", "Simulated SOC Alert: Multiple failed SSH login attempts detected from internal subnet (10.0.0.144). The Sentinel pipeline has successfully intercepted the threat and deployed the Preventive Sniper Shaping module to contain lateral movement.", "Critical", `["AP-Lobby", "AP-Office"]`)
-
+	devs, err := services.GetSiteDevicesWithRoles("00000000-0000-0000-0000-000000000000")
 	if err != nil {
 		log.Fatal(err)
 	}
-	log.Println("Inserted simulation insight!")
+	fmt.Printf("found %d devices\n", len(devs))
+	for _, d := range devs {
+		fmt.Printf(" -> %+v\n", d)
+	}
 }

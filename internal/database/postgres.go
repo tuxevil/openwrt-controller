@@ -222,6 +222,28 @@ func createTables() error {
 		ip_count INTEGER NOT NULL DEFAULT 0,
 		sources_count INTEGER NOT NULL DEFAULT 0
 	);
+
+	CREATE TABLE IF NOT EXISTS site_configs (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		site_id UUID REFERENCES sites(id) ON DELETE CASCADE UNIQUE,
+		global_ssid VARCHAR(255) DEFAULT '',
+		global_wpa_key VARCHAR(255) DEFAULT '',
+		global_encryption VARCHAR(50) DEFAULT 'psk2',
+		lan_ipaddr VARCHAR(50) DEFAULT '192.168.1.1',
+		lan_netmask VARCHAR(50) DEFAULT '255.255.255.0',
+		dhcp_start INT DEFAULT 100,
+		dhcp_limit INT DEFAULT 150,
+		dhcp_leasetime VARCHAR(20) DEFAULT '12h',
+		dns_primary VARCHAR(50) DEFAULT '9.9.9.9',
+		dns_secondary VARCHAR(50) DEFAULT '1.1.1.1',
+		timezone VARCHAR(100) DEFAULT 'UTC',
+		hostname_prefix VARCHAR(100) DEFAULT 'nerve',
+		firewall_syn_flood BOOLEAN DEFAULT true,
+		firewall_drop_invalid BOOLEAN DEFAULT true,
+		dropbear_port INT DEFAULT 22,
+		dropbear_password_auth BOOLEAN DEFAULT true,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {
@@ -238,6 +260,7 @@ func createTables() error {
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS auto_adopt BOOLEAN DEFAULT false",
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false",
 		"ALTER TABLE devices ADD COLUMN IF NOT EXISTS threat_shield_drops BIGINT DEFAULT 0",
+		"ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_role VARCHAR(50) DEFAULT 'AP'",
 		"ALTER TABLE wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false",
 	}
 	for _, m := range migrations {

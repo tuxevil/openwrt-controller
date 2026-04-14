@@ -176,8 +176,11 @@ const goBack = () => router.push('/global')
             </td>
             <td class="py-3 text-center flex justify-center gap-2">
               <button @click="showDetails(dev)" class="text-neon-cyan hover:bg-black border border-neon-cyan px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none" style="color: #0ff; border-color: #0ff;">INFO</button>
-              <button @click="router.push(`/site/${site_id}/ssh/${dev.id}`)" class="text-neon-green hover:bg-neon-green hover:text-black border border-neon-green px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none">
+              <button @click="router.push(`/site/${site_id}/ssh/${dev.id}`)" class="text-neon-green hover:bg-neon-green hover:text-black border border-neon-green px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none" title="Matrix Shell">
                 >_
+              </button>
+              <button @click="router.push(`/site/${site_id}/device/${dev.id}/central-config`)" class="text-purple-400 hover:bg-purple-500/20 border border-purple-500/60 px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none shadow-[0_0_6px_rgba(168,85,247,0.15)]" title="Central LuCI — Device Configuration">
+                ⚙ CONFIG
               </button>
             </td>
           </tr>
