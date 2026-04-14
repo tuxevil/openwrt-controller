@@ -620,9 +620,9 @@ func isValidSchemaName(name string) bool {
 // These functions are used by existing handlers. They now operate via the
 // search_path which defaults to the tenant schema set by middleware.
 
-func UpsertDeviceState(deviceID string, stateJSON []byte, model string, lastIP string, agentVersion string) error {
-	query := `
-		INSERT INTO devices (id, state_json, model, last_ip, agent_version, last_seen_at, updated_at) 
+func UpsertDeviceState(schema string, deviceID string, stateJSON []byte, model string, lastIP string, agentVersion string) error {
+	query := fmt.Sprintf(`
+		INSERT INTO %s.devices (id, state_json, model, last_ip, agent_version, last_seen_at, updated_at) 
 		VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		ON CONFLICT (id) DO UPDATE SET 
 			state_json = EXCLUDED.state_json,
@@ -631,7 +631,7 @@ func UpsertDeviceState(deviceID string, stateJSON []byte, model string, lastIP s
 			agent_version = EXCLUDED.agent_version,
 			last_seen_at = CURRENT_TIMESTAMP,
 			updated_at = CURRENT_TIMESTAMP
-	`
+	`, schema)
 	_, err := DB.Exec(query, deviceID, stateJSON, model, lastIP, agentVersion)
 	return err
 }
@@ -644,7 +644,7 @@ type LogEntry struct {
 	DeviceName string `json:"device_name"`
 }
 
-func InsertDeviceLogs(deviceID string, logs []LogEntry) error {
+func InsertDeviceLogs(schema string, deviceID string, logs []LogEntry) error {
 	if len(logs) == 0 {
 		return nil
 	}
@@ -655,22 +655,22 @@ func InsertDeviceLogs(deviceID string, logs []LogEntry) error {
 	}
 	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.Prepare(fmt.Sprintf(`
 		WITH input AS (
 			SELECT CAST($1 AS VARCHAR) as device_id,
 			       CAST($2 AS TIMESTAMP WITH TIME ZONE) as log_timestamp,
 			       CAST($3 AS VARCHAR) as severity,
 			       CAST($4 AS TEXT) as message
 		)
-		INSERT INTO system_logs (device_id, log_timestamp, severity, message)
+		INSERT INTO %s.system_logs (device_id, log_timestamp, severity, message)
 		SELECT device_id, log_timestamp, severity, message FROM input
 		WHERE NOT EXISTS (
-			SELECT 1 FROM system_logs 
+			SELECT 1 FROM %s.system_logs 
 			WHERE device_id = input.device_id 
 			  AND log_timestamp = input.log_timestamp 
 			  AND message = input.message
 		)
-	`)
+	`, schema, schema))
 	if err != nil {
 		return err
 	}

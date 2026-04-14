@@ -81,7 +81,7 @@ func GetDeviceMetrics(deviceID string, duration string) ([]float64, error) {
 		|> range(start: %s)
 		|> filter(fn: (r) => r["_measurement"] == "device_metrics")
 		|> filter(fn: (r) => r["device_id"] == "%s")
-		|> filter(fn: (r) => r["_field"] == "cpu_load")
+		|> filter(fn: (r) => r["_field"] == "tx_mbps")
 		|> aggregateWindow(every: 10s, fn: mean, createEmpty: false)
 		|> yield(name: "mean")
 	`, bucket, duration, deviceID)

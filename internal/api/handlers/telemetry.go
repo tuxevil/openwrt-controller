@@ -40,10 +40,24 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	providedKey := r.Header.Get("X-Site-Key")
+	
+	log.Printf("[DEBUG] Telemetry received from device_id=%s, IP=%s, X-Site-Key=%s", deviceID, r.RemoteAddr, providedKey)
+
+	if providedKey == "" {
+		http.Error(w, "Forbidden: missing site key", http.StatusForbidden)
+		return
+	}
+
+	tenantSchema, err := database.GetTenantSchemaForSiteKey(providedKey)
+	if err != nil {
+		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+		return
+	}
+
 	var siteKey *string
 	err = database.DB.QueryRow(`
-		SELECT s.api_key FROM sites s 
-		JOIN devices d ON d.site_id = s.id 
+		SELECT s.api_key FROM `+tenantSchema+`.sites s 
+		JOIN `+tenantSchema+`.devices d ON d.site_id = s.id 
 		WHERE d.id = $1`, deviceID).Scan(&siteKey)
 	if err == nil && siteKey != nil && *siteKey != "" {
 		if providedKey != *siteKey {
@@ -59,12 +73,12 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		var autoSiteID string
 		var autoAdopt bool
 		zeroTouchErr := database.DB.QueryRow(`
-			SELECT id, auto_adopt FROM sites WHERE api_key = $1
+			SELECT id, auto_adopt FROM `+tenantSchema+`.sites WHERE api_key = $1
 		`, providedKey).Scan(&autoSiteID, &autoAdopt)
 
 		if zeroTouchErr == nil && autoAdopt {
 			_, _ = database.DB.Exec(
-				"UPDATE devices SET site_id = $1, status = 'Adopted' WHERE id = $2",
+				"UPDATE "+tenantSchema+".devices SET site_id = $1, status = 'Adopted' WHERE id = $2",
 				autoSiteID, deviceID,
 			)
 			log.Printf("[ZERO_TOUCH] Device %s auto-adopted to site %s", deviceID, autoSiteID)
@@ -91,11 +105,11 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Goroutine for PostgreSQL (upsert state and explicit model)
-	go func(devID string, state []byte, mod string, ip string, av string) {
-		if err := database.UpsertDeviceState(devID, state, mod, ip, av); err != nil {
+	go func(devID string, state []byte, mod string, ip string, av string, schema string) {
+		if err := database.UpsertDeviceState(schema, devID, state, mod, ip, av); err != nil {
 			log.Printf("Error upserting device state to postgres: %v\n", err)
 		}
-	}(deviceID, body, modelStr, remoteIP, agentVersion)
+	}(deviceID, body, modelStr, remoteIP, agentVersion, tenantSchema)
 
 	// Extract Metrics cleanly bypassing struct matching
 	var metrics models.DeviceMetrics
@@ -215,17 +229,17 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 
-		go func(devID string, logs []database.LogEntry) {
-			if err := database.InsertDeviceLogs(devID, logs); err != nil {
+		go func(devID string, logs []database.LogEntry, schema string) {
+			if err := database.InsertDeviceLogs(schema, devID, logs); err != nil {
 				log.Printf("Error inserting logs: %v\n", err)
 			}
 			services.AnalyzeLogs(devID, logs)
-		}(deviceID, parsedLogs)
+		}(deviceID, parsedLogs, tenantSchema)
 	}
 
 	// 4. The Signal (Alerts Evaluation)
 	var sID string
-	_ = database.DB.QueryRow("SELECT site_id FROM devices WHERE id = $1", deviceID).Scan(&sID)
+	_ = database.DB.QueryRow("SELECT site_id FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&sID)
 	go services.ProcessTelemetry(deviceID, sID, metrics)
 
 	// 5. FLOW_SENSE — process conntrack snapshot
@@ -234,7 +248,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		if idx := strings.LastIndex(controllerIP, ":"); idx != -1 {
 			controllerIP = controllerIP[:idx]
 		}
-		go func(devID string, flows []interface{}, ctrlIP string, rawPayload []byte) {
+		go func(devID string, flows []interface{}, ctrlIP string, rawPayload []byte, schema string) {
 			enriched := services.ProcessFlowSense(devID, flows, ctrlIP)
 			if len(enriched) == 0 {
 				return
@@ -275,10 +289,10 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			database.DB.Exec(
-				"UPDATE devices SET state_json = $1 WHERE id = $2",
+				"UPDATE "+schema+".devices SET state_json = $1 WHERE id = $2",
 				rawPayload, devID,
 			)
-		}(deviceID, rawFlows, controllerIP, body)
+		}(deviceID, rawFlows, controllerIP, body, tenantSchema)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
