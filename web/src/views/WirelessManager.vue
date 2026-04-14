@@ -5,7 +5,8 @@ import api from '../services/api'
 const props = defineProps(['site_id'])
 
 const wlans = ref([])
-const form = ref({ ssid: '', security: 'psk2', password: '', enabled: true })
+const savedRoaming = localStorage.getItem('fast_roaming') === 'true'
+const form = ref({ ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: savedRoaming })
 const creating = ref(false)
 const error = ref('')
 
@@ -28,7 +29,8 @@ async function handleCreate() {
   creating.value = true
   try {
     await api.createWLAN(props.site_id, { ...form.value })
-    form.value = { ssid: '', security: 'psk2', password: '', enabled: true }
+    const currentRoaming = form.value.roaming_enabled
+    form.value = { ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: currentRoaming }
     await fetchWLANs()
   } catch (e) {
     error.value = 'CREATE_FAILED'
@@ -73,6 +75,13 @@ async function handleDelete(id) {
             <div class="px-4 py-2 font-bold transition-colors" :class="form.enabled ? 'bg-neon-green text-black' : 'bg-transparent text-muted'">[ ON ]</div>
           </div>
         </div>
+        <div class="flex flex-col gap-1 col-span-2 mt-2">
+          <label class="text-xs text-neon-green font-bold uppercase tracking-widest">[ ENABLE FAST ROAMING (802.11r) ]</label>
+          <div class="flex border border-neon-green clip-chamfer w-fit cursor-pointer select-none overflow-hidden" @click="() => { form.roaming_enabled = !form.roaming_enabled; localStorage.setItem('fast_roaming', form.roaming_enabled) }">
+            <div class="px-4 py-2 font-bold transition-colors" :class="form.roaming_enabled ? 'bg-transparent text-muted' : 'bg-neon-red text-black'">[ OFF ]</div>
+            <div class="px-4 py-2 font-bold transition-colors" :class="form.roaming_enabled ? 'bg-neon-green text-black' : 'bg-transparent text-muted'">[ ON ]</div>
+          </div>
+        </div>
       </div>
 
       <div v-if="error" class="text-neon-red glitch-anim text-sm">>> ERR: {{ error }}</div>
@@ -101,6 +110,7 @@ async function handleDelete(id) {
             <td class="py-3">
               <span v-if="w.enabled" class="px-2 py-0.5 bg-neon-green/20 text-neon-green border border-neon-green/50 clip-chamfer text-xs">LIVE</span>
               <span v-else class="px-2 py-0.5 bg-neon-red/20 text-neon-red border border-neon-red/50 clip-chamfer text-xs">DARK</span>
+              <span v-if="w.roaming_enabled" class="ml-2 px-1 bg-neon-green/10 text-neon-green border border-neon-green/30 clip-chamfer text-[10px]">⚡ FT Active</span>
             </td>
             <td class="py-3">
               <button @click="handleDelete(w.id)" class="text-neon-red border border-neon-red/60 px-2 py-0.5 clip-chamfer hover:bg-neon-red hover:text-black transition-colors text-xs uppercase">KILL</button>

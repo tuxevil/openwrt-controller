@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/services"
 )
 
 func DeleteWLANHandler(w http.ResponseWriter, r *http.Request) {
@@ -31,10 +32,11 @@ func DeleteWLANHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type createWLANRequest struct {
-	SSID     string `json:"ssid"`
-	Security string `json:"security"`
-	Password string `json:"password"`
-	Enabled  *bool  `json:"enabled"`
+	SSID           string `json:"ssid"`
+	Security       string `json:"security"`
+	Password       string `json:"password"`
+	Enabled        *bool  `json:"enabled"`
+	RoamingEnabled *bool  `json:"roaming_enabled"`
 }
 
 func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
@@ -60,16 +62,23 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 		enabled = *req.Enabled
 	}
 
+	roamingEnabled := false
+	if req.RoamingEnabled != nil {
+		roamingEnabled = *req.RoamingEnabled
+	}
+
 	var newID string
 	err := database.DB.QueryRow(
-		"INSERT INTO wlans (site_id, ssid, security, password, enabled) VALUES ($1, $2, $3, $4, $5) RETURNING id",
-		siteID, req.SSID, req.Security, req.Password, enabled,
+		"INSERT INTO wlans (site_id, ssid, security, password, enabled, roaming_enabled) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+		siteID, req.SSID, req.Security, req.Password, enabled, roamingEnabled,
 	).Scan(&newID)
 
 	if err != nil {
 		http.Error(w, `{"error": "failed to create wlan, ensure site_id exists"}`, http.StatusInternalServerError)
 		return
 	}
+
+	go services.AddWLANConfig(siteID, req.SSID, req.Security, req.Password, roamingEnabled)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -86,7 +95,7 @@ func GetWLANsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, site_id, ssid, security, enabled FROM wlans WHERE site_id = $1`
+	query := `SELECT id, site_id, ssid, security, enabled, COALESCE(roaming_enabled, false) FROM wlans WHERE site_id = $1`
 	rows, err := database.DB.Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -97,14 +106,15 @@ func GetWLANsHandler(w http.ResponseWriter, r *http.Request) {
 	var wlans []map[string]interface{}
 	for rows.Next() {
 		var id, sID, ssid, security string
-		var enabled bool
-		if err := rows.Scan(&id, &sID, &ssid, &security, &enabled); err == nil {
+		var enabled, roaming bool
+		if err := rows.Scan(&id, &sID, &ssid, &security, &enabled, &roaming); err == nil {
 			wlans = append(wlans, map[string]interface{}{
-				"id":       id,
-				"site_id":  sID,
-				"ssid":     ssid,
-				"security": security,
-				"enabled":  enabled,
+				"id":              id,
+				"site_id":         sID,
+				"ssid":            ssid,
+				"security":        security,
+				"enabled":         enabled,
+				"roaming_enabled": roaming,
 			})
 		}
 	}

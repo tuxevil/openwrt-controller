@@ -238,6 +238,7 @@ func createTables() error {
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS auto_adopt BOOLEAN DEFAULT false",
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false",
 		"ALTER TABLE devices ADD COLUMN IF NOT EXISTS threat_shield_drops BIGINT DEFAULT 0",
+		"ALTER TABLE wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
