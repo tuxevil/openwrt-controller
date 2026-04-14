@@ -215,6 +215,13 @@ func createTables() error {
 	);
 
 	INSERT INTO platform_settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+
+	CREATE TABLE IF NOT EXISTS threat_intel_meta (
+		id SERIAL PRIMARY KEY,
+		fetched_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		ip_count INTEGER NOT NULL DEFAULT 0,
+		sources_count INTEGER NOT NULL DEFAULT 0
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {
@@ -229,6 +236,8 @@ func createTables() error {
 		"ALTER TABLE ai_insights ADD COLUMN IF NOT EXISTS llm_model VARCHAR(255)",
 		"ALTER TABLE ai_insights ADD COLUMN IF NOT EXISTS tokens_used INT DEFAULT 0",
 		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS auto_adopt BOOLEAN DEFAULT false",
+		"ALTER TABLE sites ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false",
+		"ALTER TABLE devices ADD COLUMN IF NOT EXISTS threat_shield_drops BIGINT DEFAULT 0",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {

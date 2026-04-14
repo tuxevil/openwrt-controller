@@ -170,5 +170,16 @@ export default {
   },
   getDeviceAuditResults(deviceId) {
     return apiClient.get(`/devices/${deviceId}/audit`)
+  },
+
+  // THREAT_SHIELD
+  getThreatShieldStatus() {
+    return apiClient.get('/threat-shield/status')
+  },
+  getSiteThreatShield(siteId) {
+    return apiClient.get(`/sites/${siteId}/threat-shield`)
+  },
+  toggleThreatShield(siteId, enabled) {
+    return apiClient.post(`/sites/${siteId}/threat-shield`, { enabled })
   }
 }

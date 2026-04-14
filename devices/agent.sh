@@ -356,5 +356,94 @@ EOF
         fi
     fi
 
+    # 9. [THREAT_SHIELD] — nftables IP reputation enforcement
+    if [ -n "$CONFIG_RESPONSE" ]; then
+        TS_ENABLED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.threat_shield' 2>/dev/null)
+    fi
+
+    if [ "$TS_ENABLED" = "true" ]; then
+        TS_LIST_FILE="/tmp/ts_raw.txt"
+        TS_NFT_FILE="/tmp/ts.nft"
+        TS_STAMP_FILE="/tmp/ts.stamp"
+
+        # Refresh blocklist if older than 6 hours (21600s) or missing
+        TS_REFRESH=0
+        if [ ! -f "$TS_STAMP_FILE" ]; then
+            TS_REFRESH=1
+        else
+            TS_STAMP=$(cat "$TS_STAMP_FILE" 2>/dev/null || echo 0)
+            TS_NOW=$(date +%s)
+            TS_AGE=$((TS_NOW - TS_STAMP))
+            [ "$TS_AGE" -gt 21600 ] && TS_REFRESH=1
+        fi
+
+        if [ "$TS_REFRESH" = "1" ]; then
+            logger -t threat_shield "Downloading reputation blocklist..."
+            if curl -m 60 -s -H "X-Site-Key: $SITE_KEY" \
+                    "$BASE_URL/threat-shield/list" \
+                    -o "$TS_LIST_FILE.tmp" 2>/dev/null; then
+                TS_COUNT=$(wc -l < "$TS_LIST_FILE.tmp" 2>/dev/null || echo 0)
+                if [ "$TS_COUNT" -gt 10 ]; then
+                    mv "$TS_LIST_FILE.tmp" "$TS_LIST_FILE"
+                    date +%s > "$TS_STAMP_FILE"
+                    logger -t threat_shield "Blocklist updated: $TS_COUNT entries"
+
+                    # Ensure table, set, and chains exist (idempotent)
+                    nft list table inet threat_shield > /dev/null 2>&1 || \
+                        nft add table inet threat_shield
+                    nft list set inet threat_shield denylist > /dev/null 2>&1 || \
+                        nft add set inet threat_shield denylist \
+                            '{ type ipv4_addr; flags interval; auto-merge; }'
+                    nft list chain inet threat_shield forward > /dev/null 2>&1 || {
+                        nft add chain inet threat_shield forward \
+                            '{ type filter hook forward priority -1; }'
+                        nft add rule inet threat_shield forward \
+                            ip daddr @denylist counter drop
+                    }
+                    nft list chain inet threat_shield input > /dev/null 2>&1 || {
+                        nft add chain inet threat_shield input \
+                            '{ type filter hook input priority -1; }'
+                        nft add rule inet threat_shield input \
+                            ip saddr @denylist counter drop
+                    }
+
+                    # Build atomic nft reload script from the list
+                    awk '
+                        BEGIN { print "flush set inet threat_shield denylist" }
+                        NF && !/^#/ {
+                            gsub(/[;, \t].*/, "")
+                            if ($1 ~ /^[0-9]/) printf "add element inet threat_shield denylist { %s }\n", $1
+                        }
+                    ' "$TS_LIST_FILE" > "$TS_NFT_FILE"
+
+                    # Apply atomically
+                    nft -f "$TS_NFT_FILE" 2>/dev/null && \
+                        logger -t threat_shield "Denylist applied to nftables"
+                else
+                    rm -f "$TS_LIST_FILE.tmp"
+                    logger -t threat_shield "Blocklist download empty or too small, skipping"
+                fi
+            else
+                logger -t threat_shield "Blocklist download failed"
+            fi
+        fi
+
+        # Collect drop counters from nftables
+        TS_DROPS_FWD=$(nft list chain inet threat_shield forward 2>/dev/null | \
+            awk '/counter/{for(i=1;i<=NF;i++) if($i=="packets") print $(i+1)}' | head -1)
+        TS_DROPS_IN=$(nft list chain inet threat_shield input 2>/dev/null | \
+            awk '/counter/{for(i=1;i<=NF;i++) if($i=="packets") print $(i+1)}' | head -1)
+        TS_DROPS_TOTAL=$(( ${TS_DROPS_FWD:-0} + ${TS_DROPS_IN:-0} ))
+        TS_LOADED=$(wc -l < "$TS_LIST_FILE" 2>/dev/null || echo 0)
+
+    else
+        # Disable: remove threat_shield table if it exists
+        nft list table inet threat_shield > /dev/null 2>&1 && \
+            nft delete table inet threat_shield 2>/dev/null || true
+        TS_DROPS_TOTAL=0
+        TS_LOADED=0
+        rm -f /tmp/ts.stamp 2>/dev/null
+    fi
+
     sleep 10
 done

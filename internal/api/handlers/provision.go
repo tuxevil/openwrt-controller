@@ -170,14 +170,21 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		wgConfig["enabled"] = false
 	}
 
+	// Fetch threat shield setting for this site
+	var threatShieldEnabled bool
+	_ = database.DB.QueryRow(
+		"SELECT COALESCE(threat_shield_enabled, false) FROM sites WHERE id = $1", siteID.String,
+	).Scan(&threatShieldEnabled)
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"action": "apply",
 		"config": map[string]interface{}{
 			"wireless": map[string]interface{}{
 				"wlans": wlansList,
 			},
-			"ssh": sshConfig,
-			"wireguard": wgConfig,
+			"ssh":           sshConfig,
+			"wireguard":     wgConfig,
+			"threat_shield": threatShieldEnabled,
 		},
 	})
 }

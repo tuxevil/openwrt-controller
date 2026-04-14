@@ -34,6 +34,7 @@ func main() {
 
 	services.StartAlertEngine()
 	services.StartSniperReaper()
+	services.StartThreatIntelCron()
 
 	// Setup routes using the dedicated routes file
 	mux := api.SetupRoutes()

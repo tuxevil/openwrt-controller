@@ -28,7 +28,7 @@ const fetchHealth = async () => {
     <div v-if="$route.path.startsWith('/site/') || $route.path === '/incidents'" class="w-64 border-r-2 border-neon-green/30 flex flex-col p-4 shrink-0 bg-panel z-10 shadow-[5px_0_15px_rgba(0,255,65,0.1)]">
        <h1 class="text-neon-green text-xl font-bold tracking-widest text-center select-none">NERVE_CENTER</h1>
        
-       <div class="flex items-center justify-between mb-8 pb-4 border-b border-neon-green/50 mt-2 px-2">
+       <div class="flex items-center justify-between mb-4 pb-4 border-b border-neon-green/50 mt-2 px-2">
          <span class="text-[10px] text-neon-green/50 tracking-widest flex items-center gap-1">GLOBAL_PULSE</span>
          <div class="flex items-center gap-2">
            <span class="text-xs font-bold" :class="globalHealth < 50 ? 'text-neon-red drop-shadow-[0_0_8px_#ff0055]' : 'text-neon-green'">{{ globalHealth }}%</span>
@@ -36,20 +36,14 @@ const fetchHealth = async () => {
          </div>
        </div>
        
-       <nav class="flex flex-col gap-3 flex-1 select-none">
+       <nav class="flex flex-col gap-1.5 flex-1 select-none overflow-y-auto pr-0.5">
+
+         <!-- // CORE_VISIBILITY -->
+         <div class="text-[10px] tracking-[0.2em] text-gray-500 mt-2 mb-2 ml-2 uppercase font-bold select-none">// CORE_VISIBILITY</div>
+
          <router-link :to="`/site/${$route.params.site_id}`" exact-active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
            <span class="tracking-widest">DASHBOARD</span>
-         </router-link>
-
-         <router-link :to="`/site/${$route.params.site_id}/clients`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
-           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
-           <span class="tracking-widest">CLIENTS</span>
-         </router-link>
-
-         <router-link :to="`/site/${$route.params.site_id}/settings`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
-           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="square" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-           <span class="tracking-widest">SETTINGS</span>
          </router-link>
 
          <router-link :to="`/site/${$route.params.site_id}/topology`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
@@ -57,9 +51,33 @@ const fetchHealth = async () => {
            <span class="tracking-widest">THE_GRID</span>
          </router-link>
 
-         <router-link :to="`/site/${$route.params.site_id}/logs`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
-           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
-           <span class="tracking-widest">MATRIX LOGS</span>
+         <router-link :to="`/site/${$route.params.site_id}/clients`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+           <span class="tracking-widest">CLIENTS</span>
+         </router-link>
+
+         <!-- // ACTIVE_DEFENSE_SOC -->
+         <div class="text-[10px] tracking-[0.2em] text-gray-500 mt-6 mb-2 ml-2 uppercase font-bold select-none">// ACTIVE_DEFENSE_SOC</div>
+
+         <router-link :to="`/site/${$route.params.site_id}/threat-shield`" active-class="bg-red-600 !text-white shadow-[0_0_12px_rgba(239,68,68,0.5)]" class="p-3 border border-red-500/50 clip-chamfer text-red-400 hover:bg-red-600 hover:text-white transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <path stroke-linecap="square" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+           </svg>
+           <span class="tracking-widest">THREAT_SHIELD</span>
+         </router-link>
+
+         <router-link :to="`/site/${$route.params.site_id}/flow-radar`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+             <circle cx="12" cy="12" r="10" stroke-width="2"/>
+             <circle cx="12" cy="12" r="5" stroke-width="1.5" opacity="0.6"/>
+             <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
+           </svg>
+           <span class="tracking-widest">FLOW_RADAR</span>
+         </router-link>
+
+         <router-link :to="`/site/${$route.params.site_id}/bandwidth`" active-class="bg-[#39FF14] !text-black shadow-[0_0_10px_#39FF14]" class="p-3 border border-[#39FF14] clip-chamfer text-[#39FF14] hover:bg-[#39FF14] hover:text-black transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+           <span class="tracking-widest">BW_SENTRY</span>
          </router-link>
 
          <router-link :to="`/site/${$route.params.site_id}/incidents`" active-class="bg-neon-red !border-neon-red !text-black shadow-[0_0_10px_#ff0041]" class="p-3 border border-neon-red clip-chamfer text-neon-red hover:bg-neon-red hover:text-black transition-all flex items-center gap-3 active:scale-95 relative group">
@@ -69,6 +87,9 @@ const fetchHealth = async () => {
                 for now we just make the icon pulse if we are on this page, 
                 but a real badge requires fetching. We just make the bell glitch. -->
          </router-link>
+
+         <!-- // RF_TELEMETRY -->
+         <div class="text-[10px] tracking-[0.2em] text-gray-500 mt-6 mb-2 ml-2 uppercase font-bold select-none">// RF_TELEMETRY</div>
 
          <router-link :to="`/site/${$route.params.site_id}/wireless`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
@@ -80,27 +101,28 @@ const fetchHealth = async () => {
            <span class="tracking-widest">RF_ANALYZER</span>
          </router-link>
 
+         <!-- // SYSTEM_OPS -->
+         <div class="text-[10px] tracking-[0.2em] text-gray-500 mt-6 mb-2 ml-2 uppercase font-bold select-none">// SYSTEM_OPS</div>
+
          <router-link :to="`/site/${$route.params.site_id}/vault`" active-class="bg-white !text-black shadow-[0_0_15px_#ffffff]" class="p-3 border border-white clip-chamfer text-white hover:bg-white hover:text-black transition-all flex items-center gap-3 active:scale-95">
            <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
            <span class="tracking-widest">THE_VAULT</span>
          </router-link>
 
-         <router-link :to="`/site/${$route.params.site_id}/bandwidth`" active-class="bg-[#39FF14] !text-black shadow-[0_0_10px_#39FF14]" class="p-3 border border-[#39FF14] clip-chamfer text-[#39FF14] hover:bg-[#39FF14] hover:text-black transition-all flex items-center gap-3 active:scale-95">
-           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-           <span class="tracking-widest">BW_SENTRY</span>
+         <router-link :to="`/site/${$route.params.site_id}/logs`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
+           <span class="tracking-widest">MATRIX LOGS</span>
          </router-link>
 
-         <router-link :to="`/site/${$route.params.site_id}/flow-radar`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
-           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-             <circle cx="12" cy="12" r="10" stroke-width="2"/>
-             <circle cx="12" cy="12" r="5" stroke-width="1.5" opacity="0.6"/>
-             <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
-           </svg>
-           <span class="tracking-widest">FLOW_RADAR</span>
+         <router-link :to="`/site/${$route.params.site_id}/settings`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-3 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-3 active:scale-95">
+           <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="square" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+           <span class="tracking-widest">SETTINGS</span>
          </router-link>
+
        </nav>
 
-       <div class="mt-auto pt-4 border-t border-neon-green/30 flex flex-col gap-2">
+       <!-- GLOBAL AREA — separated by subtle dark border -->
+       <div class="mt-auto pt-4 border-t border-gray-800 flex flex-col gap-2">
           <router-link to="/orchestrator" class="text-xs px-3 py-2 border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
             ⚡ ORCHESTRATOR
           </router-link>

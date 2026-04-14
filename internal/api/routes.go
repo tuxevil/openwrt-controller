@@ -81,6 +81,12 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/bandwidth/stats", middleware.WithAuth(handlers.BandwidthStatsHandler))
 	mux.HandleFunc("POST /api/bandwidth/sniper", middleware.WithAuth(handlers.SniperBandwidthHandler))
 
+	// ── Threat Shield / IPS ──────────────────────────────────────────────────
+	mux.HandleFunc("GET /api/threat-shield/status", middleware.WithAuth(handlers.GetThreatShieldStatusHandler))
+	mux.HandleFunc("GET /api/threat-shield/list", handlers.GetThreatShieldListHandler) // X-Site-Key auth
+	mux.HandleFunc("GET /api/sites/{site_id}/threat-shield", middleware.WithAuth(handlers.GetSiteThreatShieldHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/threat-shield", middleware.WithAuth(handlers.ToggleThreatShieldHandler))
+
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Device-facing: authenticated by X-Site-Key header (no JWT)
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)

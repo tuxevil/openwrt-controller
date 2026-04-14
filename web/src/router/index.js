@@ -120,6 +120,12 @@ const router = createRouter({
       props: true
     },
     {
+      path: '/site/:site_id/threat-shield',
+      name: 'site-threat-shield',
+      component: () => import('../views/ThreatShield.vue'),
+      props: true
+    },
+    {
       path: '/site/:site_id/vpn',
       name: 'site-vpn',
       component: VPNMatrix,
