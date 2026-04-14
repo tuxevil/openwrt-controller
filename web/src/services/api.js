@@ -181,5 +181,25 @@ export default {
   },
   toggleThreatShield(siteId, enabled) {
     return apiClient.post(`/sites/${siteId}/threat-shield`, { enabled })
+  },
+
+  // EDGE_NEXUS — L3 Edge Management
+  getEdgeNetwork(deviceId) {
+    return apiClient.get(`/devices/${deviceId}/edge-network`)
+  },
+  putEdgeNetwork(deviceId, interfaces) {
+    return apiClient.put(`/devices/${deviceId}/edge-network`, { interfaces })
+  },
+  getEdgeDHCP(deviceId) {
+    return apiClient.get(`/devices/${deviceId}/edge-dhcp`)
+  },
+  putEdgeDHCP(deviceId, dhcp) {
+    return apiClient.put(`/devices/${deviceId}/edge-dhcp`, { dhcp })
+  },
+  getEdgeFirewall(deviceId) {
+    return apiClient.get(`/devices/${deviceId}/edge-firewall`)
+  },
+  putEdgeFirewall(deviceId, portForwarding) {
+    return apiClient.put(`/devices/${deviceId}/edge-firewall`, { port_forwarding: portForwarding })
   }
 }

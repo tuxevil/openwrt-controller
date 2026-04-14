@@ -19,6 +19,7 @@ import VPNMatrix from '../views/VPNMatrix.vue'
 import SecurityMatrix from '../views/SecurityMatrix.vue'
 import BandwidthSentry from '../views/BandwidthSentry.vue'
 import IdentityMatrix from '../views/IdentityMatrix.vue'
+import EdgeNexus from '../views/EdgeNexus.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -156,6 +157,12 @@ const router = createRouter({
       path: '/global/panopticon',
       name: 'global-panopticon',
       component: () => import('../views/PanopticonView.vue')
+    },
+    {
+      path: '/site/:site_id/edge-nexus',
+      name: 'site-edge-nexus',
+      component: EdgeNexus,
+      props: true
     }
   ]
 })

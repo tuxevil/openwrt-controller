@@ -87,6 +87,14 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/threat-shield", middleware.WithAuth(handlers.GetSiteThreatShieldHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/threat-shield", middleware.WithAuth(handlers.ToggleThreatShieldHandler))
 
+	// ── EDGE_NEXUS / L3 Edge Management ──────────────────────────────────────
+	mux.HandleFunc("GET /api/devices/{id}/edge-network", middleware.WithAuth(handlers.GetEdgeNetworkHandler))
+	mux.HandleFunc("PUT /api/devices/{id}/edge-network", middleware.WithAuth(handlers.PutEdgeNetworkHandler))
+	mux.HandleFunc("GET /api/devices/{id}/edge-dhcp", middleware.WithAuth(handlers.GetEdgeDHCPHandler))
+	mux.HandleFunc("PUT /api/devices/{id}/edge-dhcp", middleware.WithAuth(handlers.PutEdgeDHCPHandler))
+	mux.HandleFunc("GET /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.GetEdgeFirewallHandler))
+	mux.HandleFunc("PUT /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.PutEdgeFirewallHandler))
+
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Device-facing: authenticated by X-Site-Key header (no JWT)
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)
