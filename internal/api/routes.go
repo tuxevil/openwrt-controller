@@ -133,6 +133,12 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/preview", middleware.WithAuth(middleware.RequireAdmin(handlers.PreviewSyncHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/sync", middleware.WithAuth(middleware.RequireAdmin(handlers.SyncFleetHandler)))
 
+	// ── LANDLORD / Multi-Tenant Management (SuperAdmin only) ─────────────────
+	mux.HandleFunc("GET /api/landlord/tenants", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetTenantsHandler)))
+	mux.HandleFunc("POST /api/landlord/tenants", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.CreateTenantHandler)))
+	mux.HandleFunc("PUT /api/landlord/tenants/{id}/toggle", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.ToggleTenantHandler)))
+	mux.HandleFunc("GET /api/landlord/tenants/{id}/stats", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetTenantStatsHandler)))
+
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Device-facing: authenticated by X-Site-Key header (no JWT)
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)

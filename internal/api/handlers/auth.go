@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -38,12 +39,13 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fetch user from DB
+	// Fetch user from DB (now includes tenant_id)
 	var storedHash, role string
+	var tenantID sql.NullString
 	err := database.DB.QueryRow(
-		"SELECT password_hash, role FROM users WHERE username = $1",
+		"SELECT password_hash, role, tenant_id FROM users WHERE username = $1",
 		req.Username,
-	).Scan(&storedHash, &role)
+	).Scan(&storedHash, &role, &tenantID)
 
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -60,13 +62,27 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue JWT
+	// Build JWT claims
 	claims := jwt.MapClaims{
 		"sub":  req.Username,
 		"role": role,
 		"exp":  time.Now().Add(24 * time.Hour).Unix(),
 		"iat":  time.Now().Unix(),
 	}
+
+	// If user has a tenant binding, resolve the schema_alias and include it
+	var schemaAlias string
+	if tenantID.Valid {
+		err := database.DB.QueryRow(
+			"SELECT schema_alias FROM tenants WHERE id = $1 AND is_active = true",
+			tenantID.String,
+		).Scan(&schemaAlias)
+		if err == nil && schemaAlias != "" {
+			claims["tenant_id"] = tenantID.String
+			claims["schema_alias"] = schemaAlias
+		}
+	}
+
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	signed, err := token.SignedString(jwtSecret)
 	if err != nil {
@@ -74,12 +90,17 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	response := map[string]interface{}{
 		"token":    signed,
 		"username": req.Username,
 		"role":     role,
-	})
+	}
+	if schemaAlias != "" {
+		response["schema_alias"] = schemaAlias
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 // JWTSecret exposes the secret for use in middleware

@@ -9,12 +9,19 @@ const apiClient = axios.create({
   }
 })
 
-// Outgoing: attach JWT from localStorage to every request
+// Outgoing: attach JWT and tenant context to every request
 apiClient.interceptors.request.use((config) => {
   const token = localStorage.getItem('jwt_token')
   if (token) {
     config.headers['Authorization'] = `Bearer ${token}`
   }
+
+  // Inject tenant schema header when SuperAdmin is assuming a client identity
+  const assumedTenant = localStorage.getItem('assumed_tenant')
+  if (assumedTenant) {
+    config.headers['X-Tenant-Schema'] = assumedTenant
+  }
+
   return config
 })
 
@@ -26,6 +33,8 @@ apiClient.interceptors.response.use(
       localStorage.removeItem('jwt_token')
       localStorage.removeItem('username')
       localStorage.removeItem('role')
+      localStorage.removeItem('assumed_tenant')
+      localStorage.removeItem('assumed_tenant_name')
       router.push('/login')
     }
     return Promise.reject(error)
@@ -224,5 +233,19 @@ export default {
   },
   syncSiteFleet(siteId) {
     return apiClient.post(`/sites/${siteId}/orchestrator/sync`)
+  },
+
+  // ── LANDLORD / Multi-Tenant Management ────────────────────────────────────
+  getLandlordTenants() {
+    return apiClient.get('/landlord/tenants')
+  },
+  createLandlordTenant(name, schemaAlias) {
+    return apiClient.post('/landlord/tenants', { name, schema_alias: schemaAlias })
+  },
+  toggleLandlordTenant(tenantId, isActive) {
+    return apiClient.put(`/landlord/tenants/${tenantId}/toggle`, { is_active: isActive })
+  },
+  getLandlordTenantStats(tenantId) {
+    return apiClient.get(`/landlord/tenants/${tenantId}/stats`)
   }
 }

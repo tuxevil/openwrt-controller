@@ -2,16 +2,20 @@ package middleware
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	"openwrt-controller/internal/api/handlers"
+	"openwrt-controller/internal/database"
 )
 
 type contextKey string
+
 const claimsKey = contextKey("jwt_claims")
+const tenantSchemaKey = contextKey("tenant_schema")
 
 // WithAuth wraps a handler requiring a valid JWT Bearer token
 func WithAuth(next http.HandlerFunc) http.HandlerFunc {
@@ -57,11 +61,37 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
+
+		// ── Tenant Schema Resolution ─────────────────────────────────
+		// Priority: 1) X-Tenant-Schema header (SuperAdmin assuming identity)
+		//           2) schema_alias from JWT claims (tenant-scoped user)
+		tenantSchema := r.Header.Get("X-Tenant-Schema")
+		if tenantSchema == "" {
+			if sa, ok := claims["schema_alias"].(string); ok && sa != "" {
+				tenantSchema = sa
+			}
+		}
+
+		if tenantSchema != "" {
+			// Validate against tenants whitelist
+			var count int
+			err := database.DB.QueryRow(
+				"SELECT COUNT(*) FROM tenants WHERE schema_alias = $1 AND is_active = true",
+				tenantSchema,
+			).Scan(&count)
+			if err == nil && count > 0 {
+				fullSchema := "tenant_" + tenantSchema
+				// Set search_path for this request's queries
+				database.DB.Exec(fmt.Sprintf("SET search_path TO %s, public", fullSchema))
+				ctx = context.WithValue(ctx, tenantSchemaKey, fullSchema)
+			}
+		}
+
 		next(w, r.WithContext(ctx))
 	}
 }
 
-// RequireAdmin enforces that the JWT claims contain role == "ADMIN"
+// RequireAdmin enforces that the JWT claims contain role == "ADMIN" or "SUPERADMIN"
 func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := r.Context().Value(claimsKey).(jwt.MapClaims)
@@ -73,7 +103,15 @@ func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 		}
 
 		role, ok := claims["role"].(string)
-		if !ok || strings.ToUpper(role) != "ADMIN" {
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"ACCESS_DENIED"}`))
+			return
+		}
+
+		upperRole := strings.ToUpper(role)
+		if upperRole != "ADMIN" && upperRole != "SUPERADMIN" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusForbidden)
 			w.Write([]byte(`{"error":"ACCESS_DENIED"}`))
@@ -82,4 +120,36 @@ func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 
 		next(w, r)
 	}
+}
+
+// RequireSuperAdmin enforces that the JWT claims contain role == "SUPERADMIN".
+// Only SUPERADMIN users can access landlord-level operations.
+func RequireSuperAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := r.Context().Value(claimsKey).(jwt.MapClaims)
+		if !ok {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"FORBIDDEN: missing claims"}`))
+			return
+		}
+
+		role, ok := claims["role"].(string)
+		if !ok || strings.ToUpper(role) != "SUPERADMIN" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"ACCESS_DENIED: SUPERADMIN clearance required"}`))
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+// GetTenantSchema extracts the resolved tenant schema from the request context.
+func GetTenantSchema(r *http.Request) string {
+	if schema, ok := r.Context().Value(tenantSchemaKey).(string); ok {
+		return schema
+	}
+	return ""
 }

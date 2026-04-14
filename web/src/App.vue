@@ -1,13 +1,37 @@
 <script setup>
 import { ref, onMounted, onUnmounted, watch } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import api from './services/api'
 import ChatOpsTerminal from './components/ChatOpsTerminal.vue'
 
 const globalHealth = ref(0)
 let pulseInterval = null
 const route = useRoute()
+const appRouter = useRouter()
 const showChatOps = ref(false)
+
+// ── Landlord / Multi-tenant state ────────────────────────────────
+const assumedTenant = ref(localStorage.getItem('assumed_tenant') || '')
+const assumedTenantName = ref(localStorage.getItem('assumed_tenant_name') || '')
+
+const isSuperAdmin = () => {
+  try {
+    const token = localStorage.getItem('jwt_token')
+    if (!token) return false
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return payload.role && payload.role.toUpperCase() === 'SUPERADMIN'
+  } catch (e) {
+    return false
+  }
+}
+
+const exitAssumedIdentity = () => {
+  localStorage.removeItem('assumed_tenant')
+  localStorage.removeItem('assumed_tenant_name')
+  assumedTenant.value = ''
+  assumedTenantName.value = ''
+  appRouter.push('/landlord')
+}
 
 // ── Accordion state ──────────────────────────────────────────────
 // Only one sector open at a time. Default: guess from current route.
@@ -212,6 +236,9 @@ const fetchHealth = async () => {
 
       <!-- ── GLOBAL AREA ─────────────────────────────────────── -->
       <div class="mt-auto pt-3 border-t border-gray-800 flex flex-col gap-1.5">
+        <router-link v-if="isSuperAdmin()" to="/landlord" class="text-xs px-3 py-2 border-2 border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all block text-center uppercase tracking-[0.2em] clip-chamfer font-bold shadow-[0_0_10px_rgba(245,158,11,0.4)]">
+          👑 LANDLORD PANEL
+        </router-link>
         <router-link to="/orchestrator" class="text-xs px-3 py-2 border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
           ⚡ ORCHESTRATOR
         </router-link>
@@ -236,6 +263,23 @@ const fetchHealth = async () => {
 
     <!-- MAIN CONTENT -->
     <div class="flex-1 overflow-auto relative">
+      <!-- Assumed Tenant Identity Banner -->
+      <div
+        v-if="assumedTenant && isSuperAdmin() && $route.path !== '/landlord'"
+        class="sticky top-0 z-40 px-4 py-2 bg-amber-500/15 border-b-2 border-amber-500/50 flex items-center justify-between backdrop-blur-sm"
+      >
+        <div class="flex items-center gap-2">
+          <span class="text-amber-400 text-xs tracking-[0.15em] uppercase">
+            👑 OPERATING AS: <span class="font-bold text-white">{{ assumedTenantName }}</span>
+            <span class="text-amber-400/50 ml-1">(tenant_{{ assumedTenant }})</span>
+          </span>
+        </div>
+        <button
+          @click="exitAssumedIdentity"
+          class="px-3 py-1 border border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all text-[10px] tracking-widest uppercase font-bold"
+        >EXIT IDENTITY</button>
+      </div>
+
       <router-view />
     </div>
 

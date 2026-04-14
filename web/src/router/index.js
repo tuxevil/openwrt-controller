@@ -213,6 +213,11 @@ const router = createRouter({
       name: 'site-settings-unified',
       component: () => import('../views/SiteSettings.vue'),
       props: true
+    },
+    {
+      path: '/landlord',
+      name: 'landlord',
+      component: () => import('../views/LandlordDashboard.vue')
     }
   ]
 })

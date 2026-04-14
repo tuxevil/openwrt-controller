@@ -60,6 +60,10 @@ const jumpToSite = (siteId) => {
     <div class="flex justify-between items-center pb-2 border-b border-neon-green/30">
       <h1 class="text-4xl shadow-neon glitch-anim w-fit">GLOBAL_DASHBOARD</h1>
       <div class="flex gap-4">
+        <router-link v-if="isAdmin()" to="/landlord" class="px-4 py-2 border-2 border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all font-bold tracking-[0.2em] shadow-[0_0_12px_rgba(245,158,11,0.4)] active:scale-95 flex items-center gap-2 clip-chamfer">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
+          [ LANDLORD PANEL ]
+        </router-link>
         <router-link v-if="isAdmin()" to="/global/identity" class="px-4 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_#bc13fe] active:scale-95 flex items-center gap-2 clip-chamfer">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           [ IDENTITY MATRIX ]

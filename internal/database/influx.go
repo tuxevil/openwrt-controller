@@ -37,10 +37,13 @@ func InitInflux() error {
 
 	InfluxClient = influxdb2.NewClient(url, token)
 	
-	// Check connection
-	_, err := InfluxClient.Health(context.Background())
+	// Check connection with timeout to prevent blocking startup
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := InfluxClient.Health(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to connect to influxdb: %w", err)
+		log.Printf("Warning: InfluxDB health check failed (non-fatal): %v", err)
+		// Continue anyway — InfluxDB may become available later
 	}
 
 	WriteAPI = InfluxClient.WriteAPIBlocking(org, bucket)

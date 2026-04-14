@@ -17,10 +17,18 @@ async function handleLogin() {
 
   try {
     const res = await api.login(username.value, password.value)
-    const { token, username: user, role } = res.data
+    const { token, username: user, role, schema_alias } = res.data
     localStorage.setItem('jwt_token', token)
     localStorage.setItem('username', user)
     localStorage.setItem('role', role)
+    // If user is tenant-scoped, auto-set the tenant context
+    if (schema_alias) {
+      localStorage.setItem('assumed_tenant', schema_alias)
+      localStorage.setItem('assumed_tenant_name', user)
+    } else {
+      localStorage.removeItem('assumed_tenant')
+      localStorage.removeItem('assumed_tenant_name')
+    }
     router.push('/global')
   } catch (e) {
     denied.value = true
