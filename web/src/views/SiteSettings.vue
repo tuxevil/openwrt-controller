@@ -11,6 +11,8 @@ const tabs = [
   { id: 'wireless',  label: 'WIRELESS NETWORKS', icon: 'M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0', color: '#00ff41',   glow: 'shadow-[0_0_12px_rgba(0,255,65,0.4)]',   border: 'border-neon-green', text: 'text-neon-green', badge: 'GW + AP' },
   { id: 'services',  label: 'SERVICES',          icon: 'M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01', color: '#a855f7',   glow: 'shadow-[0_0_12px_rgba(168,85,247,0.4)]', border: 'border-purple-500', text: 'text-purple-400', badge: 'Gateway' },
   { id: 'security',  label: 'SECURITY & NAT',    icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', color: '#ff4444',   glow: 'shadow-[0_0_12px_rgba(255,68,68,0.4)]',  border: 'border-red-500',    text: 'text-red-400',    badge: 'Gateway' },
+  { id: 'sdwan',     label: 'SD-WAN & FAILOVER', icon: 'M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z', color: '#f97316', glow: 'shadow-[0_0_12px_rgba(249,115,22,0.4)]', border: 'border-orange-500', text: 'text-orange-400', badge: 'Gateway' },
+  { id: 'portal',    label: 'GUEST PORTAL',      icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: '#ec4899',   glow: 'shadow-[0_0_12px_rgba(236,72,153,0.4)]', border: 'border-pink-500', text: 'text-pink-400', badge: 'Gateway' },
   { id: 'credentials', label: 'CREDENTIALS',    icon: 'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z', color: '#f59e0b',   glow: 'shadow-[0_0_12px_rgba(245,158,11,0.4)]', border: 'border-amber-500',  text: 'text-amber-400',  badge: 'Admin' },
 ]
 const activeTabDef = computed(() => tabs.find(t => t.id === activeTab.value))
@@ -25,7 +27,40 @@ const config = ref({
   firewall_syn_flood: true, firewall_drop_invalid: true,
   dropbear_port: 22, dropbear_password_auth: true,
   threat_shield_enabled: false,
+  guest_portal_enabled: false,
 })
+
+// ─── SD-WAN / mwan3 interfaces ────────────────────────────────────────────────
+const wanInterfaces = ref([])
+const newWan = ref({ name: '', iface_name: '', track_ip: '8.8.8.8', tier: 1, weight: 1 })
+function addWan() {
+  if (!newWan.value.iface_name) return
+  const tier = wanInterfaces.value.length === 0 ? 1 : (Math.max(...wanInterfaces.value.map(w => w.tier)) + 1)
+  wanInterfaces.value.push({ ...newWan.value, tier })
+  newWan.value = { name: '', iface_name: '', track_ip: '8.8.8.8', tier: 1, weight: 1 }
+  dirty.value = true
+}
+function removeWan(i) { wanInterfaces.value.splice(i, 1); dirty.value = true }
+function moveWan(i, dir) {
+  const j = i + dir
+  if (j < 0 || j >= wanInterfaces.value.length) return
+  const tmp = wanInterfaces.value[i]
+  wanInterfaces.value[i] = wanInterfaces.value[j]
+  wanInterfaces.value[j] = tmp
+  // Re-assign tiers based on order
+  wanInterfaces.value.forEach((w, idx) => { w.tier = idx + 1 })
+  dirty.value = true
+}
+
+// ─── Guest Portal Settings & Vouchers ─────────────────────────────────────────
+const portalSettings = ref({
+  welcome_text: 'Welcome to Guest Wi-Fi', terms_text: 'By connecting you agree to the terms.',
+  bg_color: '#0a0a0a', redirect_url: '', enabled: false
+})
+const vouchers = ref([])
+const activeSessions = ref([])
+const newVoucherBatch = ref({ count: 10, duration_minutes: 120, quota_mb: 500 })
+const generatingVouchers = ref(false)
 
 // ─── Wireless SSIDs ───────────────────────────────────────────────────────────
 const wlans = ref([])
@@ -65,7 +100,7 @@ const syncSummary = ref(null)
 
 // ─── Load all data ────────────────────────────────────────────────────────────
 onMounted(async () => {
-  await Promise.all([loadSiteConfig(), loadWlans(), loadDevices(), loadLegacySettings()])
+  await Promise.all([loadSiteConfig(), loadWlans(), loadDevices(), loadLegacySettings(), loadPortalSettings(), loadVouchers()])
 })
 
 async function loadSiteConfig() {
@@ -85,6 +120,13 @@ async function loadSiteConfig() {
           portRules.value = typeof res.data.port_forwarding_rules === 'string' 
             ? JSON.parse(res.data.port_forwarding_rules) 
             : res.data.port_forwarding_rules || [] 
+        } catch {}
+      }
+      if (res.data.wan_interfaces) {
+        try {
+          wanInterfaces.value = typeof res.data.wan_interfaces === 'string'
+            ? JSON.parse(res.data.wan_interfaces)
+            : res.data.wan_interfaces || []
         } catch {}
       }
     }
@@ -113,6 +155,48 @@ async function loadLegacySettings() {
     const site = (sitesRes.data.data || []).find(s => s.id === props.site_id)
     if (site) autoAdopt.value = site.auto_adopt || false
   } catch (e) {}
+}
+
+async function loadPortalSettings() {
+  try {
+    const res = await api.client.get(`/sites/${props.site_id}/portal/settings`)
+    if (res.data) portalSettings.value = { ...portalSettings.value, ...res.data }
+  } catch (e) {
+    if(e.response && e.response.status === 404) {
+      portalSettings.value.enabled = false
+    } else {
+      console.error(e)
+    }
+  }
+}
+
+async function loadVouchers() {
+  try {
+    const res = await api.client.get(`/sites/${props.site_id}/portal/vouchers`)
+    vouchers.value = res.data || []
+  } catch (e) { console.error(e) }
+}
+
+async function generateVouchers() {
+  try {
+    generatingVouchers.value = true
+    await api.client.post(`/sites/${props.site_id}/portal/vouchers/generate`, newVoucherBatch.value)
+    await loadVouchers()
+    successMsg.value = `Successfully generated ${newVoucherBatch.value.count} new vouchers.`
+  } catch (e) {
+    error.value = 'Failed to generate vouchers'
+  } finally {
+    generatingVouchers.value = false
+  }
+}
+
+async function savePortalSettings() {
+  try {
+    await api.client.put(`/sites/${props.site_id}/portal/settings`, portalSettings.value)
+    successMsg.value = 'Portal settings saved.'
+  } catch(e) {
+    error.value = 'Failed to save portal settings'
+  }
 }
 
 // ─── Wireless SSID ops ────────────────────────────────────────────────────────
@@ -181,6 +265,7 @@ async function saveTemplate() {
       ...config.value,
       dhcp_reservations: staticLeases.value,
       port_forwarding_rules: portRules.value,
+      wan_interfaces: wanInterfaces.value,
     }
     await api.putSiteConfig(props.site_id, payload)
     dirty.value = false
@@ -211,6 +296,7 @@ async function applyRevision() {
       ...config.value,
       dhcp_reservations: staticLeases.value,
       port_forwarding_rules: portRules.value,
+      wan_interfaces: wanInterfaces.value,
     }
     await api.putSiteConfig(props.site_id, payload)
     dirty.value = false
@@ -743,6 +829,239 @@ async function toggleAutoAdopt() {
                   <span v-else-if="autoAdopt" class="text-amber-300 text-xs tracking-widest">ARMED — NEW DEVICES AUTO-ENROLL</span>
                   <span v-else class="text-gray-500 text-xs tracking-widest">SAFE — MANUAL ADOPTION REQUIRED</span>
                 </div>
+              </div>
+            </section>
+          </template>
+
+          <!-- ══════════════════════════════════════════════ -->
+          <!--  TAB: SD-WAN & FAILOVER                       -->
+          <!-- ══════════════════════════════════════════════ -->
+          <template v-if="activeTab === 'sdwan'">
+
+            <!-- Info banner -->
+            <div class="flex items-start gap-3 p-4 bg-orange-950/30 border border-orange-500/30 rounded-lg">
+              <svg class="w-5 h-5 text-orange-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+              <div>
+                <p class="text-xs text-orange-300 font-bold tracking-widest">SD-WAN / MWAN3 ORCHESTRATION ENGINE</p>
+                <p class="text-[10px] text-gray-500 mt-1 leading-relaxed">
+                  Define WAN uplinks in priority order (Tier 1 = primary). When ≥2 WANs are configured, the orchestrator will inject a full <span class="text-orange-400 font-mono">mwan3</span> failover ruleset into the Gateway node on next sync. mwan3 performs ICMP health-checks against the Track IP and fails over automatically.
+                </p>
+              </div>
+            </div>
+
+            <!-- WAN interface builder -->
+            <section class="panel-section" style="border-color: rgba(249,115,22,0.25)">
+              <div class="panel-header" style="color: #f97316">▸ WAN UPLINK REGISTRY <span class="text-[10px] text-gray-600 ml-2">(ordered by Tier — Tier 1 = Primary)</span></div>
+              <div class="p-5 space-y-3">
+
+                <!-- Add-WAN form row -->
+                <div class="grid grid-cols-5 gap-2 items-end">
+                  <div class="col-span-2">
+                    <label class="field-label">Link Label</label>
+                    <input v-model="newWan.name" id="sdwan-name" class="field text-xs" placeholder="Primary WAN / LTE Backup" style="border-color: rgba(249,115,22,0.4)" />
+                  </div>
+                  <div>
+                    <label class="field-label">Interface Name</label>
+                    <input v-model="newWan.iface_name" id="sdwan-iface" class="field text-xs font-mono" placeholder="wan / wan2 / lte" style="border-color: rgba(249,115,22,0.4)" />
+                  </div>
+                  <div>
+                    <label class="field-label">Track IP (ping)</label>
+                    <input v-model="newWan.track_ip" id="sdwan-trackip" class="field text-xs font-mono" placeholder="8.8.8.8" style="border-color: rgba(249,115,22,0.4)" />
+                  </div>
+                  <div>
+                    <label class="field-label">Weight</label>
+                    <div class="flex gap-1">
+                      <input v-model.number="newWan.weight" type="number" min="1" max="10" id="sdwan-weight" class="field text-xs font-mono" />
+                      <button id="sdwan-add-btn" @click="addWan" class="px-3 py-2 border border-orange-500 text-orange-400 text-xs font-bold hover:bg-orange-500/20 transition-colors rounded tracking-widest">+ ADD</button>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- WAN table -->
+                <div v-if="wanInterfaces.length" class="border border-orange-500/20 rounded overflow-hidden">
+                  <table class="w-full text-xs border-collapse">
+                    <thead class="text-orange-400 border-b border-orange-500/20 bg-orange-900/10">
+                      <tr>
+                        <th class="py-2 px-3 font-normal tracking-widest text-left">TIER</th>
+                        <th class="py-2 px-3 font-normal tracking-widest text-left">LABEL</th>
+                        <th class="py-2 px-3 font-normal tracking-widest text-left">INTERFACE</th>
+                        <th class="py-2 px-3 font-normal tracking-widest text-left">TRACK IP</th>
+                        <th class="py-2 px-3 font-normal tracking-widest text-left">WEIGHT</th>
+                        <th class="py-2 px-3 font-normal tracking-widest text-left">ACTIONS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(w, i) in wanInterfaces" :key="i"
+                          :class="i === 0 ? 'bg-orange-950/30' : 'bg-[#080810]'"
+                          class="border-b border-orange-900/30 transition-colors hover:bg-orange-900/20">
+                        <td class="py-3 px-3">
+                          <span class="inline-flex items-center justify-center w-7 h-7 rounded border font-bold text-[11px]"
+                                :style="i===0 ? 'border-color:#f97316;color:#f97316;background:rgba(249,115,22,0.15)' : 'border-color:#4b5563;color:#6b7280;background:rgba(75,85,99,0.1)'">
+                            T{{ w.tier }}
+                          </span>
+                        </td>
+                        <td class="py-3 px-3">
+                          <span class="text-gray-300">{{ w.name || '—' }}</span>
+                          <span v-if="i===0" class="ml-2 text-[9px] px-1.5 py-0.5 bg-orange-500/20 text-orange-400 border border-orange-500/40 rounded font-bold tracking-widest">PRIMARY</span>
+                          <span v-else class="ml-2 text-[9px] px-1.5 py-0.5 bg-gray-800 text-gray-500 border border-gray-700 rounded font-bold tracking-widest">STANDBY</span>
+                        </td>
+                        <td class="py-3 px-3 font-mono text-orange-300">{{ w.iface_name }}</td>
+                        <td class="py-3 px-3 font-mono text-gray-400">{{ w.track_ip }}</td>
+                        <td class="py-3 px-3 text-gray-400">{{ w.weight }}</td>
+                        <td class="py-3 px-3">
+                          <div class="flex items-center gap-1">
+                            <button @click="moveWan(i, -1)" :disabled="i===0" class="px-2 py-1 text-gray-500 hover:text-orange-400 disabled:opacity-20 transition-colors rounded border border-gray-700 hover:border-orange-500/50 text-[10px]" title="Move up">↑</button>
+                            <button @click="moveWan(i, 1)" :disabled="i===wanInterfaces.length-1" class="px-2 py-1 text-gray-500 hover:text-orange-400 disabled:opacity-20 transition-colors rounded border border-gray-700 hover:border-orange-500/50 text-[10px]" title="Move down">↓</button>
+                            <button @click="removeWan(i)" class="px-2 py-1 text-red-500/70 hover:text-red-400 hover:bg-red-900/20 transition-colors rounded border border-gray-700/50 text-[10px]" title="Remove">✕</button>
+                          </div>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+                <p v-else class="text-gray-700 text-xs text-center py-6 border border-dashed border-gray-800 rounded">>> NO WAN UPLINKS CONFIGURED — ADD AT LEAST 2 TO ENABLE MWAN3</p>
+              </div>
+            </section>
+
+            <!-- mwan3 Policy Preview -->
+            <section class="panel-section" style="border-color: rgba(249,115,22,0.25)">
+              <div class="panel-header" style="color: #f97316">▸ FAILOVER POLICY PREVIEW <span class="text-[10px] text-gray-600 ml-2">(generated mwan3 config)</span></div>
+              <div class="p-5">
+                <div v-if="wanInterfaces.length >= 2" class="font-mono text-[11px] leading-relaxed space-y-1">
+                  <p class="text-gray-600">config globals</p>
+                  <p class="ml-4 text-gray-500">&nbsp;option mmx_mask '0x3F00'</p>
+                  <template v-for="(w, i) in wanInterfaces" :key="'p'+i">
+                    <p class="text-gray-600 mt-2">config interface '<span class="text-orange-400">{{ w.iface_name }}</span>'</p>
+                    <p class="ml-4 text-gray-500">&nbsp;option enabled '1'</p>
+                    <p class="ml-4 text-gray-500">&nbsp;list track_ip '<span class="text-orange-300">{{ w.track_ip || '8.8.8.8' }}</span>'</p>
+                    <p class="ml-4 text-gray-500">&nbsp;option interval '5'</p>
+                    <p class="ml-4 text-gray-500">&nbsp;option reliability '1'</p>
+                    <p class="text-gray-600 mt-1">config member '<span class="text-orange-400">{{ w.iface_name }}_m{{ w.tier }}_{{ w.weight || 1 }}</span>'</p>
+                    <p class="ml-4 text-gray-500">&nbsp;option interface '<span class="text-orange-300">{{ w.iface_name }}</span>'</p>
+                    <p class="ml-4 text-gray-500">&nbsp;option metric '<span :class="i===0?'text-green-400':'text-yellow-500'">{{ w.tier }}</span>'</p>
+                    <p class="ml-4 text-gray-500">&nbsp;option weight '{{ w.weight || 1 }}'</p>
+                  </template>
+                  <p class="text-gray-600 mt-2">config policy '<span class="text-orange-400">failover</span>'</p>
+                  <p v-for="(w, i) in wanInterfaces" :key="'m'+i" class="ml-4 text-gray-500">
+                    &nbsp;list use_member '<span class="text-orange-300">{{ w.iface_name }}_m{{ w.tier }}_{{ w.weight || 1 }}</span>'
+                    <span v-if="i===0" class="ml-2 text-green-400 text-[9px]">← active</span>
+                    <span v-else class="ml-2 text-yellow-600 text-[9px]">← standby</span>
+                  </p>
+                  <p class="text-gray-600 mt-2">config rule '<span class="text-orange-400">default_rule</span>'</p>
+                  <p class="ml-4 text-gray-500">&nbsp;option use_policy '<span class="text-orange-300">failover</span>'</p>
+                  <p class="ml-4 text-gray-500">&nbsp;option proto 'all'</p>
+                </div>
+                <div v-else class="flex items-center gap-3 text-gray-700 text-xs">
+                  <span class="text-orange-600 text-lg">⚠</span>
+                  <span>Configure <strong class="text-orange-500">at least 2 WAN uplinks</strong> to generate a valid mwan3 failover policy.</span>
+                </div>
+              </div>
+            </section>
+
+          </template>
+
+          <!-- ══════════════════════════════════════════════ -->
+          <!--  TAB: GUEST PORTAL                            -->
+          <!-- ══════════════════════════════════════════════ -->
+          <template v-if="activeTab === 'portal'">
+            <!-- Portal Orchestration Toggle -->
+            <section class="panel-section" style="border-color: rgba(236,72,153,0.2)">
+              <div class="panel-header" style="color: #ec4899">▸ DEPLOYMENT ORCHESTRATION</div>
+              <div class="p-5 flex items-center justify-between">
+                <div>
+                  <p class="text-sm text-gray-300">Gateway Captive Portal (FAS)</p>
+                  <p class="text-[10px] text-gray-600 mt-0.5">Injects OpenNDS OpenWrt config on Gateway to intercept traffic</p>
+                </div>
+                <div class="flex border border-pink-500/50 cursor-pointer select-none overflow-hidden rounded" @click="config.guest_portal_enabled = !config.guest_portal_enabled; dirty = true">
+                  <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.guest_portal_enabled ? 'bg-transparent text-gray-600' : 'bg-gray-800 text-gray-400'">[ OFF ]</div>
+                  <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.guest_portal_enabled ? 'bg-pink-600 text-white shadow-[0_0_10px_rgba(236,72,153,0.5)]' : 'bg-transparent text-gray-600'">[ ON ]</div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Portal Designer -->
+            <section class="panel-section" style="border-color: rgba(236,72,153,0.2)">
+              <div class="panel-header" style="color: #ec4899; display: flex; justify-content: space-between;">
+                <span>▸ PORTAL DESIGNER</span>
+                <button @click="savePortalSettings" class="text-[10px] bg-pink-500/20 text-pink-400 border border-pink-500/50 px-2 py-0.5 rounded hover:bg-pink-500 hover:text-white transition-all">SAVE DESIGN</button>
+              </div>
+              <div class="p-5 grid grid-cols-2 gap-6">
+                <div class="space-y-4">
+                  <div class="flex items-center justify-between">
+                    <div>
+                      <p class="text-sm text-gray-300">Web Dashboard API Enabled</p>
+                      <p class="text-[10px] text-gray-600">Serve landing page from controller API</p>
+                    </div>
+                    <input type="checkbox" v-model="portalSettings.enabled" class="accent-pink-500 w-4 h-4" />
+                  </div>
+                  <div>
+                    <label class="field-label">Welcome Text</label>
+                    <input v-model="portalSettings.welcome_text" class="field text-xs text-pink-300" style="border-color: rgba(236,72,153,0.3)" />
+                  </div>
+                  <div>
+                    <label class="field-label">Terms Text</label>
+                    <textarea v-model="portalSettings.terms_text" class="field text-xs h-16 text-pink-300" style="border-color: rgba(236,72,153,0.3)"></textarea>
+                  </div>
+                  <div>
+                    <label class="field-label">Background Color</label>
+                    <div class="flex gap-2">
+                      <input v-model="portalSettings.bg_color" type="color" class="h-8 w-12 bg-transparent border-0 cursor-pointer" />
+                      <input v-model="portalSettings.bg_color" class="field text-xs flex-1 text-pink-300 font-mono" style="border-color: rgba(236,72,153,0.3)" />
+                    </div>
+                  </div>
+                </div>
+                <!-- Mini Preview -->
+                <div class="border border-gray-700/50 rounded flex flex-col overflow-hidden relative shadow-[0_0_20px_rgba(236,72,153,0.1)]">
+                  <div class="bg-gray-800 text-[10px] text-gray-400 px-2 py-1 border-b border-gray-700/50 flex gap-2"><span class="w-2 h-2 rounded-full bg-red-400"></span><span class="w-2 h-2 rounded-full bg-yellow-400"></span><span class="w-2 h-2 rounded-full bg-green-400"></span> PREVIEW</div>
+                  <div class="flex-1 flex flex-col items-center justify-center p-4 text-center transition-colors font-mono" :style="`background-color: ${portalSettings.bg_color}`">
+                    <h3 class="text-white font-bold mb-2 break-all">{{ portalSettings.welcome_text }}</h3>
+                    <p class="text-gray-300 text-[10px] mb-4 overflow-hidden h-8 break-all">{{ portalSettings.terms_text }}</p>
+                    <div class="w-full max-w-[150px] bg-black text-green-400 text-xs border border-gray-600 p-2 rounded mb-3 opacity-50 select-none">CODE...</div>
+                    <div class="w-full max-w-[150px] bg-pink-500 text-white font-bold text-xs p-2 rounded select-none shadow-[0_0_8px_rgba(236,72,153,0.6)]">CONNECT</div>
+                  </div>
+                </div>
+              </div>
+            </section>
+
+            <!-- Voucher Generator -->
+            <section class="panel-section" style="border-color: rgba(236,72,153,0.2)">
+              <div class="panel-header" style="color: #ec4899">▸ VOUCHER BATCH GENERATOR</div>
+              <div class="p-5 flex gap-4 items-end bg-pink-900/10 border-b border-pink-500/20">
+                <div>
+                  <label class="field-label">Quantity</label>
+                  <input v-model.number="newVoucherBatch.count" type="number" class="field text-xs text-pink-400" />
+                </div>
+                <div>
+                  <label class="field-label">Duration (Mins)</label>
+                  <input v-model.number="newVoucherBatch.duration_minutes" type="number" class="field text-xs text-pink-400" />
+                </div>
+                <div>
+                  <label class="field-label">Quota (MB)</label>
+                  <input v-model.number="newVoucherBatch.quota_mb" type="number" class="field text-xs text-pink-400" />
+                </div>
+                <button @click="generateVouchers" :disabled="generatingVouchers" class="px-5 py-2 h-[38px] w-48 border border-pink-500 bg-pink-500/10 text-pink-400 font-bold text-xs hover:bg-pink-500 hover:text-white transition-all disabled:opacity-50">
+                  {{ generatingVouchers ? 'GENERATING...' : 'GENERATE BATCH' }}
+                </button>
+              </div>
+              <div class="p-5 max-h-[300px] overflow-y-auto">
+                <table class="w-full text-xs border-collapse font-mono">
+                  <thead class="text-pink-400 border-b border-pink-500/20 sticky top-0 bg-[#080810]">
+                    <tr><th class="py-2 text-left">CODE</th><th class="py-2 text-left">TIME</th><th class="py-2 text-left">STATUS</th><th class="py-2 text-left">USED IP/MAC</th><th class="py-2 text-left">GENERATED</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="v in vouchers" :key="v.id" class="border-b border-gray-800/30 hover:bg-pink-500/5">
+                      <td class="py-2.5 text-white font-bold tracking-widest text-[14px]">{{ v.code.toUpperCase() }}</td>
+                      <td class="py-2.5 text-gray-400">{{ v.duration_minutes }}m ({{ v.quota_mb }} MB)</td>
+                      <td class="py-2.5">
+                        <span v-if="!v.is_used" class="text-green-400 border border-green-500/30 bg-green-900/20 px-2 py-0.5 rounded text-[10px]">AVAILABLE</span>
+                        <span v-else class="text-gray-500 border border-gray-600 bg-gray-800 px-2 py-0.5 rounded text-[10px]">USED</span>
+                      </td>
+                      <td class="py-2.5 text-gray-400 text-[10px]">{{ v.is_used ? v.used_by_mac : '—' }}</td>
+                      <td class="py-2.5 text-gray-500 text-[10px]">{{ new Date(v.created_at).toLocaleString() }}</td>
+                    </tr>
+                    <tr v-if="!vouchers.length"><td colspan="5" class="py-6 text-center text-gray-600 border border-gray-800/50 bg-gray-900/20 rounded mt-4">>> REPOSITORY EMPTY</td></tr>
+                  </tbody>
+                </table>
               </div>
             </section>
           </template>

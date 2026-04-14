@@ -246,6 +246,30 @@ func createTables() error {
 		port_forwarding_rules JSONB DEFAULT '[]',
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS guest_vouchers (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		site_id UUID REFERENCES sites(id),
+		code VARCHAR(10) UNIQUE NOT NULL,
+		duration_minutes INT NOT NULL,
+		quota_mb INT,
+		is_used BOOLEAN DEFAULT false,
+		used_by_mac VARCHAR(50),
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP WITH TIME ZONE,
+		used_at TIMESTAMP WITH TIME ZONE
+	);
+
+	CREATE TABLE IF NOT EXISTS portal_settings (
+		site_id UUID PRIMARY KEY REFERENCES sites(id),
+		enabled BOOLEAN DEFAULT false,
+		welcome_text TEXT,
+		terms_text TEXT,
+		bg_color VARCHAR(20) DEFAULT '#0a0a0a',
+		logo_url TEXT,
+		redirect_url TEXT,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	_, err := DB.Exec(query)
 	if err != nil {
@@ -267,6 +291,8 @@ func createTables() error {
 		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS dhcp_reservations JSONB DEFAULT '[]'",
 		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS port_forwarding_rules JSONB DEFAULT '[]'",
 		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false",
+		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS guest_portal_enabled BOOLEAN DEFAULT false",
+		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS wan_interfaces JSONB DEFAULT '[]'",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {

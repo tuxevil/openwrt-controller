@@ -12,9 +12,12 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── Public routes (no auth) ──────────────────────────────────────────────
 	mux.HandleFunc("POST /api/auth/login", handlers.LoginHandler)
-	// Telemetry is device-authenticated (X-Device-Token), not user-authenticated
 	mux.HandleFunc("POST /api/telemetry", handlers.TelemetryHandler)
 	mux.HandleFunc("GET /api/devices/{device_id}/config", handlers.GetDeviceConfigHandler)
+
+	// ── Public Guest Portal routes ───────────────────────────────────────────
+	mux.HandleFunc("GET /portal/auth/{site_id}", handlers.GetPortalAuthHandler)
+	mux.HandleFunc("POST /api/public/portal/{site_id}/validate", handlers.ValidatePortalHandler)
 
 	// ── Protected API routes ─────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/global/health", middleware.WithAuth(handlers.GetGlobalHealthHandler))
@@ -59,6 +62,12 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/sites/{site_id}/profile", middleware.WithAuth(handlers.AssignSiteProfileHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/rf-optimization", middleware.WithAuth(handlers.GetRFOptimizationHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rf-fix", middleware.WithAuth(handlers.RunRFFixHandler))
+
+	// ── GUEST PORTAL / Captive Portal ────────────────────────────────────────
+	mux.HandleFunc("GET /api/sites/{site_id}/portal/settings", middleware.WithAuth(handlers.GetPortalSettingsHandler))
+	mux.HandleFunc("PUT /api/sites/{site_id}/portal/settings", middleware.WithAuth(handlers.UpdatePortalSettingsHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/portal/vouchers", middleware.WithAuth(handlers.GetPortalVouchersHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/portal/vouchers/generate", middleware.WithAuth(handlers.GeneratePortalVouchersHandler))
 
 	// ── MATRIX_ANALYTICS / Deep Telemetry Insights ───────────────────────────
 	mux.HandleFunc("GET /api/sites/{site_id}/analytics/throughput", middleware.WithAuth(handlers.GetAnalyticsThroughputHandler))

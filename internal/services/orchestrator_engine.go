@@ -11,6 +11,15 @@ import (
 // Renders UCI commands from a site_config template, differentiated by device role.
 // Roles: "Gateway" (full L3 + DHCP + firewall), "AP" (wireless + system), "IoT_Node" (system only)
 
+// WANInterface represents a single WAN uplink for mwan3 SD-WAN / multi-WAN failover.
+type WANInterface struct {
+	Name      string `json:"name"`       // human label, e.g. "Primary WAN"
+	IfaceName string `json:"iface_name"` // UCI/Linux interface name, e.g. "wan", "wan2", "lte"
+	TrackIP   string `json:"track_ip"`   // IP to ping for link health, e.g. "8.8.8.8"
+	Tier      int    `json:"tier"`       // mwan3 member metric (1 = primary, 2+ = backup)
+	Weight    int    `json:"weight"`     // mwan3 member weight (1 = default)
+}
+
 // SiteConfig represents the desired state of a site.
 type SiteConfig struct {
 	ID                   string `json:"id"`
@@ -34,6 +43,10 @@ type SiteConfig struct {
 	DHCPReservations     json.RawMessage `json:"dhcp_reservations"`
 	PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
 	ThreatShieldEnabled  bool            `json:"threat_shield_enabled"`
+	GuestPortalEnabled   bool            `json:"guest_portal_enabled"`
+	// SD-WAN: array of WAN uplinks for mwan3 multi-WAN / failover orchestration.
+	// If len >= 2 the Gateway will receive a full mwan3 ruleset.
+	WANInterfaces json.RawMessage `json:"wan_interfaces"`
 }
 
 // DeviceRoleInfo holds the device identity and role for rendering.
@@ -172,6 +185,28 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 					}
 				}
 			}
+
+			// ── GUEST PORTAL (Gateway only) ──────────────────────────────
+			if cfg.GuestPortalEnabled {
+				cmds = append(cmds,
+					UciCommand{Action: "set", Config: "opennds", Section: "@opennds[0]", Option: "enabled", Value: "1"},
+					UciCommand{Action: "set", Config: "opennds", Section: "@opennds[0]", Option: "gatewayinterface", Value: "br-lan"},
+					// Assuming the controller URL is known, or just fasremoteip
+					// The controller could be the WAN IP or a known DNS
+					// For now, setting fasremoteip to the controller's IP via env or a placeholder
+					UciCommand{Action: "set", Config: "opennds", Section: "@opennds[0]", Option: "fasport", Value: "3000"},
+					UciCommand{Action: "set", Config: "opennds", Section: "@opennds[0]", Option: "faspath", Value: "/portal/auth"},
+					// Will require manual setup of fasremoteip on OpenNDS
+				)
+			}
+
+			// ── SD-WAN / mwan3 (Gateway only, ≥2 WANs) ───────────────────
+			if len(cfg.WANInterfaces) > 2 { // '[]' is 2 bytes — only act when populated
+				var wans []WANInterface
+				if err := json.Unmarshal(cfg.WANInterfaces, &wans); err == nil && len(wans) >= 2 {
+					cmds = append(cmds, renderMwan3Commands(wans)...)
+				}
+			}
 		}
 
 		// ── DROPBEAR (ALL roles) ─────────────────────────────────────
@@ -197,6 +232,102 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 	return results
 }
 
+// renderMwan3Commands generates the full mwan3 UCI command set for failover SD-WAN.
+// It configures:
+//  1. network interfaces (one WAN per uplink, proto dhcp)
+//  2. mwan3 interface tracking (ping checks) per WAN
+//  3. mwan3 members (iface + metric + weight)
+//  4. mwan3 policy "failover" — strictly ordered by Tier
+//  5. mwan3 default rule pointing to the policy
+func renderMwan3Commands(wans []WANInterface) []UciCommand {
+	var cmds []UciCommand
+
+	// Ensure mwan3 globals exist
+	cmds = append(cmds,
+		UciCommand{Action: "set", Config: "mwan3", Section: "globals", Option: "mmx_mask", Value: "0x3F00"},
+	)
+
+	for _, w := range wans {
+		iface := w.IfaceName
+		if iface == "" {
+			continue
+		}
+		trackIP := w.TrackIP
+		if trackIP == "" {
+			trackIP = "8.8.8.8"
+		}
+		weight := w.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		tier := w.Tier
+		if tier <= 0 {
+			tier = 1
+		}
+
+		// Network interface (idempotent — won't break if already exists)
+		cmds = append(cmds,
+			UciCommand{Action: "set", Config: "network", Section: iface, Option: "proto", Value: "dhcp"},
+			UciCommand{Action: "set", Config: "network", Section: iface, Option: "ifname", Value: iface},
+		)
+
+		// mwan3 interface section
+		memberName := fmt.Sprintf("%s_m%d_%d", iface, tier, weight)
+		cmds = append(cmds,
+			// mwan3.interface tracking
+			UciCommand{Action: "set", Config: "mwan3", Section: iface, Option: "", Value: "interface"},
+			UciCommand{Action: "set", Config: "mwan3", Section: iface, Option: "enabled", Value: "1"},
+			UciCommand{Action: "set", Config: "mwan3", Section: iface, Option: "count", Value: "1"},
+			UciCommand{Action: "set", Config: "mwan3", Section: iface, Option: "timeout", Value: "2"},
+			UciCommand{Action: "set", Config: "mwan3", Section: iface, Option: "interval", Value: "5"},
+			UciCommand{Action: "set", Config: "mwan3", Section: iface, Option: "reliability", Value: "1"},
+			UciCommand{Action: "add_list", Config: "mwan3", Section: iface, Option: "track_ip", Value: trackIP},
+			// mwan3 member
+			UciCommand{Action: "set", Config: "mwan3", Section: memberName, Option: "", Value: "member"},
+			UciCommand{Action: "set", Config: "mwan3", Section: memberName, Option: "interface", Value: iface},
+			UciCommand{Action: "set", Config: "mwan3", Section: memberName, Option: "metric", Value: fmt.Sprintf("%d", tier)},
+			UciCommand{Action: "set", Config: "mwan3", Section: memberName, Option: "weight", Value: fmt.Sprintf("%d", weight)},
+		)
+	}
+
+	// Build member list in tier order for the failover policy
+	memberList := make([]string, 0, len(wans))
+	for _, w := range wans {
+		if w.IfaceName == "" {
+			continue
+		}
+		weight := w.Weight
+		if weight <= 0 {
+			weight = 1
+		}
+		tier := w.Tier
+		if tier <= 0 {
+			tier = 1
+		}
+		memberList = append(memberList, fmt.Sprintf("%s_m%d_%d", w.IfaceName, tier, weight))
+	}
+
+	// mwan3 policy: strict failover (members ordered by tier via metric)
+	cmds = append(cmds,
+		UciCommand{Action: "set", Config: "mwan3", Section: "failover", Option: "", Value: "policy"},
+	)
+	for _, m := range memberList {
+		cmds = append(cmds,
+			UciCommand{Action: "add_list", Config: "mwan3", Section: "failover", Option: "use_member", Value: m},
+		)
+	}
+
+	// mwan3 default rule → failover policy
+	cmds = append(cmds,
+		UciCommand{Action: "set", Config: "mwan3", Section: "default_rule", Option: "", Value: "rule"},
+		UciCommand{Action: "set", Config: "mwan3", Section: "default_rule", Option: "proto", Value: "all"},
+		UciCommand{Action: "set", Config: "mwan3", Section: "default_rule", Option: "sticky", Value: "0"},
+		UciCommand{Action: "set", Config: "mwan3", Section: "default_rule", Option: "use_policy", Value: "failover"},
+	)
+
+	return cmds
+}
+
 // ─── Database Operations ─────────────────────────────────────────────────────
 
 func GetSiteConfig(siteID string) (*SiteConfig, error) {
@@ -208,7 +339,9 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 		       firewall_syn_flood, firewall_drop_invalid,
 		       dropbear_port, dropbear_password_auth,
 		       dhcp_reservations, port_forwarding_rules,
-		       COALESCE(threat_shield_enabled, false)
+		       COALESCE(threat_shield_enabled, false),
+		       COALESCE(guest_portal_enabled, false),
+		       COALESCE(wan_interfaces, '[]'::jsonb)
 		FROM site_configs WHERE site_id = $1
 	`, siteID).Scan(
 		&sc.ID, &sc.SiteID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
@@ -217,7 +350,8 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 		&sc.FirewallSynFlood, &sc.FirewallDropInvalid,
 		&sc.DropbearPort, &sc.DropbearPasswordAuth,
 		&sc.DHCPReservations, &sc.PortForwardingRules,
-		&sc.ThreatShieldEnabled,
+		&sc.ThreatShieldEnabled, &sc.GuestPortalEnabled,
+		&sc.WANInterfaces,
 	)
 	if err != nil {
 		return nil, err
@@ -226,6 +360,10 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 }
 
 func UpsertSiteConfig(sc SiteConfig) error {
+	// Ensure wan_interfaces is a valid JSON array — never NULL
+	if len(sc.WANInterfaces) == 0 {
+		sc.WANInterfaces = json.RawMessage(`[]`)
+	}
 	_, err := database.DB.Exec(`
 		INSERT INTO site_configs (
 			site_id, global_ssid, global_wpa_key, global_encryption,
@@ -233,8 +371,9 @@ func UpsertSiteConfig(sc SiteConfig) error {
 			dns_primary, dns_secondary, timezone, hostname_prefix,
 			firewall_syn_flood, firewall_drop_invalid,
 			dropbear_port, dropbear_password_auth,
-			dhcp_reservations, port_forwarding_rules, threat_shield_enabled, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,CURRENT_TIMESTAMP)
+			dhcp_reservations, port_forwarding_rules, threat_shield_enabled, guest_portal_enabled,
+			wan_interfaces, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
 			global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
 			global_encryption=EXCLUDED.global_encryption,
@@ -250,13 +389,16 @@ func UpsertSiteConfig(sc SiteConfig) error {
 			dhcp_reservations=EXCLUDED.dhcp_reservations,
 			port_forwarding_rules=EXCLUDED.port_forwarding_rules,
 			threat_shield_enabled=EXCLUDED.threat_shield_enabled,
+			guest_portal_enabled=EXCLUDED.guest_portal_enabled,
+			wan_interfaces=EXCLUDED.wan_interfaces,
 			updated_at=CURRENT_TIMESTAMP
 	`, sc.SiteID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
 		sc.LanIPAddr, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
 		sc.DNSPrimary, sc.DNSSecondary, sc.Timezone, sc.HostnamePrefix,
 		sc.FirewallSynFlood, sc.FirewallDropInvalid,
 		sc.DropbearPort, sc.DropbearPasswordAuth,
-		sc.DHCPReservations, sc.PortForwardingRules, sc.ThreatShieldEnabled,
+		sc.DHCPReservations, sc.PortForwardingRules, sc.ThreatShieldEnabled, sc.GuestPortalEnabled,
+		sc.WANInterfaces,
 	)
 	return err
 }
