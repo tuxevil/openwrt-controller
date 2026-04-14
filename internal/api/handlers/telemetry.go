@@ -239,6 +239,26 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			if len(enriched) == 0 {
 				return
 			}
+			
+			// Extract flow analytics for dashboard matrix
+			var analytics []database.FlowAnalytic
+			for _, e := range enriched {
+				// Only keep external traffic flows for analytics, or we take all
+				// e.Dst is already filtered by non-private whitelist in ProcessFlowSense, so enriched contains mainly outbound.
+				if e.SampleSrc != "" {
+					analytics = append(analytics, database.FlowAnalytic{
+						MAC:   e.SampleSrc,
+						Port:  e.Dport,
+						Conns: e.Conns,
+					})
+				}
+			}
+			if len(analytics) > 0 {
+				if err := database.WriteFlowAnalyticsBatch(devID, analytics); err != nil {
+					log.Printf("Error writing flow analytics to influx: %v\n", err)
+				}
+			}
+
 			enrichedJSON, err := json.Marshal(enriched)
 			if err != nil {
 				return

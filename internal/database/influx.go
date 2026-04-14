@@ -203,3 +203,36 @@ func CloseInflux() {
 		InfluxClient.Close()
 	}
 }
+
+type FlowAnalytic struct {
+	MAC   string
+	Port  int
+	Conns int
+}
+
+func WriteFlowAnalyticsBatch(deviceID string, flows []FlowAnalytic) error {
+	if WriteAPI == nil {
+		return fmt.Errorf("influx write api is not initialized")
+	}
+
+	if len(flows) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	for _, f := range flows {
+		p := influxdb2.NewPointWithMeasurement("client_flows").
+			AddTag("device_id", deviceID).
+			AddTag("mac", f.MAC).
+			AddTag("dport", fmt.Sprintf("%d", f.Port)).
+			AddField("conns", f.Conns).
+			SetTime(now)
+		
+		err := WriteAPI.WritePoint(context.Background(), p)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

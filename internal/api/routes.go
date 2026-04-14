@@ -60,6 +60,11 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/rf-optimization", middleware.WithAuth(handlers.GetRFOptimizationHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rf-fix", middleware.WithAuth(handlers.RunRFFixHandler))
 
+	// ── MATRIX_ANALYTICS / Deep Telemetry Insights ───────────────────────────
+	mux.HandleFunc("GET /api/sites/{site_id}/analytics/throughput", middleware.WithAuth(handlers.GetAnalyticsThroughputHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/analytics/top-talkers", middleware.WithAuth(handlers.GetAnalyticsTopTalkersHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/analytics/protocols", middleware.WithAuth(handlers.GetAnalyticsProtocolsHandler))
+
 	// ── VPN Matrix / SECURE_TUNNEL ───────────────────────────────────────────
 	mux.HandleFunc("GET /api/sites/{site_id}/vpn", middleware.WithAuth(handlers.GetVPNConfigHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/vpn/endpoint", middleware.WithAuth(handlers.UpdateVPNEndpointHandler))

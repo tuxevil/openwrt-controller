@@ -21,6 +21,7 @@ import BandwidthSentry from '../views/BandwidthSentry.vue'
 import IdentityMatrix from '../views/IdentityMatrix.vue'
 import EdgeNexus from '../views/EdgeNexus.vue'
 import OmadaMigrator from '../views/OmadaMigrator.vue'
+import AdvancedTelemetry from '../views/AdvancedTelemetry.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -107,6 +108,12 @@ const router = createRouter({
       path: '/site/:site_id/echolocation',
       name: 'site-echolocation',
       component: EchoLocation,
+      props: true
+    },
+    {
+      path: '/site/:site_id/advanced-telemetry',
+      name: 'site-advanced-telemetry',
+      component: AdvancedTelemetry,
       props: true
     },
     {
