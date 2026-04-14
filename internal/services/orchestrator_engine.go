@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"openwrt-controller/internal/database"
@@ -29,7 +30,9 @@ type SiteConfig struct {
 	FirewallSynFlood    bool   `json:"firewall_syn_flood"`
 	FirewallDropInvalid bool   `json:"firewall_drop_invalid"`
 	DropbearPort        int    `json:"dropbear_port"`
-	DropbearPasswordAuth bool  `json:"dropbear_password_auth"`
+	DropbearPasswordAuth bool   `json:"dropbear_password_auth"`
+	DHCPReservations     []byte `json:"dhcp_reservations"`
+	PortForwardingRules  []byte `json:"port_forwarding_rules"`
 }
 
 // DeviceRoleInfo holds the device identity and role for rendering.
@@ -133,6 +136,41 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 				UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "syn_flood", Value: synFlood},
 				UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "drop_invalid", Value: dropInvalid},
 			)
+
+			// ── DHCP RESERVATIONS (Gateway only) ─────────────────────────
+			if len(cfg.DHCPReservations) > 0 {
+				var dhcpList []StaticLease
+				if err := json.Unmarshal(cfg.DHCPReservations, &dhcpList); err == nil && len(dhcpList) > 0 {
+					for _, dl := range dhcpList {
+						cmds = append(cmds,
+							UciCommand{Action: "add", Config: "dhcp", Section: "host", Option: "", Value: ""},
+							UciCommand{Action: "set", Config: "dhcp", Section: "@host[-1]", Option: "name", Value: dl.Name},
+							UciCommand{Action: "set", Config: "dhcp", Section: "@host[-1]", Option: "mac", Value: dl.MAC},
+							UciCommand{Action: "set", Config: "dhcp", Section: "@host[-1]", Option: "ip", Value: dl.IP},
+						)
+					}
+				}
+			}
+
+			// ── PORT FORWARDING (Gateway only) ───────────────────────────
+			if len(cfg.PortForwardingRules) > 0 {
+				var pfList []PortForwardRule
+				if err := json.Unmarshal(cfg.PortForwardingRules, &pfList); err == nil && len(pfList) > 0 {
+					for _, pf := range pfList {
+						cmds = append(cmds,
+							UciCommand{Action: "add", Config: "firewall", Section: "redirect", Option: "", Value: ""},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "name", Value: pf.Name},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "target", Value: "DNAT"},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "src", Value: "wan"},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "src_dport", Value: fmt.Sprintf("%d", pf.SrcPort)},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "proto", Value: pf.Proto},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "dest_ip", Value: pf.DestIP},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "dest_port", Value: fmt.Sprintf("%d", pf.DestPort)},
+							UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "dest", Value: "lan"},
+						)
+					}
+				}
+			}
 		}
 
 		// ── DROPBEAR (ALL roles) ─────────────────────────────────────
@@ -167,7 +205,8 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 		       lan_ipaddr, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 		       dns_primary, dns_secondary, timezone, hostname_prefix,
 		       firewall_syn_flood, firewall_drop_invalid,
-		       dropbear_port, dropbear_password_auth
+		       dropbear_port, dropbear_password_auth,
+		       dhcp_reservations, port_forwarding_rules
 		FROM site_configs WHERE site_id = $1
 	`, siteID).Scan(
 		&sc.ID, &sc.SiteID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
@@ -175,6 +214,7 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 		&sc.DNSPrimary, &sc.DNSSecondary, &sc.Timezone, &sc.HostnamePrefix,
 		&sc.FirewallSynFlood, &sc.FirewallDropInvalid,
 		&sc.DropbearPort, &sc.DropbearPasswordAuth,
+		&sc.DHCPReservations, &sc.PortForwardingRules,
 	)
 	if err != nil {
 		return nil, err
@@ -189,8 +229,9 @@ func UpsertSiteConfig(sc SiteConfig) error {
 			lan_ipaddr, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 			dns_primary, dns_secondary, timezone, hostname_prefix,
 			firewall_syn_flood, firewall_drop_invalid,
-			dropbear_port, dropbear_password_auth, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,CURRENT_TIMESTAMP)
+			dropbear_port, dropbear_password_auth,
+			dhcp_reservations, port_forwarding_rules, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
 			global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
 			global_encryption=EXCLUDED.global_encryption,
@@ -203,12 +244,15 @@ func UpsertSiteConfig(sc SiteConfig) error {
 			firewall_drop_invalid=EXCLUDED.firewall_drop_invalid,
 			dropbear_port=EXCLUDED.dropbear_port,
 			dropbear_password_auth=EXCLUDED.dropbear_password_auth,
+			dhcp_reservations=EXCLUDED.dhcp_reservations,
+			port_forwarding_rules=EXCLUDED.port_forwarding_rules,
 			updated_at=CURRENT_TIMESTAMP
 	`, sc.SiteID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
 		sc.LanIPAddr, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
 		sc.DNSPrimary, sc.DNSSecondary, sc.Timezone, sc.HostnamePrefix,
 		sc.FirewallSynFlood, sc.FirewallDropInvalid,
 		sc.DropbearPort, sc.DropbearPasswordAuth,
+		sc.DHCPReservations, sc.PortForwardingRules,
 	)
 	return err
 }

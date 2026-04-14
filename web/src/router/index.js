@@ -21,6 +21,7 @@ import SecurityMatrix from '../views/SecurityMatrix.vue'
 import BandwidthSentry from '../views/BandwidthSentry.vue'
 import IdentityMatrix from '../views/IdentityMatrix.vue'
 import EdgeNexus from '../views/EdgeNexus.vue'
+import OmadaMigrator from '../views/OmadaMigrator.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -193,6 +194,12 @@ const router = createRouter({
       path: '/site/:site_id/orchestrator',
       name: 'site-orchestrator',
       component: () => import('../views/GlobalOrchestrator.vue'),
+      props: true
+    },
+    {
+      path: '/site/:site_id/migration',
+      name: 'site-omada-migrator',
+      component: OmadaMigrator,
       props: true
     }
   ]

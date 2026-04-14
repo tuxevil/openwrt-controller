@@ -97,6 +97,10 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.GetEdgeFirewallHandler))
 	mux.HandleFunc("PUT /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.PutEdgeFirewallHandler))
 
+	// ── OMADA_MIGRATOR / State Migration Bridge ──────────────────────────────
+	mux.HandleFunc("POST /api/migration/omada/analyze", middleware.WithAuth(handlers.AnalyzeOmadaBackup))
+	mux.HandleFunc("POST /api/migration/omada/commit", middleware.WithAuth(handlers.CommitOmadaMigration))
+
 	// ── UCI_OPS / Universal Configuration Manager ────────────────────────────
 	mux.HandleFunc("GET /api/devices/{device_id}/uci", middleware.WithAuth(middleware.RequireAdmin(handlers.GetUciHandler)))
 	mux.HandleFunc("PUT /api/devices/{device_id}/uci", middleware.WithAuth(middleware.RequireAdmin(handlers.PutUciHandler)))

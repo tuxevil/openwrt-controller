@@ -130,8 +130,8 @@ func BuildFirewallUCI(rules []PortForwardRule) string {
 	for _, r := range rules {
 		sb.WriteString("uci add firewall redirect\n")
 		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].name='%s'\n", r.Name))
-		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].target='DNAT'\n"))
-		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].src='wan'\n"))
+		sb.WriteString("uci set firewall.@redirect[-1].target='DNAT'\n")
+		sb.WriteString("uci set firewall.@redirect[-1].src='wan'\n")
 		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].src_dport='%d'\n", r.SrcPort))
 		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].proto='%s'\n", r.Proto))
 		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].dest_ip='%s'\n", r.DestIP))

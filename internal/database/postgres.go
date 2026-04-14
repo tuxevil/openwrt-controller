@@ -242,6 +242,8 @@ func createTables() error {
 		firewall_drop_invalid BOOLEAN DEFAULT true,
 		dropbear_port INT DEFAULT 22,
 		dropbear_password_auth BOOLEAN DEFAULT true,
+		dhcp_reservations JSONB DEFAULT '[]',
+		port_forwarding_rules JSONB DEFAULT '[]',
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 	`
@@ -262,6 +264,8 @@ func createTables() error {
 		"ALTER TABLE devices ADD COLUMN IF NOT EXISTS threat_shield_drops BIGINT DEFAULT 0",
 		"ALTER TABLE devices ADD COLUMN IF NOT EXISTS device_role VARCHAR(50) DEFAULT 'AP'",
 		"ALTER TABLE wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false",
+		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS dhcp_reservations JSONB DEFAULT '[]'",
+		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS port_forwarding_rules JSONB DEFAULT '[]'",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
