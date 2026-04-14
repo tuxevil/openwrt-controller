@@ -2,7 +2,6 @@ import { createRouter, createWebHistory } from 'vue-router'
 import GlobalDashboard from '../views/GlobalDashboard.vue'
 import SiteDashboard from '../views/SiteDashboard.vue'
 import ClientList from '../views/ClientList.vue'
-import SiteSettings from '../views/SiteSettings.vue'
 import LogConsole from '../views/LogConsole.vue'
 import WirelessManager from '../views/WirelessManager.vue'
 import Terminal from '../views/Terminal.vue'
@@ -77,7 +76,7 @@ const router = createRouter({
     {
       path: '/site/:site_id/settings',
       name: 'site-settings',
-      component: SiteSettings,
+      component: () => import('../views/SiteSettings.vue'),
       props: true
     },
     {
@@ -200,6 +199,12 @@ const router = createRouter({
       path: '/site/:site_id/migration',
       name: 'site-omada-migrator',
       component: OmadaMigrator,
+      props: true
+    },
+    {
+      path: '/site/:site_id/site-settings',
+      name: 'site-settings-unified',
+      component: () => import('../views/SiteSettings.vue'),
       props: true
     }
   ]

@@ -50,11 +50,65 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	username := GetUsernameFromReq(r)
 
-	var sc services.SiteConfig
-	if !readBody(w, r, &sc) {
+	// DTO: uses json.RawMessage for JSONB blobs so Go does not attempt
+	// base64-decoding (which happens with []byte fields).
+	var dto struct {
+		GlobalSSID           string          `json:"global_ssid"`
+		GlobalWPAKey         string          `json:"global_wpa_key"`
+		GlobalEncryption     string          `json:"global_encryption"`
+		LanIPAddr            string          `json:"lan_ipaddr"`
+		LanNetmask           string          `json:"lan_netmask"`
+		DHCPStart            int             `json:"dhcp_start"`
+		DHCPLimit            int             `json:"dhcp_limit"`
+		DHCPLeasetime        string          `json:"dhcp_leasetime"`
+		DNSPrimary           string          `json:"dns_primary"`
+		DNSSecondary         string          `json:"dns_secondary"`
+		Timezone             string          `json:"timezone"`
+		HostnamePrefix       string          `json:"hostname_prefix"`
+		FirewallSynFlood     bool            `json:"firewall_syn_flood"`
+		FirewallDropInvalid  bool            `json:"firewall_drop_invalid"`
+		DropbearPort         int             `json:"dropbear_port"`
+		DropbearPasswordAuth bool            `json:"dropbear_password_auth"`
+		DHCPReservations     json.RawMessage `json:"dhcp_reservations"`
+		PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
+		ThreatShieldEnabled  bool            `json:"threat_shield_enabled"`
+	}
+	if !readBody(w, r, &dto) {
 		return
 	}
-	sc.SiteID = siteID
+
+	// Normalize JSONB blobs — default to empty array if null/missing
+	dhcpRes := []byte(dto.DHCPReservations)
+	if len(dhcpRes) == 0 || string(dhcpRes) == "null" {
+		dhcpRes = []byte("[]")
+	}
+	pfRules := []byte(dto.PortForwardingRules)
+	if len(pfRules) == 0 || string(pfRules) == "null" {
+		pfRules = []byte("[]")
+	}
+
+	sc := services.SiteConfig{
+		SiteID:               siteID,
+		GlobalSSID:           dto.GlobalSSID,
+		GlobalWPAKey:         dto.GlobalWPAKey,
+		GlobalEncryption:     dto.GlobalEncryption,
+		LanIPAddr:            dto.LanIPAddr,
+		LanNetmask:           dto.LanNetmask,
+		DHCPStart:            dto.DHCPStart,
+		DHCPLimit:            dto.DHCPLimit,
+		DHCPLeasetime:        dto.DHCPLeasetime,
+		DNSPrimary:           dto.DNSPrimary,
+		DNSSecondary:         dto.DNSSecondary,
+		Timezone:             dto.Timezone,
+		HostnamePrefix:       dto.HostnamePrefix,
+		FirewallSynFlood:     dto.FirewallSynFlood,
+		FirewallDropInvalid:  dto.FirewallDropInvalid,
+		DropbearPort:         dto.DropbearPort,
+		DropbearPasswordAuth: dto.DropbearPasswordAuth,
+		DHCPReservations:     dhcpRes,
+		PortForwardingRules:  pfRules,
+		ThreatShieldEnabled:  dto.ThreatShieldEnabled,
+	}
 
 	if err := services.UpsertSiteConfig(sc); err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -69,6 +123,7 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 }
+
 
 // GetSiteDeviceRolesHandler returns devices with their assigned roles.
 func GetSiteDeviceRolesHandler(w http.ResponseWriter, r *http.Request) {

@@ -13,26 +13,27 @@ import (
 
 // SiteConfig represents the desired state of a site.
 type SiteConfig struct {
-	ID                  string `json:"id"`
-	SiteID              string `json:"site_id"`
-	GlobalSSID          string `json:"global_ssid"`
-	GlobalWPAKey        string `json:"global_wpa_key"`
-	GlobalEncryption    string `json:"global_encryption"`
-	LanIPAddr           string `json:"lan_ipaddr"`
-	LanNetmask          string `json:"lan_netmask"`
-	DHCPStart           int    `json:"dhcp_start"`
-	DHCPLimit           int    `json:"dhcp_limit"`
-	DHCPLeasetime       string `json:"dhcp_leasetime"`
-	DNSPrimary          string `json:"dns_primary"`
-	DNSSecondary        string `json:"dns_secondary"`
-	Timezone            string `json:"timezone"`
-	HostnamePrefix      string `json:"hostname_prefix"`
-	FirewallSynFlood    bool   `json:"firewall_syn_flood"`
-	FirewallDropInvalid bool   `json:"firewall_drop_invalid"`
-	DropbearPort        int    `json:"dropbear_port"`
+	ID                   string `json:"id"`
+	SiteID               string `json:"site_id"`
+	GlobalSSID           string `json:"global_ssid"`
+	GlobalWPAKey         string `json:"global_wpa_key"`
+	GlobalEncryption     string `json:"global_encryption"`
+	LanIPAddr            string `json:"lan_ipaddr"`
+	LanNetmask           string `json:"lan_netmask"`
+	DHCPStart            int    `json:"dhcp_start"`
+	DHCPLimit            int    `json:"dhcp_limit"`
+	DHCPLeasetime        string `json:"dhcp_leasetime"`
+	DNSPrimary           string `json:"dns_primary"`
+	DNSSecondary         string `json:"dns_secondary"`
+	Timezone             string `json:"timezone"`
+	HostnamePrefix       string `json:"hostname_prefix"`
+	FirewallSynFlood     bool   `json:"firewall_syn_flood"`
+	FirewallDropInvalid  bool   `json:"firewall_drop_invalid"`
+	DropbearPort         int    `json:"dropbear_port"`
 	DropbearPasswordAuth bool   `json:"dropbear_password_auth"`
 	DHCPReservations     []byte `json:"dhcp_reservations"`
 	PortForwardingRules  []byte `json:"port_forwarding_rules"`
+	ThreatShieldEnabled  bool   `json:"threat_shield_enabled"`
 }
 
 // DeviceRoleInfo holds the device identity and role for rendering.
@@ -206,7 +207,8 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 		       dns_primary, dns_secondary, timezone, hostname_prefix,
 		       firewall_syn_flood, firewall_drop_invalid,
 		       dropbear_port, dropbear_password_auth,
-		       dhcp_reservations, port_forwarding_rules
+		       dhcp_reservations, port_forwarding_rules,
+		       COALESCE(threat_shield_enabled, false)
 		FROM site_configs WHERE site_id = $1
 	`, siteID).Scan(
 		&sc.ID, &sc.SiteID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
@@ -215,6 +217,7 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 		&sc.FirewallSynFlood, &sc.FirewallDropInvalid,
 		&sc.DropbearPort, &sc.DropbearPasswordAuth,
 		&sc.DHCPReservations, &sc.PortForwardingRules,
+		&sc.ThreatShieldEnabled,
 	)
 	if err != nil {
 		return nil, err
@@ -230,8 +233,8 @@ func UpsertSiteConfig(sc SiteConfig) error {
 			dns_primary, dns_secondary, timezone, hostname_prefix,
 			firewall_syn_flood, firewall_drop_invalid,
 			dropbear_port, dropbear_password_auth,
-			dhcp_reservations, port_forwarding_rules, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,CURRENT_TIMESTAMP)
+			dhcp_reservations, port_forwarding_rules, threat_shield_enabled, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
 			global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
 			global_encryption=EXCLUDED.global_encryption,
@@ -246,13 +249,14 @@ func UpsertSiteConfig(sc SiteConfig) error {
 			dropbear_password_auth=EXCLUDED.dropbear_password_auth,
 			dhcp_reservations=EXCLUDED.dhcp_reservations,
 			port_forwarding_rules=EXCLUDED.port_forwarding_rules,
+			threat_shield_enabled=EXCLUDED.threat_shield_enabled,
 			updated_at=CURRENT_TIMESTAMP
 	`, sc.SiteID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
 		sc.LanIPAddr, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
 		sc.DNSPrimary, sc.DNSSecondary, sc.Timezone, sc.HostnamePrefix,
 		sc.FirewallSynFlood, sc.FirewallDropInvalid,
 		sc.DropbearPort, sc.DropbearPasswordAuth,
-		sc.DHCPReservations, sc.PortForwardingRules,
+		sc.DHCPReservations, sc.PortForwardingRules, sc.ThreatShieldEnabled,
 	)
 	return err
 }

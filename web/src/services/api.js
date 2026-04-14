@@ -204,5 +204,25 @@ export default {
   },
   putEdgeFirewall(deviceId, portForwarding) {
     return apiClient.put(`/devices/${deviceId}/edge-firewall`, { port_forwarding: portForwarding })
+  },
+
+  // UNIFIED_SITE_SETTINGS — Orchestrator helpers
+  getSiteConfig(siteId) {
+    return apiClient.get(`/sites/${siteId}/site-config`)
+  },
+  putSiteConfig(siteId, config) {
+    return apiClient.put(`/sites/${siteId}/site-config`, config)
+  },
+  getSiteDeviceRoles(siteId) {
+    return apiClient.get(`/sites/${siteId}/device-roles`)
+  },
+  putDeviceRole(deviceId, role) {
+    return apiClient.put(`/devices/${deviceId}/role`, { role })
+  },
+  previewSiteSync(siteId) {
+    return apiClient.post(`/sites/${siteId}/orchestrator/preview`)
+  },
+  syncSiteFleet(siteId) {
+    return apiClient.post(`/sites/${siteId}/orchestrator/sync`)
   }
 }

@@ -266,6 +266,7 @@ func createTables() error {
 		"ALTER TABLE wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false",
 		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS dhcp_reservations JSONB DEFAULT '[]'",
 		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS port_forwarding_rules JSONB DEFAULT '[]'",
+		"ALTER TABLE site_configs ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false",
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
