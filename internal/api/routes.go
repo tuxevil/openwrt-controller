@@ -22,6 +22,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/global/sentinel/trigger", middleware.WithAuth(handlers.TriggerManualSentinelHandler))
 	mux.HandleFunc("GET /api/global/settings", middleware.WithAuth(handlers.GetPlatformSettingsHandler))
 	mux.HandleFunc("POST /api/global/settings", middleware.WithAuth(handlers.UpdatePlatformSettingsHandler))
+	mux.HandleFunc("POST /api/chatops/query", middleware.WithAuth(handlers.ChatOpsQueryHandler))
 	mux.HandleFunc("GET /api/sites", middleware.WithAuth(handlers.GetSitesHandler))
 	mux.HandleFunc("POST /api/sites", middleware.WithAuth(handlers.CreateSiteHandler))
 

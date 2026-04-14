@@ -2,10 +2,12 @@
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import api from './services/api'
+import ChatOpsTerminal from './components/ChatOpsTerminal.vue'
 
 const globalHealth = ref(0)
 let pulseInterval = null
 const route = useRoute()
+const showChatOps = ref(false)
 
 // ── Accordion state ──────────────────────────────────────────────
 // Only one sector open at a time. Default: guess from current route.
@@ -218,6 +220,9 @@ const fetchHealth = async () => {
         <router-link to="/global/settings" class="text-xs px-3 py-2 border border-neon-cyan text-neon-cyan hover:bg-neon-cyan/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
           ⚙️ PLATFORM_CONFIG
         </router-link>
+        <button @click="showChatOps = true" class="text-xs w-full px-3 py-2 border border-blue-500 text-blue-400 hover:bg-blue-500/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer shadow-[0_0_5px_#3b82f6]">
+          💬 ORACLE RAG
+        </button>
         <router-link to="/global/sentinel" class="text-xs px-3 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer shadow-[0_0_5px_#bc13fe]">
           👁️ GLOBAL_PULSE (AI)
         </router-link>
@@ -229,5 +234,7 @@ const fetchHealth = async () => {
     <div class="flex-1 overflow-auto relative">
       <router-view />
     </div>
+
+    <ChatOpsTerminal v-model="showChatOps" />
   </div>
 </template>
