@@ -30,10 +30,10 @@ type SiteConfig struct {
 	FirewallSynFlood     bool   `json:"firewall_syn_flood"`
 	FirewallDropInvalid  bool   `json:"firewall_drop_invalid"`
 	DropbearPort         int    `json:"dropbear_port"`
-	DropbearPasswordAuth bool   `json:"dropbear_password_auth"`
-	DHCPReservations     []byte `json:"dhcp_reservations"`
-	PortForwardingRules  []byte `json:"port_forwarding_rules"`
-	ThreatShieldEnabled  bool   `json:"threat_shield_enabled"`
+	DropbearPasswordAuth bool            `json:"dropbear_password_auth"`
+	DHCPReservations     json.RawMessage `json:"dhcp_reservations"`
+	PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
+	ThreatShieldEnabled  bool            `json:"threat_shield_enabled"`
 }
 
 // DeviceRoleInfo holds the device identity and role for rendering.

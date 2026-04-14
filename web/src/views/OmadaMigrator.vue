@@ -58,7 +58,7 @@ async function analyzeFile(file) {
   formData.append('file', file)
 
   try {
-    const res = await api.client.post('/api/migration/omada/analyze', formData, {
+    const res = await api.client.post('/migration/omada/analyze', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
         'Authorization': `Bearer ${localStorage.getItem('jwt_token')}`
@@ -88,7 +88,7 @@ async function assimilateData() {
       port_forwarding: selectedFW.map(({selected, ...rest}) => rest),
     }
 
-    const res = await api.client.post('/api/migration/omada/commit', payload, {
+    const res = await api.client.post('/migration/omada/commit', payload, {
       headers: {
         'Authorization': `Bearer ${localStorage.getItem('jwt_token')}`
       }

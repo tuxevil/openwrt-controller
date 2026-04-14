@@ -73,12 +73,19 @@ async function loadSiteConfig() {
     const res = await api.getSiteConfig(props.site_id)
     if (res.data && res.data.site_id) {
       config.value = { ...config.value, ...res.data }
-      // Parse JSON blobs
       if (res.data.dhcp_reservations) {
-        try { staticLeases.value = JSON.parse(res.data.dhcp_reservations) || [] } catch {}
+        try { 
+          staticLeases.value = typeof res.data.dhcp_reservations === 'string' 
+            ? JSON.parse(res.data.dhcp_reservations) 
+            : res.data.dhcp_reservations || [] 
+        } catch {}
       }
       if (res.data.port_forwarding_rules) {
-        try { portRules.value = JSON.parse(res.data.port_forwarding_rules) || [] } catch {}
+        try { 
+          portRules.value = typeof res.data.port_forwarding_rules === 'string' 
+            ? JSON.parse(res.data.port_forwarding_rules) 
+            : res.data.port_forwarding_rules || [] 
+        } catch {}
       }
     }
   } catch (e) { console.error('loadSiteConfig', e) }
@@ -138,6 +145,10 @@ function addLease() {
   dirty.value = true
 }
 function removeLease(i) { staticLeases.value.splice(i, 1); dirty.value = true }
+function editLease(i) {
+  newLease.value = { ...staticLeases.value[i] }
+  removeLease(i)
+}
 
 // ─── Port forwarding ops ──────────────────────────────────────────────────────
 function addRule() {
@@ -147,6 +158,10 @@ function addRule() {
   dirty.value = true
 }
 function removeRule(i) { portRules.value.splice(i, 1); dirty.value = true }
+function editRule(i) {
+  newRule.value = { ...portRules.value[i] }
+  removeRule(i)
+}
 
 // ─── Device role change ───────────────────────────────────────────────────────
 async function changeRole(deviceId, role) {
@@ -164,8 +179,8 @@ async function saveTemplate() {
   try {
     const payload = {
       ...config.value,
-      dhcp_reservations: JSON.stringify(staticLeases.value),
-      port_forwarding_rules: JSON.stringify(portRules.value),
+      dhcp_reservations: staticLeases.value,
+      port_forwarding_rules: portRules.value,
     }
     await api.putSiteConfig(props.site_id, payload)
     dirty.value = false
@@ -194,8 +209,8 @@ async function applyRevision() {
     // Step 1: build the full payload with embedded JSON blobs
     const payload = {
       ...config.value,
-      dhcp_reservations: JSON.stringify(staticLeases.value),
-      port_forwarding_rules: JSON.stringify(portRules.value),
+      dhcp_reservations: staticLeases.value,
+      port_forwarding_rules: portRules.value,
     }
     await api.putSiteConfig(props.site_id, payload)
     dirty.value = false
@@ -583,7 +598,10 @@ async function toggleAutoAdopt() {
                       <td class="py-2 text-gray-300">{{ l.name || '—' }}</td>
                       <td class="py-2 text-gray-400 font-mono">{{ l.mac }}</td>
                       <td class="py-2 text-purple-300 font-mono">{{ l.ip }}</td>
-                      <td class="py-2 text-right"><button @click="removeLease(i)" class="text-red-500/60 hover:text-red-400 text-xs">✕</button></td>
+                      <td class="py-2 text-right">
+                        <button @click="editLease(i)" class="text-purple-500/80 hover:text-purple-300 text-xs mr-3 font-bold" title="Edit">EDIT</button>
+                        <button @click="removeLease(i)" class="text-red-500/80 hover:text-red-400 text-xs font-bold" title="Delete">✕</button>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
@@ -671,7 +689,10 @@ async function toggleAutoAdopt() {
                       <td class="py-2 text-red-300 font-mono">:{{ r.src_port }}</td>
                       <td class="py-2 text-gray-400 font-mono">{{ r.dest_ip }}:{{ r.dest_port }}</td>
                       <td class="py-2 text-gray-500 uppercase">{{ r.proto }}</td>
-                      <td class="py-2 text-right"><button @click="removeRule(i)" class="text-red-500/60 hover:text-red-400 text-xs">✕</button></td>
+                      <td class="py-2 text-right">
+                        <button @click="editRule(i)" class="text-red-500/80 hover:text-red-300 text-xs mr-3 font-bold" title="Edit">EDIT</button>
+                        <button @click="removeRule(i)" class="text-red-500/80 hover:text-red-400 text-xs font-bold" title="Delete">✕</button>
+                      </td>
                     </tr>
                   </tbody>
                 </table>
