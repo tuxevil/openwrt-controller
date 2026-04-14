@@ -113,9 +113,12 @@ export default {
     return apiClient.get(`/sites/${siteId}/logs`, { params })
   },
 
-  // Topology
+  // Topology & EchoLocation
   getSiteTopology(siteId) {
     return apiClient.get(`/sites/${siteId}/topology`)
+  },
+  getSiteEchoLocation(siteId) {
+    return apiClient.get(`/sites/${siteId}/echolocation`)
   },
 
   // WLANs

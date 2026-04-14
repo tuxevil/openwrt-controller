@@ -163,7 +163,7 @@ while true; do
         END { printf "}" }
     ' /proc/net/dev)
 
-    # 3. DESCUBRIMIENTO L2 (Tabla ARP y Bridge)
+    # 3. DESCUBRIMIENTO L2 / ECHO_LOCATION (Tabla ARP, Bridge, LLDP, Port Status)
     ARP_TABLE=$(cat /proc/net/arp | awk '
         BEGIN { printf "[" }
         NR > 1 {
@@ -181,6 +181,14 @@ while true; do
         }
         END { printf "]" }
     ')
+
+    BR_STATUS=$(ubus call network.device status '{"name":"br-lan"}' 2>/dev/null)
+    [ -z "$BR_STATUS" ] && BR_STATUS="{}"
+    
+    LLDP_INFO=$(lldpctl -f json 2>/dev/null)
+    [ -z "$LLDP_INFO" ] && LLDP_INFO="{}"
+
+    NEIGHBOR_STATS="{\"arp_table\": $ARP_TABLE, \"bridge_table\": $BRIDGE_TABLE, \"br_status\": $BR_STATUS, \"lldp_info\": $LLDP_INFO}"
 
     # 4. DHCP LEASES
     DHCP_LEASES=$(ubus call dhcp ipv4leases 2>/dev/null || echo "{\"leases\":[]}")
@@ -252,8 +260,7 @@ while true; do
     "wireless_stations": $WIFI_DATA,
     "top_talkers": $TOP_TALKERS,
     "iface_stats": $IFACE_STATS,
-    "arp_table": $ARP_TABLE,
-    "bridge_table": $BRIDGE_TABLE,
+    "neighbor_stats": $NEIGHBOR_STATS,
     "dhcp": $DHCP_LEASES,
     "flow_sense": $FLOW_SENSE_DATA,
     "logs": "$SYS_LOGS"
