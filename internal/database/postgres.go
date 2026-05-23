@@ -377,7 +377,7 @@ func createTenantTables(schema string) error {
 func migrateExistingDataToDefaultTenant() error {
 	// Check if default tenant already exists
 	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM tenants WHERE schema_alias = 'example'").Scan(&count)
+	err := DB.QueryRow("SELECT COUNT(*) FROM tenants WHERE schema_alias = 'examplecorp'").Scan(&count)
 	if err != nil {
 		return fmt.Errorf("failed to check for default tenant: %w", err)
 	}
@@ -385,17 +385,17 @@ func migrateExistingDataToDefaultTenant() error {
 	if count > 0 {
 		// Check if tenant schema has data already
 		var tenantSites int
-		DB.QueryRow("SELECT COUNT(*) FROM tenant_example.sites").Scan(&tenantSites)
+		DB.QueryRow("SELECT COUNT(*) FROM tenant_examplecorp.sites").Scan(&tenantSites)
 		if tenantSites > 0 {
 			// Already migrated with data — just run migrations to keep schema updated
-			return RunTenantMigrations("tenant_example")
+			return RunTenantMigrations("tenant_examplecorp")
 		}
 		// Tenant exists but migration failed previously — re-run migration
-		log.Println("[LANDLORD] Re-running data migration for tenant_example...")
-		if err := RunTenantMigrations("tenant_example"); err != nil {
+		log.Println("[LANDLORD] Re-running data migration for tenant_examplecorp...")
+		if err := RunTenantMigrations("tenant_examplecorp"); err != nil {
 			return err
 		}
-		return migrateDataToTenantSchema("tenant_example")
+		return migrateDataToTenantSchema("tenant_examplecorp")
 	}
 
 	// Check if there is any existing data to migrate
@@ -411,35 +411,35 @@ func migrateExistingDataToDefaultTenant() error {
 		return nil // No existing sites, nothing to migrate
 	}
 
-	log.Println("[LANDLORD] Migrating existing data to tenant_example schema...")
+	log.Println("[LANDLORD] Migrating existing data to tenant_examplecorp schema...")
 
 	// 1. Create the tenant record
 	_, err = DB.Exec(
 		"INSERT INTO tenants (name, schema_alias) VALUES ($1, $2)",
-		"DragonTec", "example",
+		"ExampleCorp", "examplecorp",
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create default tenant: %w", err)
 	}
 
 	// 2. Create schema and tables
-	if err := RunTenantMigrations("tenant_example"); err != nil {
-		return fmt.Errorf("failed to run tenant migrations for example: %w", err)
+	if err := RunTenantMigrations("tenant_examplecorp"); err != nil {
+		return fmt.Errorf("failed to run tenant migrations for examplecorp: %w", err)
 	}
 
 	// 3. Migrate data
-	if err := migrateDataToTenantSchema("tenant_example"); err != nil {
+	if err := migrateDataToTenantSchema("tenant_examplecorp"); err != nil {
 		return err
 	}
 
 	// 4. Bind existing non-superadmin users to this tenant
 	var tenantID string
-	err = DB.QueryRow("SELECT id FROM tenants WHERE schema_alias = 'example'").Scan(&tenantID)
+	err = DB.QueryRow("SELECT id FROM tenants WHERE schema_alias = 'examplecorp'").Scan(&tenantID)
 	if err == nil {
 		DB.Exec("UPDATE users SET tenant_id = $1 WHERE tenant_id IS NULL AND role != 'SUPERADMIN'", tenantID)
 	}
 
-	log.Println("[LANDLORD] Data migration to tenant_example complete.")
+	log.Println("[LANDLORD] Data migration to tenant_examplecorp complete.")
 	return nil
 }
 
