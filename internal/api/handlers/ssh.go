@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/ssh"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/orchestrator"
 )
 
 var upgrader = websocket.Upgrader{
@@ -76,7 +77,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(PrivateKey),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 	}
 
 	// d) Abre una conexión SSH hacia la IP del router

@@ -22,9 +22,9 @@ func init() {
 }
 
 // ExecuteCommand runs a bash command over SSH on the target device
-func ExecuteCommand(deviceID string, cmd string) error {
+func ExecuteCommand(schema, deviceID string, cmd string) error {
 	var targetIP sql.NullString
-	err := database.DB.QueryRow("SELECT last_ip FROM devices WHERE id = $1", deviceID).Scan(&targetIP)
+	err := database.DB.QueryRow(fmt.Sprintf("SELECT last_ip FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&targetIP)
 	if err != nil || !targetIP.Valid || targetIP.String == "" {
 		return fmt.Errorf("device ip not found")
 	}
@@ -38,7 +38,7 @@ func ExecuteCommand(deviceID string, cmd string) error {
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(privateKey),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: TofuHostKeyCallback,
 	}
 
 	sshConn, err := ssh.Dial("tcp", targetIP.String+":22", config)

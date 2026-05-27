@@ -14,6 +14,7 @@ import (
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
+	"openwrt-controller/internal/orchestrator"
 )
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -105,7 +106,7 @@ func runSSHCommand(deviceID string, cmd string) (string, error) {
 	cfg := &ssh.ClientConfig{
 		User:            "root",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(PrivateKey)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 		Timeout:         30 * time.Second,
 	}
 	conn, err := ssh.Dial("tcp", targetIP+":22", cfg)
@@ -140,7 +141,7 @@ func runSSHScript(deviceID string, script string) (string, error) {
 	cfg := &ssh.ClientConfig{
 		User:            "root",
 		Auth:            []ssh.AuthMethod{ssh.PublicKeys(PrivateKey)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 		Timeout:         60 * time.Second,
 	}
 	conn, err := ssh.Dial("tcp", targetIP+":22", cfg)

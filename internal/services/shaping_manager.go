@@ -77,7 +77,7 @@ func ApplySniperShaping(schema, deviceID, mac string, rateMbytes int, durationMi
 		nft add rule inet sentinel_shaping forward ether daddr $MAC limit rate over %d kbytes/second drop
 	`, mac, rateMbytes, rateMbytes)
 
-	err := orchestrator.ExecuteCommand(deviceID, cmd)
+	err := orchestrator.ExecuteCommand(schema, deviceID, cmd)
 	if err != nil {
 		return err
 	}
@@ -112,7 +112,7 @@ func ClearShaping(schema, deviceID, mac string) error {
 		done
 	`, mac)
 
-	err := orchestrator.ExecuteCommand(deviceID, cmd)
+	err := orchestrator.ExecuteCommand(schema, deviceID, cmd)
 	if err != nil {
 		// Log the error but keep going to clean the DB
 		log.Printf("[SNIPER] Clear shaping executor error: %v", err)

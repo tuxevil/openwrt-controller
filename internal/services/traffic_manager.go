@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/orchestrator"
 )
 
 var privateKey ssh.Signer
@@ -39,7 +40,7 @@ func LimitBandwidth(deviceID, mac string, download, upload int) error {
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(privateKey),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 	}
 
 	// We can use uci setting for MAC address or IP using mac filter in sqm or nftables.

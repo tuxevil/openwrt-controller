@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/orchestrator"
 
 	"golang.org/x/crypto/ssh"
 )
@@ -41,7 +42,7 @@ func CreateBackup(schema, deviceID string) error {
 		Auth: []ssh.AuthMethod{
 			ssh.PublicKeys(signer),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 		Timeout:         10 * time.Second,
 	}
 
