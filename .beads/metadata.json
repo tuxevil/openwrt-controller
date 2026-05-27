@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "openwrt_controller",
+  "project_id": "4884df8e-d57d-4ee3-9cf3-8b0fd742d9f8"
+}
