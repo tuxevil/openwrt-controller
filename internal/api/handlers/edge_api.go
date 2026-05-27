@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,15 +20,86 @@ import (
 
 // runSSHCommand opens a short-lived SSH session to the device and runs cmd,
 // returning combined stdout+stderr output.
+
+// getDeviceIPAndSchema looks up a device in the public and all tenant schemas
+// to find its target IP and which schema it belongs to, preferring the schema
+// with the most recent last_seen_at timestamp.
+func getDeviceIPAndSchema(deviceID string) (string, string, error) {
+	type devMatch struct {
+		ip         string
+		schema     string
+		lastSeenAt time.Time
+	}
+	var matches []devMatch
+
+	// 1. Check public schema
+	var publicIP sql.NullString
+	var publicLastSeen sql.NullTime
+	err := database.DB.QueryRow("SELECT last_ip, last_seen_at FROM public.devices WHERE id = $1", deviceID).Scan(&publicIP, &publicLastSeen)
+	if err == nil && publicIP.Valid && publicIP.String != "" {
+		lastSeen := time.Time{}
+		if publicLastSeen.Valid {
+			lastSeen = publicLastSeen.Time
+		}
+		matches = append(matches, devMatch{
+			ip:         publicIP.String,
+			schema:     "public",
+			lastSeenAt: lastSeen,
+		})
+	}
+
+	// 2. Query all active tenant schemas
+	rows, err := database.DB.Query("SELECT schema_alias FROM public.tenants WHERE is_active = true")
+	if err != nil {
+		return "", "", err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			continue
+		}
+		schema := "tenant_" + alias
+		var tenantIP sql.NullString
+		var tenantLastSeen sql.NullTime
+		err := database.DB.QueryRow(fmt.Sprintf("SELECT last_ip, last_seen_at FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&tenantIP, &tenantLastSeen)
+		if err == nil && tenantIP.Valid && tenantIP.String != "" {
+			lastSeen := time.Time{}
+			if tenantLastSeen.Valid {
+				lastSeen = tenantLastSeen.Time
+			}
+			matches = append(matches, devMatch{
+				ip:         tenantIP.String,
+				schema:     schema,
+				lastSeenAt: lastSeen,
+			})
+		}
+	}
+
+	if len(matches) == 0 {
+		return "", "", fmt.Errorf("device not found in any tenant")
+	}
+
+	// Find the match with the latest lastSeenAt
+	bestMatch := matches[0]
+	for _, m := range matches {
+		if m.lastSeenAt.After(bestMatch.lastSeenAt) {
+			bestMatch = m
+		}
+	}
+
+	return bestMatch.ip, bestMatch.schema, nil
+}
+
 func runSSHCommand(deviceID string, cmd string) (string, error) {
 	if PrivateKey == nil {
 		return "", fmt.Errorf("controller SSH key not configured")
 	}
 
-	var targetIP string
-	err := database.DB.QueryRow("SELECT COALESCE(last_ip,'') FROM devices WHERE id = $1", deviceID).Scan(&targetIP)
+	targetIP, _, err := getDeviceIPAndSchema(deviceID)
 	if err != nil || targetIP == "" {
-		return "", fmt.Errorf("device IP not found")
+		return "", fmt.Errorf("device IP not found: %w", err)
 	}
 
 	cfg := &ssh.ClientConfig{
@@ -48,26 +120,21 @@ func runSSHCommand(deviceID string, cmd string) (string, error) {
 	}
 	defer sess.Close()
 
-	var out bytes.Buffer
-	sess.Stdout = &out
-	sess.Stderr = &out
-
-	if err := sess.Run(cmd); err != nil {
-		return out.String(), fmt.Errorf("remote command failed: %w", err)
+	outBytes, err := sess.CombinedOutput(cmd)
+	if err != nil {
+		return string(outBytes), fmt.Errorf("remote command failed: %w", err)
 	}
-	return out.String(), nil
+	return string(outBytes), nil
 }
 
-// runSSHScript uploads a shell script as stdin to `sh` and executes it.
 func runSSHScript(deviceID string, script string) (string, error) {
 	if PrivateKey == nil {
 		return "", fmt.Errorf("controller SSH key not configured")
 	}
 
-	var targetIP string
-	err := database.DB.QueryRow("SELECT COALESCE(last_ip,'') FROM devices WHERE id = $1", deviceID).Scan(&targetIP)
+	targetIP, _, err := getDeviceIPAndSchema(deviceID)
 	if err != nil || targetIP == "" {
-		return "", fmt.Errorf("device IP not found")
+		return "", fmt.Errorf("device IP not found: %w", err)
 	}
 
 	cfg := &ssh.ClientConfig{
@@ -99,7 +166,6 @@ func runSSHScript(deviceID string, script string) (string, error) {
 	return out.String(), nil
 }
 
-// readBody decodes JSON body into target and writes an error if it fails.
 func readBody(w http.ResponseWriter, r *http.Request, target interface{}) bool {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {

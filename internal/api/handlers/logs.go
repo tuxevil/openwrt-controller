@@ -43,7 +43,7 @@ func GetLogsHandler(w http.ResponseWriter, r *http.Request) {
 
 	query += ` ORDER BY l.log_timestamp DESC LIMIT 1000`
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Tx(r.Context()).Query(query, args...)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

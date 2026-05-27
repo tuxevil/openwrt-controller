@@ -13,7 +13,7 @@ type createSiteRequest struct {
 }
 
 func GetSitesHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.DB.Query("SELECT id, controller_id, name, COALESCE(auto_adopt, false), created_at, updated_at FROM sites")
+	rows, err := database.Tx(r.Context()).Query("SELECT id, controller_id, name, COALESCE(auto_adopt, false), created_at, updated_at FROM sites")
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -68,12 +68,12 @@ func CreateSiteHandler(w http.ResponseWriter, r *http.Request) {
 	var err error
 
 	if req.ControllerID == "" {
-		err = database.DB.QueryRow(
+		err = database.Tx(r.Context()).QueryRow(
 			"INSERT INTO sites (name) VALUES ($1) RETURNING id",
 			req.Name,
 		).Scan(&newID)
 	} else {
-		err = database.DB.QueryRow(
+		err = database.Tx(r.Context()).QueryRow(
 			"INSERT INTO sites (controller_id, name) VALUES ($1, $2) RETURNING id",
 			req.ControllerID, req.Name,
 		).Scan(&newID)
@@ -110,7 +110,7 @@ func ToggleAutoAdoptHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := database.DB.Exec(
+	_, err := database.Tx(r.Context()).Exec(
 		"UPDATE sites SET auto_adopt = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
 		body.Enabled, siteID,
 	)

@@ -42,7 +42,7 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Fetch devices and state_json
-	rows, err := database.DB.Query("SELECT id, state_json FROM devices WHERE site_id = $1", siteID)
+	rows, err := database.Tx(r.Context()).Query("SELECT id, state_json FROM devices WHERE site_id = $1", siteID)
 	if err != nil {
 		log.Printf("Topology query error: %v", err)
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -70,7 +70,7 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 2. Fetch active incidents for the site to flag nodes
 	activeIncidents := make(map[string]bool)
-	incRows, err := database.DB.Query("SELECT device_id FROM incidents WHERE site_id = $1 AND status = 'OPEN'", siteID)
+	incRows, err := database.Tx(r.Context()).Query("SELECT device_id FROM incidents WHERE site_id = $1 AND status = 'OPEN'", siteID)
 	if err == nil {
 		defer incRows.Close()
 		for incRows.Next() {
@@ -83,7 +83,7 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch custom hostnames
 	customHostnames := make(map[string]string)
-	hRows, err := database.DB.Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	hRows, err := database.Tx(r.Context()).Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
 	if err == nil {
 		defer hRows.Close()
 		for hRows.Next() {

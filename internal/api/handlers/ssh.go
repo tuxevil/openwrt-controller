@@ -52,7 +52,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var targetIP sql.NullString
-	err := database.DB.QueryRow("SELECT last_ip FROM devices WHERE id = $1", deviceID).Scan(&targetIP)
+	err := database.Tx(r.Context()).QueryRow("SELECT last_ip FROM devices WHERE id = $1", deviceID).Scan(&targetIP)
 	if err != nil || !targetIP.Valid || targetIP.String == "" {
 		http.Error(w, "Device IP not found", http.StatusNotFound)
 		return

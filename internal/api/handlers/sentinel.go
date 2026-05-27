@@ -48,7 +48,7 @@ func TriggerManualSentinelHandler(w http.ResponseWriter, r *http.Request) {
 	involvedJSON, _ := json.Marshal(involvedDevices)
 
 	var insightID string
-	err = database.DB.QueryRow(`
+	err = database.Tx(r.Context()).QueryRow(`
 		INSERT INTO ai_insights (correlation_id, diagnosis, severity, involved_devices, llm_model, tokens_used)
 		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id
 	`, correlationID, diagnosis, severity, string(involvedJSON), llmModel, tokensUsed).Scan(&insightID)
@@ -102,7 +102,7 @@ func GetSentinelInsightsHandler(w http.ResponseWriter, r *http.Request) {
 		LIMIT 50
 	`
 
-	rows, err := database.DB.Query(query)
+	rows, err := database.Tx(r.Context()).Query(query)
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
 		return

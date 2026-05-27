@@ -17,7 +17,7 @@ func GetVPNConfigHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 
 	var wgEndpoint, wgPubKey sql.NullString
-	_ = database.DB.QueryRow("SELECT wg_endpoint, wg_pubkey FROM sites WHERE id = $1", siteID).Scan(&wgEndpoint, &wgPubKey)
+	_ = database.Tx(r.Context()).QueryRow("SELECT wg_endpoint, wg_pubkey FROM sites WHERE id = $1", siteID).Scan(&wgEndpoint, &wgPubKey)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(VPNConfig{
@@ -36,7 +36,7 @@ func UpdateVPNEndpointHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := database.DB.Exec("UPDATE sites SET wg_endpoint = $1 WHERE id = $2", req.Endpoint, siteID)
+	_, err := database.Tx(r.Context()).Exec("UPDATE sites SET wg_endpoint = $1 WHERE id = $2", req.Endpoint, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "db error"}`, http.StatusInternalServerError)
 		return
@@ -51,7 +51,7 @@ func UpdateVPNEndpointHandler(w http.ResponseWriter, r *http.Request) {
 func GetVPNPeersHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 
-	rows, err := database.DB.Query("SELECT id, name, wg_ip, wg_pubkey, status FROM devices WHERE site_id = $1 AND wg_ip IS NOT NULL", siteID)
+	rows, err := database.Tx(r.Context()).Query("SELECT id, name, wg_ip, wg_pubkey, status FROM devices WHERE site_id = $1 AND wg_ip IS NOT NULL", siteID)
 	if err != nil {
 		http.Error(w, `{"error": "db error"}`, http.StatusInternalServerError)
 		return

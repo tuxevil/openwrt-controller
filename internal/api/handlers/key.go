@@ -24,7 +24,7 @@ func RotateSiteKeyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	newKey := hex.EncodeToString(b) // 32 hex chars
 
-	_, err := database.DB.Exec(
+	_, err := database.Tx(r.Context()).Exec(
 		"UPDATE sites SET api_key = $1, updated_at = $2 WHERE id = $3",
 		newKey, time.Now(), siteID,
 	)

@@ -72,22 +72,47 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			}
 		}
 
+		if tenantSchema == "" {
+			// If no tenant schema is specified (e.g. SuperAdmin on default login),
+			// check if there is an active tenant schema we can default to,
+			// to avoid querying the empty public schema.
+			var defaultAlias string
+			err := database.DB.QueryRow(
+				"SELECT schema_alias FROM tenants WHERE is_active = true ORDER BY created_at ASC LIMIT 1",
+			).Scan(&defaultAlias)
+			if err == nil && defaultAlias != "" {
+				tenantSchema = defaultAlias
+			}
+		}
+
+		tx, err := database.DB.BeginTx(r.Context(), nil)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+
 		if tenantSchema != "" {
 			// Validate against tenants whitelist
 			var count int
-			err := database.DB.QueryRow(
+			err := tx.QueryRow(
 				"SELECT COUNT(*) FROM tenants WHERE schema_alias = $1 AND is_active = true",
 				tenantSchema,
 			).Scan(&count)
 			if err == nil && count > 0 {
 				fullSchema := "tenant_" + tenantSchema
-				// Set search_path for this request's queries
-				database.DB.Exec(fmt.Sprintf("SET search_path TO %s, public", fullSchema))
+				// Set LOCAL search_path for this request's transaction queries
+				tx.Exec(fmt.Sprintf("SET LOCAL search_path TO %s, public", fullSchema))
 				ctx = context.WithValue(ctx, tenantSchemaKey, fullSchema)
 			}
+		} else {
+			tx.Exec("SET LOCAL search_path TO public")
 		}
 
+		ctx = context.WithValue(ctx, database.TxKey, tx)
+
 		next(w, r.WithContext(ctx))
+		tx.Commit()
 	}
 }
 

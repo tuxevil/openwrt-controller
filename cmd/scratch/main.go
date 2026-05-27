@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 
@@ -37,17 +38,18 @@ func main() {
 		siteHash := sha256.Sum256(siteContent)
 		siteHashStr := hex.EncodeToString(siteHash[:])
 
-		// Disable active versions
-		db.Exec("UPDATE agent_versions SET is_active = false WHERE site_id = $1", siteID)
-
-		// Insert new version
-		_, err = db.Exec(`
-			INSERT INTO agent_versions (version_hash, script_content, is_active, site_id) 
-			VALUES ($1, $2, true, $3)
-			ON CONFLICT (version_hash) DO UPDATE SET is_active = true
-		`, siteHashStr, string(siteContent), siteID)
-		if err != nil {
-			log.Fatal(err)
+		// Disable active versions and insert/update for all schemas:
+		schemas := []string{"public", "tenant_example"}
+		for _, schema := range schemas {
+			db.Exec(fmt.Sprintf("UPDATE %s.agent_versions SET is_active = false WHERE site_id = $1", schema), siteID)
+			_, err = db.Exec(fmt.Sprintf(`
+				INSERT INTO %s.agent_versions (version_hash, script_content, is_active, site_id) 
+				VALUES ($1, $2, true, $3)
+				ON CONFLICT (version_hash) DO UPDATE SET is_active = true
+			`, schema), siteHashStr, string(siteContent), siteID)
+			if err != nil {
+				log.Printf("Schema %s deploy warning/error: %v\n", schema, err)
+			}
 		}
 		log.Printf("Deployed to site: %s\n", siteID)
 	}

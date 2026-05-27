@@ -198,9 +198,7 @@ const router = createRouter({
     },
     {
       path: '/site/:site_id/orchestrator',
-      name: 'site-orchestrator',
-      component: () => import('../views/GlobalOrchestrator.vue'),
-      props: true
+      redirect: to => `/site/${to.params.site_id}/site-settings`
     },
     {
       path: '/site/:site_id/migration',

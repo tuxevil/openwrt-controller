@@ -72,7 +72,7 @@ func GetDeviceAuditResultsHandler(w http.ResponseWriter, r *http.Request) {
 
 	prefix := "VAULT-AUDIT-" + deviceID[:8] + "%"
 
-	rows, err := database.DB.Query(`
+	rows, err := database.Tx(r.Context()).Query(`
 		SELECT correlation_id, diagnosis, severity,
 		       COALESCE(llm_model, '') as llm_model,
 		       COALESCE(tokens_used, 0) as tokens_used,

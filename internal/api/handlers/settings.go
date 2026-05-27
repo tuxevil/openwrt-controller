@@ -13,7 +13,7 @@ func GetSiteSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	
 	var settings models.SiteSettings
-	err := database.DB.QueryRow("SELECT site_id, dns_servers, dhcp_server, updated_at FROM site_settings WHERE site_id = $1", siteID).Scan(
+	err := database.Tx(r.Context()).QueryRow("SELECT site_id, dns_servers, dhcp_server, updated_at FROM site_settings WHERE site_id = $1", siteID).Scan(
 		&settings.SiteID, &settings.DNSServers, &settings.DHCPServer, &settings.UpdatedAt,
 	)
 
@@ -27,7 +27,7 @@ func GetSiteSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var apiKey sql.NullString
-	_ = database.DB.QueryRow("SELECT api_key FROM sites WHERE id = $1", siteID).Scan(&apiKey)
+	_ = database.Tx(r.Context()).QueryRow("SELECT api_key FROM sites WHERE id = $1", siteID).Scan(&apiKey)
 
 	resp := map[string]interface{}{
 		"data":    settings,
@@ -54,7 +54,7 @@ func UpdateSiteSettingsHandler(w http.ResponseWriter, r *http.Request) {
 			dhcp_server = EXCLUDED.dhcp_server,
 			updated_at = CURRENT_TIMESTAMP;
 	`
-	_, err := database.DB.Exec(query, siteID, s.DNSServers, s.DHCPServer)
+	_, err := database.Tx(r.Context()).Exec(query, siteID, s.DNSServers, s.DHCPServer)
 	if err != nil {
 		http.Error(w, `{"error": "db error"}`, http.StatusInternalServerError)
 		return

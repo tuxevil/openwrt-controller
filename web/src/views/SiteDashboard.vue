@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import MetricHacker from '../components/MetricHacker.vue'
@@ -18,6 +18,7 @@ let pollingInterval
 onMounted(async () => {
   await fetchDevices()
   await fetchMetrics()
+  await fetchSites()
   pollingInterval = setInterval(async () => {
     await fetchDevices()
     await fetchMetrics()
@@ -68,11 +69,112 @@ const getHealth = (dev) => {
 }
 
 const selectedDeviceDetails = ref(null)
+const sites = ref([])
+const targetSiteId = ref('')
+const migrating = ref(false)
+const migrationError = ref('')
+const migrationSuccess = ref(false)
+
+const filteredSites = computed(() => {
+  return sites.value.filter(s => s.id !== props.site_id)
+})
+
+const sortedDevices = computed(() => {
+  return [...devices.value].sort((a, b) => {
+    const ipA = a.last_ip || "";
+    const ipB = b.last_ip || "";
+    
+    const ipPattern = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+    const isIpAValid = ipPattern.test(ipA);
+    const isIpBValid = ipPattern.test(ipB);
+
+    if (!isIpAValid && !isIpBValid) return 0;
+    if (!isIpAValid) return 1;
+    if (!isIpBValid) return -1;
+
+    const partsA = ipA.split(".").map(Number);
+    const partsB = ipB.split(".").map(Number);
+
+    for (let i = 0; i < 4; i++) {
+      const numA = partsA[i] || 0;
+      const numB = partsB[i] || 0;
+      if (numA !== numB) {
+        return numA - numB;
+      }
+    }
+    return 0;
+  });
+})
+
+const fetchSites = async () => {
+  try {
+    const res = await api.getSites()
+    sites.value = res.data.data || []
+  } catch (e) { console.error(e) }
+}
+
+const migrateNode = async () => {
+  if (!targetSiteId.value || !selectedDeviceDetails.value) return
+  migrating.value = true
+  migrationError.value = ''
+  migrationSuccess.value = false
+  try {
+    await api.migrateDevice(selectedDeviceDetails.value.id, targetSiteId.value)
+    migrationSuccess.value = true
+    setTimeout(async () => {
+      selectedDeviceDetails.value = null
+      targetSiteId.value = ''
+      migrationSuccess.value = false
+      await fetchDevices()
+    }, 2000)
+  } catch (err) {
+    migrationError.value = err.response?.data?.error || err.message
+  } finally {
+    migrating.value = false
+  }
+}
+
+const importingConfig = ref(false)
+const importError = ref('')
+const importSuccess = ref('')
+const importReport = ref(null)
+
+const importConfig = async () => {
+  if (!selectedDeviceDetails.value) return
+  importingConfig.value = true
+  importError.value = ''
+  importSuccess.value = ''
+  try {
+    const res = await api.importDeviceConfig(selectedDeviceDetails.value.id)
+    importSuccess.value = res.data?.message || "Configuration imported successfully!"
+    importReport.value = res.data?.report || null
+    await fetchDevices()
+  } catch (err) {
+    importError.value = err.response?.data?.error || err.message || "Failed to import configuration"
+  } finally {
+    importingConfig.value = false
+  }
+}
+
 const showDetails = (dev) => {
   selectedDeviceDetails.value = dev
+  targetSiteId.value = ''
+  migrationError.value = ''
+  migrationSuccess.value = false
+  importingConfig.value = false
+  importError.value = ''
+  importSuccess.value = ''
+  importReport.value = null
 }
 const closeDetails = () => {
   selectedDeviceDetails.value = null
+  targetSiteId.value = ''
+  migrationError.value = ''
+  migrationSuccess.value = false
+  importingConfig.value = false
+  importError.value = ''
+  importSuccess.value = ''
+  importReport.value = null
 }
 
 const goBack = () => router.push('/global')
@@ -100,7 +202,7 @@ const goBack = () => router.push('/global')
       <div class="neon-panel border-neon-amber/70 shadow-neon-amber/20">
         <h3 class="text-sm text-neon-amber mb-4 border-b border-neon-amber/30 pb-1">SYNC_STATUS</h3>
         <div class="flex flex-col gap-2 text-xs font-mono">
-          <div v-for="dev in devices" :key="dev.id" class="flex items-center gap-2">
+          <div v-for="dev in sortedDevices" :key="dev.id" class="flex items-center gap-2">
             <!-- SVG Sync Icon -->
             <svg class="w-4 h-4 flex-shrink-0" :class="syncStatus(dev) === 'SYNCED' ? 'text-neon-green' : syncStatus(dev) === 'UNKNOWN' ? 'text-muted' : 'text-neon-amber'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path v-if="syncStatus(dev) === 'SYNCED'" stroke-linecap="square" stroke-width="2" d="M5 13l4 4L19 7"/>
@@ -150,7 +252,7 @@ const goBack = () => router.push('/global')
           </tr>
         </thead>
         <tbody>
-          <tr v-for="dev in devices" :key="dev.id" class="border-b border-neon-green/10 hover:bg-neon-green/5 transition-colors">
+          <tr v-for="dev in sortedDevices" :key="dev.id" class="border-b border-neon-green/10 hover:bg-neon-green/5 transition-colors">
             <td class="py-3">
               <div class="flex flex-col">
                 <span class="text-neon-cyan font-bold" style="color: #0ff;">{{ dev.state_json?.board?.hostname || 'UNKNOWN' }}</span>
@@ -232,6 +334,89 @@ const goBack = () => router.push('/global')
             </div>
           </div>
           <div v-else class="text-neon-amber italic mt-4">> NO_TELEMETRY_DATA_FOUND_IN_VAULT</div>
+
+          <!-- IMPORT CONFIGURATION SECTION -->
+          <div class="mt-6 border-t border-neon-green/30 pt-6">
+            <h3 class="text-neon-cyan border-b border-neon-cyan/30 pb-1 w-full uppercase text-sm mb-3" style="color: #0ff;">> IMPORT_CONFIGURATION</h3>
+            <div class="bg-black/60 p-4 border border-neon-green/20 clip-chamfer flex flex-col md:flex-row gap-4 items-center justify-between">
+              <div class="flex flex-col space-y-1">
+                <span class="text-muted text-xs">ON-DEMAND ONBOARDING</span>
+                <span class="text-white text-sm">Download active configurations (Wireless, Network, DHCP, Firewall, VPN) from this device and store them as the site's template.</span>
+              </div>
+              <button @click="importConfig" :disabled="importingConfig" class="px-6 py-2 bg-transparent text-neon-green border border-neon-green hover:bg-neon-green hover:text-black font-bold uppercase transition-all clip-chamfer text-sm flex items-center gap-2 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+                <span v-if="importingConfig" class="animate-pulse">IMPORTING...</span>
+                <span v-else>IMPORT_CONFIG</span>
+              </button>
+            </div>
+            <div v-if="importError" class="mt-3 text-neon-red text-xs font-mono">
+              [ ERR ] {{ importError }}
+            </div>
+            <div v-if="importSuccess" class="mt-3 text-neon-green text-xs font-mono bg-black/80 border border-neon-green/30 p-3 clip-chamfer space-y-2 max-w-full">
+              <div>[ OK ] {{ importSuccess }}</div>
+              <div v-if="importReport" class="border-t border-neon-green/20 pt-2 space-y-2">
+                <div class="text-[10px] text-muted uppercase tracking-wider font-bold mb-1">=== IMPORT REPORT ===</div>
+                
+                <!-- WLANs -->
+                <div>
+                  <span class="text-muted">WIRELESS NETWORKS:</span>
+                  <div v-if="importReport.wlans && importReport.wlans.length" class="pl-3 mt-0.5 space-y-0.5">
+                    <div v-for="wlan in importReport.wlans" :key="wlan.ssid" class="text-white">
+                      • {{ wlan.ssid }} <span class="text-xs text-muted">({{ wlan.encryption }})</span>
+                    </div>
+                  </div>
+                  <div v-else class="text-muted pl-3">NONE FOUND</div>
+                </div>
+
+                <!-- LAN -->
+                <div>LAN IP: <span class="text-white">{{ importReport.lan_ip }} / {{ importReport.lan_netmask }}</span></div>
+                <div>DHCP POOL: <span class="text-white">Start: {{ importReport.dhcp_start }}, Limit: {{ importReport.dhcp_limit }}</span> (Leasetime: {{ importReport.dhcp_leasetime }})</div>
+                <div>STATIC LEASES: <span class="text-white">{{ importReport.dhcp_leases_count }} reservations</span></div>
+                <div>PORT FORWARDS: <span class="text-white">{{ importReport.port_forwards_count }} rules</span></div>
+
+                <!-- VPNs -->
+                <div>
+                  <span class="text-muted">SECURE TUNNELS (VPN):</span>
+                  <div v-if="importReport.vpns && importReport.vpns.length" class="pl-3 mt-0.5 space-y-1">
+                    <div v-for="vpn in importReport.vpns" :key="vpn.interface" class="text-white">
+                      • {{ vpn.interface }}: <span class="text-cyan-400 font-bold">{{ vpn.ip || 'N/A' }}</span>
+                      <div class="pl-3 text-[11px] text-muted">
+                        Endpoint: <span class="text-purple-400">{{ vpn.endpoint || 'DIRECT/LISTENING' }}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div v-else class="text-muted pl-3">NONE FOUND</div>
+                </div>
+
+                <div>TIMEZONE: <span class="text-white">{{ importReport.timezone }}</span> | PREFIX: <span class="text-white">{{ importReport.hostname_prefix }}</span></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- MIGRATION SECTION -->
+          <div class="mt-6 border-t border-purple-500/30 pt-6">
+            <h3 class="text-neon-cyan border-b border-neon-cyan/30 pb-1 w-full uppercase text-sm mb-3" style="color: #0ff;">> MIGRATE_NODE</h3>
+            <div class="bg-black/60 p-4 border border-purple-500/20 clip-chamfer flex flex-col md:flex-row gap-4 items-center justify-between">
+              <div class="flex flex-col space-y-1 w-full md:w-auto">
+                <span class="text-muted text-xs">TARGET SITE</span>
+                <select v-model="targetSiteId" class="bg-black border border-purple-500/40 text-white px-3 py-1.5 clip-chamfer font-mono text-sm focus:outline-none focus:border-purple-500 w-full md:w-64">
+                  <option value="" disabled>-- SELECT TARGET SITE --</option>
+                  <option v-for="site in filteredSites" :key="site.id" :value="site.id">
+                    {{ site.name }}
+                  </option>
+                </select>
+              </div>
+              <button @click="migrateNode" :disabled="!targetSiteId || migrating" class="px-6 py-2 bg-transparent text-purple-400 border border-purple-500 hover:bg-purple-500 hover:text-black font-bold uppercase transition-all clip-chamfer text-sm flex items-center gap-2 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed">
+                <span v-if="migrating" class="animate-pulse">MIGRATING...</span>
+                <span v-else>MIGRATE_NODE</span>
+              </button>
+            </div>
+            <div v-if="migrationError" class="mt-3 text-red-500 text-xs font-mono">
+              [ ERR ] {{ migrationError }}
+            </div>
+            <div v-if="migrationSuccess" class="mt-3 text-green-400 text-xs font-mono">
+              [ OK ] Device migrated successfully! Redirecting...
+            </div>
+          </div>
 
         </div>
       </div>

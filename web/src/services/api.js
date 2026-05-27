@@ -64,6 +64,12 @@ export default {
   adoptDevice(deviceId, siteId) {
     return apiClient.post(`/devices/${deviceId}/adopt`, { site_id: siteId })
   },
+  migrateDevice(deviceId, siteId) {
+    return apiClient.post(`/devices/${deviceId}/migrate`, { site_id: siteId })
+  },
+  importDeviceConfig(deviceId) {
+    return apiClient.post(`/devices/${deviceId}/import-config`)
+  },
   getSiteDevices(siteId) {
     return apiClient.get(`/sites/${siteId}/devices`)
   },

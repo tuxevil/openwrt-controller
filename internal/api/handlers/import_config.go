@@ -49,7 +49,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	var lastIP sql.NullString
 	var status sql.NullString
 
-	err := database.DB.QueryRow("SELECT site_id, last_ip, status FROM "+schema+".devices WHERE id = $1", deviceID).Scan(&siteID, &lastIP, &status)
+	err := database.Tx(r.Context()).QueryRow("SELECT site_id, last_ip, status FROM "+schema+".devices WHERE id = $1", deviceID).Scan(&siteID, &lastIP, &status)
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error": "device not found"}`, http.StatusNotFound)
 		return

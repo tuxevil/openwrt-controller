@@ -22,7 +22,7 @@ func GetSiteHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch all devices for the site
-	rows, err := database.DB.Query("SELECT id FROM devices WHERE site_id = $1", siteID)
+	rows, err := database.Tx(r.Context()).Query("SELECT id FROM devices WHERE site_id = $1", siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return

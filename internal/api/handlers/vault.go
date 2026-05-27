@@ -2,10 +2,10 @@ package handlers
 
 import (
 	"encoding/json"
+	"github.com/google/uuid"
 	"io"
 	"log"
 	"net/http"
-	"github.com/google/uuid"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
@@ -20,7 +20,7 @@ func CreateBackupTrigger(w http.ResponseWriter, r *http.Request) {
 
 	// Primero verificamos que el dispositivo tenga last_ip registrada
 	var lastIP string
-	err := database.DB.QueryRow(`SELECT COALESCE(last_ip, '') FROM devices WHERE id = $1`, deviceID).Scan(&lastIP)
+	err := database.Tx(r.Context()).QueryRow(`SELECT COALESCE(last_ip, '') FROM devices WHERE id = $1`, deviceID).Scan(&lastIP)
 	if err != nil || lastIP == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -45,7 +45,7 @@ func CreateBackupTrigger(w http.ResponseWriter, r *http.Request) {
 
 func GetDeviceBackupsHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
-	rows, err := database.DB.Query(`
+	rows, err := database.Tx(r.Context()).Query(`
 		SELECT id, checksum, created_at 
 		FROM backups WHERE device_id = $1 ORDER BY created_at DESC
 	`, deviceID)
@@ -66,8 +66,8 @@ func GetDeviceBackupsHandler(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	if backups == nil { 
-		backups = []map[string]interface{}{} 
+	if backups == nil {
+		backups = []map[string]interface{}{}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -84,11 +84,17 @@ func DiffBackupHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var buf1, buf2 []byte
-	err := database.DB.QueryRow(`SELECT content FROM backups WHERE id = $1`, id1).Scan(&buf1)
-	if err != nil { http.Error(w, `{"error":"B1 missing"}`, 404); return }
-	
-	err = database.DB.QueryRow(`SELECT content FROM backups WHERE id = $1`, id2).Scan(&buf2)
-	if err != nil { http.Error(w, `{"error":"B2 missing"}`, 404); return }
+	err := database.Tx(r.Context()).QueryRow(`SELECT content FROM backups WHERE id = $1`, id1).Scan(&buf1)
+	if err != nil {
+		http.Error(w, `{"error":"B1 missing"}`, 404)
+		return
+	}
+
+	err = database.Tx(r.Context()).QueryRow(`SELECT content FROM backups WHERE id = $1`, id2).Scan(&buf2)
+	if err != nil {
+		http.Error(w, `{"error":"B2 missing"}`, 404)
+		return
+	}
 
 	// A real visual diff logic returns the raw strings to the frontend which rendering it line-by-line
 	// Base64 encoding not needed since its sending raw tar bytes or text? Oh wait, in vault.go we did rawBytes! Its a TAR GZ!
@@ -101,7 +107,14 @@ func DiffBackupHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // UploadFirmwareHandler receives multipart and saves
+
+// Limit concurrent firmware uploads to prevent OOM
+var uploadSemaphore = make(chan struct{}, 5)
+
 func UploadFirmwareHandler(w http.ResponseWriter, r *http.Request) {
+	uploadSemaphore <- struct{}{}
+	defer func() { <-uploadSemaphore }()
+
 	r.ParseMultipartForm(50 << 20) // 50 MB
 	file, handler, err := r.FormFile("firmware")
 	if err != nil {
@@ -117,10 +130,10 @@ func UploadFirmwareHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var id uuid.UUID
-	err = database.DB.QueryRow(`
+	err = database.Tx(r.Context()).QueryRow(`
 		INSERT INTO firmwares (filename, version, data) VALUES ($1, $2, $3) RETURNING id
 	`, handler.Filename, r.FormValue("version"), buf).Scan(&id)
-	
+
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)
 		return

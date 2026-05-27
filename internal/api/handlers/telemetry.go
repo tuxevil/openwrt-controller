@@ -55,7 +55,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var siteKey *string
-	err = database.DB.QueryRow(`
+	err = database.Tx(r.Context()).QueryRow(`
 		SELECT s.api_key FROM `+tenantSchema+`.sites s 
 		JOIN `+tenantSchema+`.devices d ON d.site_id = s.id 
 		WHERE d.id = $1`, deviceID).Scan(&siteKey)
@@ -72,12 +72,12 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil && providedKey != "" {
 		var autoSiteID string
 		var autoAdopt bool
-		zeroTouchErr := database.DB.QueryRow(`
+		zeroTouchErr := database.Tx(r.Context()).QueryRow(`
 			SELECT id, auto_adopt FROM `+tenantSchema+`.sites WHERE api_key = $1
 		`, providedKey).Scan(&autoSiteID, &autoAdopt)
 
 		if zeroTouchErr == nil && autoAdopt {
-			_, _ = database.DB.Exec(
+			_, _ = database.Tx(r.Context()).Exec(
 				"UPDATE "+tenantSchema+".devices SET site_id = $1, status = 'Adopted' WHERE id = $2",
 				autoSiteID, deviceID,
 			)
@@ -239,7 +239,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 4. The Signal (Alerts Evaluation)
 	var sID string
-	_ = database.DB.QueryRow("SELECT site_id FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&sID)
+	_ = database.Tx(r.Context()).QueryRow("SELECT site_id FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&sID)
 	go services.ProcessTelemetry(deviceID, sID, metrics)
 
 	// 5. FLOW_SENSE — process conntrack snapshot
@@ -288,7 +288,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			database.DB.Exec(
+			database.Tx(r.Context()).Exec(
 				"UPDATE "+schema+".devices SET state_json = $1 WHERE id = $2",
 				rawPayload, devID,
 			)

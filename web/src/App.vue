@@ -220,10 +220,7 @@ const fetchHealth = async () => {
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
                 <span class="tracking-widest">MATRIX LOGS</span>
               </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/orchestrator`" active-class="bg-amber-500 !text-black shadow-[0_0_12px_rgba(245,158,11,0.5)]" class="p-2.5 border border-amber-500/50 clip-chamfer text-amber-400 hover:bg-amber-500 hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                <span class="tracking-widest">ORCHESTRATOR</span>
-              </router-link>
+
               <router-link :to="`/site/${$route.params.site_id}/migration`" active-class="bg-purple-500 !text-black shadow-[0_0_12px_rgba(168,85,247,0.5)]" class="p-2.5 border border-purple-500/50 clip-chamfer text-purple-400 hover:bg-purple-500 hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
                 <span class="tracking-widest">STATE_MIGRATOR</span>

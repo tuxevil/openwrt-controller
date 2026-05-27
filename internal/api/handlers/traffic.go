@@ -95,7 +95,7 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `SELECT id, name, state_json FROM devices WHERE site_id = $1`
-	rows, err := database.DB.Query(query, siteID)
+	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "db error"}`, http.StatusInternalServerError)
 		return
@@ -162,7 +162,7 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var shapedMacs []string
-	rowsShapes, err := database.DB.Query(`
+	rowsShapes, err := database.Tx(r.Context()).Query(`
 		SELECT sr.mac 
 		FROM shaping_rules sr
 		JOIN devices d ON sr.device_id = d.id

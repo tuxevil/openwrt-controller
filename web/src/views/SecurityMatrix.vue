@@ -65,10 +65,11 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 const renderMarkdown = (text) => {
   if (!text) return '';
-  return marked.parse(text);
+  return DOMPurify.sanitize(marked.parse(text));
 };
 
 const insights = ref([]);

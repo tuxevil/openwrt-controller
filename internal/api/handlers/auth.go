@@ -42,7 +42,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// Fetch user from DB (now includes tenant_id)
 	var storedHash, role string
 	var tenantID sql.NullString
-	err := database.DB.QueryRow(
+	err := database.Tx(r.Context()).QueryRow(
 		"SELECT password_hash, role, tenant_id FROM users WHERE username = $1",
 		req.Username,
 	).Scan(&storedHash, &role, &tenantID)
@@ -73,7 +73,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// If user has a tenant binding, resolve the schema_alias and include it
 	var schemaAlias string
 	if tenantID.Valid {
-		err := database.DB.QueryRow(
+		err := database.Tx(r.Context()).QueryRow(
 			"SELECT schema_alias FROM tenants WHERE id = $1 AND is_active = true",
 			tenantID.String,
 		).Scan(&schemaAlias)

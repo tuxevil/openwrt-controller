@@ -13,7 +13,7 @@ import (
 // ─── Profile CRUD ────────────────────────────────────────────────────────────
 
 func ListProfilesHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.DB.Query(`SELECT id, name, description, config_json, created_at, updated_at FROM profiles ORDER BY created_at DESC`)
+	rows, err := database.Tx(r.Context()).Query(`SELECT id, name, description, config_json, created_at, updated_at FROM profiles ORDER BY created_at DESC`)
 	if err != nil {
 		http.Error(w, `{"error":"db error"}`, http.StatusInternalServerError)
 		return
@@ -49,7 +49,7 @@ func CreateProfileHandler(w http.ResponseWriter, r *http.Request) {
 		cfg = json.RawMessage(`{}`)
 	}
 	var id string
-	err := database.DB.QueryRow(
+	err := database.Tx(r.Context()).QueryRow(
 		`INSERT INTO profiles (name, description, config_json) VALUES ($1, $2, $3) RETURNING id`,
 		body.Name, body.Description, cfg,
 	).Scan(&id)
@@ -64,8 +64,8 @@ func CreateProfileHandler(w http.ResponseWriter, r *http.Request) {
 
 func DeleteProfileHandler(w http.ResponseWriter, r *http.Request) {
 	profileID := r.PathValue("profile_id")
-	database.DB.Exec(`UPDATE sites SET profile_id = NULL WHERE profile_id = $1`, profileID)
-	database.DB.Exec(`DELETE FROM profiles WHERE id = $1`, profileID)
+	database.Tx(r.Context()).Exec(`UPDATE sites SET profile_id = NULL WHERE profile_id = $1`, profileID)
+	database.Tx(r.Context()).Exec(`DELETE FROM profiles WHERE id = $1`, profileID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -75,7 +75,7 @@ func AssignSiteProfileHandler(w http.ResponseWriter, r *http.Request) {
 		ProfileID string `json:"profile_id"`
 	}
 	json.NewDecoder(r.Body).Decode(&body)
-	_, err := database.DB.Exec(`UPDATE sites SET profile_id = $1 WHERE id = $2`, body.ProfileID, siteID)
+	_, err := database.Tx(r.Context()).Exec(`UPDATE sites SET profile_id = $1 WHERE id = $2`, body.ProfileID, siteID)
 	if err != nil {
 		http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
 		return

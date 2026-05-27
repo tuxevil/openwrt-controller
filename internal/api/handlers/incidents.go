@@ -10,7 +10,7 @@ import (
 
 func GetIncidentsHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
-	rows, err := database.DB.Query(`
+	rows, err := database.Tx(r.Context()).Query(`
 		SELECT i.id, i.site_id, i.device_id,
 		       COALESCE(NULLIF(d.state_json->'board'->>'hostname', ''), i.device_id),
 		       i.incident_type, i.severity, i.status, i.created_at, i.resolved_at 

@@ -40,7 +40,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := database.DB.Query(
+	rows, err := database.Tx(r.Context()).Query(
 		"SELECT id, name, state_json FROM devices WHERE site_id = $1 AND state_json IS NOT NULL",
 		siteID,
 	)
@@ -52,7 +52,7 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch custom hostnames
 	customHostnames := make(map[string]string)
-	hRows, err := database.DB.Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	hRows, err := database.Tx(r.Context()).Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
 	if err == nil {
 		defer hRows.Close()
 		for hRows.Next() {
@@ -193,9 +193,23 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		// Extract L2 tables from neighbor_stats (as sent by the agent) or fallback to root d
+		var arpRaw interface{}
+		var btRaw interface{}
+		if ns, ok := d["neighbor_stats"].(map[string]interface{}); ok {
+			arpRaw = ns["arp_table"]
+			btRaw = ns["bridge_table"]
+		}
+		if arpRaw == nil {
+			arpRaw = d["arp_table"]
+		}
+		if btRaw == nil {
+			btRaw = d["bridge_table"]
+		}
+
 		// ── PRIORITY 2: ARP table (flat array: [{ip, mac}]) ───────────────────
-		if arpRaw, ok := d["arp_table"].([]interface{}); ok {
-			for _, entryRaw := range arpRaw {
+		if arpList, ok := arpRaw.([]interface{}); ok {
+			for _, entryRaw := range arpList {
 				entry, ok := entryRaw.(map[string]interface{})
 				if !ok {
 					continue
@@ -222,28 +236,22 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// ── PRIORITY 3: bridge_table ───────────────────────────────────────────
-		if btRaw, ok := d["bridge_table"].(map[string]interface{}); ok {
-			for _, entriesRaw := range btRaw {
-				entries, ok := entriesRaw.([]interface{})
+		if btList, ok := btRaw.([]interface{}); ok {
+			for _, eRaw := range btList {
+				entry, ok := eRaw.(map[string]interface{})
 				if !ok {
 					continue
 				}
-				for _, eRaw := range entries {
-					entry, ok := eRaw.(map[string]interface{})
-					if !ok {
-						continue
-					}
-					mac := strings.ToUpper(strVal(entry, "mac"))
-					if mac == "" || mac == "00:00:00:00:00:00" {
-						continue
-					}
-					if _, found := clientMap[mac]; !found {
-						clientMap[mac] = &AggregatedClient{
-							MAC:            mac,
-							UplinkDevice:   devID,
-							UplinkName:     nodeName,
-							ConnectionType: "wired",
-						}
+				mac := strings.ToUpper(strVal(entry, "mac"))
+				if mac == "" || mac == "00:00:00:00:00:00" {
+					continue
+				}
+				if _, found := clientMap[mac]; !found {
+					clientMap[mac] = &AggregatedClient{
+						MAC:            mac,
+						UplinkDevice:   devID,
+						UplinkName:     nodeName,
+						ConnectionType: "wired",
 					}
 				}
 			}
@@ -325,7 +333,7 @@ func UpdateClientHostnameHandler(w http.ResponseWriter, r *http.Request) {
 			site_id = EXCLUDED.site_id,
 			updated_at = CURRENT_TIMESTAMP
 	`
-	_, err := database.DB.Exec(query, mac, siteID, payload.Hostname)
+	_, err := database.Tx(r.Context()).Exec(query, mac, siteID, payload.Hostname)
 	if err != nil {
 		http.Error(w, `{"error": "failed to update hostname"}`, http.StatusInternalServerError)
 		return

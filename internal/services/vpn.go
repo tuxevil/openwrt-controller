@@ -28,9 +28,12 @@ func GenerateWireGuardKeys() (priv string, pub string, err error) {
 }
 
 // AssignInternalIP assigns a unique 10.8.0.x IP for the given device ID
-func AssignInternalIP(deviceID string) (string, error) {
+func AssignInternalIP(schema string, deviceID string) (string, error) {
+	if schema == "" {
+		schema = "public"
+	}
 	var wgIP sql.NullString
-	err := database.DB.QueryRow("SELECT wg_ip FROM devices WHERE id = $1", deviceID).Scan(&wgIP)
+	err := database.DB.QueryRow(fmt.Sprintf("SELECT wg_ip FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&wgIP)
 	if err != nil && err != sql.ErrNoRows {
 		return "", err
 	}
@@ -49,7 +52,7 @@ func AssignInternalIP(deviceID string) (string, error) {
 	// Find highest assigned IP in 10.8.0.x
 	// E.g. IPs are like 10.8.0.X. We can cast the last octet or just sequentially look up.
 	// We'll pick sequential starting from 2
-	rows, err := tx.Query("SELECT wg_ip FROM devices WHERE wg_ip IS NOT NULL AND wg_ip LIKE '10.8.0.%'")
+	rows, err := tx.Query(fmt.Sprintf("SELECT wg_ip FROM %s.devices WHERE wg_ip IS NOT NULL AND wg_ip LIKE '10.8.0.%%'", schema))
 	if err != nil {
 		return "", err
 	}
@@ -76,7 +79,7 @@ func AssignInternalIP(deviceID string) (string, error) {
 		return "", fmt.Errorf("no available IPs in 10.8.0.x subnet")
 	}
 
-	_, err = tx.Exec("UPDATE devices SET wg_ip = $1 WHERE id = $2", newIP, deviceID)
+	_, err = tx.Exec(fmt.Sprintf("UPDATE %s.devices SET wg_ip = $1 WHERE id = $2", schema), newIP, deviceID)
 	if err != nil {
 		return "", err
 	}

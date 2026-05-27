@@ -1,0 +1,12 @@
+.git
+.gitignore
+node_modules/
+**/node_modules/
+web/dist/
+backend.log
+state.json
+tmp_test/
+test_bin/
+openwrt-controller
+*.log
+*.exe

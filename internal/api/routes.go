@@ -40,6 +40,8 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/devices", middleware.WithAuth(handlers.GetDevicesHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/devices", middleware.WithAuth(handlers.GetSiteDevicesHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/adopt", middleware.WithAuth(handlers.AdoptDeviceHandler))
+	mux.HandleFunc("POST /api/devices/{device_id}/migrate", middleware.WithAuth(handlers.MigrateDeviceHandler))
+	mux.HandleFunc("POST /api/devices/{device_id}/import-config", middleware.WithAuth(middleware.RequireAdmin(handlers.ImportDeviceConfigHandler)))
 
 	mux.HandleFunc("POST /api/sites/{site_id}/wlans", middleware.WithAuth(handlers.CreateWLANHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/wlans", middleware.WithAuth(handlers.GetWLANsHandler))

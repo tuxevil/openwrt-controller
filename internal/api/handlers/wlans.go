@@ -15,7 +15,7 @@ func DeleteWLANHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := database.DB.Exec("DELETE FROM wlans WHERE id = $1", wlanID)
+	res, err := database.Tx(r.Context()).Exec("DELETE FROM wlans WHERE id = $1", wlanID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -68,7 +68,7 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var newID string
-	err := database.DB.QueryRow(
+	err := database.Tx(r.Context()).QueryRow(
 		"INSERT INTO wlans (site_id, ssid, security, password, enabled, roaming_enabled) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
 		siteID, req.SSID, req.Security, req.Password, enabled, roamingEnabled,
 	).Scan(&newID)
@@ -96,7 +96,7 @@ func GetWLANsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `SELECT id, site_id, ssid, security, enabled, COALESCE(roaming_enabled, false) FROM wlans WHERE site_id = $1`
-	rows, err := database.DB.Query(query, siteID)
+	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return

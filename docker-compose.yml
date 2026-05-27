@@ -1,6 +1,23 @@
-version: '3.8'
-
 services:
+  openwrt-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openwrt_controller
+    ports:
+      - "3000:3000"
+    environment:
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/openwrthub
+      - INFLUX_URL=http://influxdb:8086
+      - INFLUX_ORG=openwrthub
+      - INFLUX_BUCKET=telemetry
+      - INFLUX_TOKEN=REPLACE_WITH_INFLUX_TOKEN
+      - JWT_SECRET=REPLACE_WITH_JWT_SECRET
+    depends_on:
+      - postgres
+      - influxdb
+    restart: unless-stopped
+
   postgres:
     image: postgres:15-alpine
     container_name: openwrt_postgres

@@ -38,7 +38,7 @@ func GetSiteFlowSenseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// COALESCE(name, id) avoids NULL scan failures for unnamed devices
-	rows, err := database.DB.Query(`
+	rows, err := database.Tx(r.Context()).Query(`
 		SELECT id, COALESCE(name, id) AS device_name, state_json
 		FROM devices
 		WHERE site_id = $1 AND state_json IS NOT NULL

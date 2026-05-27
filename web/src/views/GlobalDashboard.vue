@@ -14,7 +14,8 @@ const isAdmin = () => {
     const token = localStorage.getItem('jwt_token')
     if (!token) return false
     const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.role && payload.role.toUpperCase() === 'ADMIN'
+    const role = payload.role ? payload.role.toUpperCase() : ""
+    return role === "ADMIN" || role === "SUPERADMIN"
   } catch (e) {
     return false
   }

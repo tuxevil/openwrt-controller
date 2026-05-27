@@ -20,7 +20,7 @@ type User struct {
 
 
 func GetUsersHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.DB.Query("SELECT id, username, role, created_at FROM users ORDER BY created_at ASC")
+	rows, err := database.Tx(r.Context()).Query("SELECT id, username, role, created_at FROM users ORDER BY created_at ASC LIMIT 1000")
 	if err != nil {
 		http.Error(w, `{"error":"failed to fetch users"}`, http.StatusInternalServerError)
 		return
@@ -69,7 +69,7 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = database.DB.Exec(
+	_, err = database.Tx(r.Context()).Exec(
 		"INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)",
 		req.Username, string(hash), req.Role,
 	)
@@ -117,10 +117,10 @@ func UpdateUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 	// Protect against removing the last ADMIN if changing their role
 	if req.Role != "ADMIN" {
 		var currentRole string
-		_ = database.DB.QueryRow("SELECT role FROM users WHERE id = $1", id).Scan(&currentRole)
+		_ = database.Tx(r.Context()).QueryRow("SELECT role FROM users WHERE id = $1", id).Scan(&currentRole)
 		if strings.ToUpper(currentRole) == "ADMIN" {
 			var adminCount int
-			database.DB.QueryRow("SELECT Count(*) FROM users WHERE role = 'ADMIN'").Scan(&adminCount)
+			database.Tx(r.Context()).QueryRow("SELECT Count(*) FROM users WHERE role = 'ADMIN'").Scan(&adminCount)
 			if adminCount <= 1 {
 				http.Error(w, `{"error":"cannot demote the last ADMIN"}`, http.StatusConflict)
 				return
@@ -128,7 +128,7 @@ func UpdateUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_, err := database.DB.Exec("UPDATE users SET role = $1 WHERE id = $2", req.Role, id)
+	_, err := database.Tx(r.Context()).Exec("UPDATE users SET role = $1 WHERE id = $2", req.Role, id)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return
@@ -164,7 +164,7 @@ func UpdateUserPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err = database.DB.Exec("UPDATE users SET password_hash = $1 WHERE id = $2", string(hash), id)
+	_, err = database.Tx(r.Context()).Exec("UPDATE users SET password_hash = $1 WHERE id = $2", string(hash), id)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return
@@ -188,7 +188,7 @@ func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Protect against terminating the last admin
 	var role string
-	err := database.DB.QueryRow("SELECT role FROM users WHERE id = $1", id).Scan(&role)
+	err := database.Tx(r.Context()).QueryRow("SELECT role FROM users WHERE id = $1", id).Scan(&role)
 	if err != nil {
 		http.Error(w, `{"error":"user not found"}`, http.StatusNotFound)
 		return
@@ -196,14 +196,14 @@ func DeleteUserHandler(w http.ResponseWriter, r *http.Request) {
 
 	if strings.ToUpper(role) == "ADMIN" {
 		var adminCount int
-		database.DB.QueryRow("SELECT Count(*) FROM users WHERE role = 'ADMIN'").Scan(&adminCount)
+		database.Tx(r.Context()).QueryRow("SELECT Count(*) FROM users WHERE role = 'ADMIN'").Scan(&adminCount)
 		if adminCount <= 1 {
 			http.Error(w, `{"error":"cannot delete the last ADMIN"}`, http.StatusConflict)
 			return
 		}
 	}
 
-	_, err = database.DB.Exec("DELETE FROM users WHERE id = $1", id)
+	_, err = database.Tx(r.Context()).Exec("DELETE FROM users WHERE id = $1", id)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return

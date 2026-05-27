@@ -11,14 +11,14 @@ import (
 func GetDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 	
-	query := `SELECT id, site_id, name, model, status, last_seen_at FROM devices`
+	query := `SELECT id, site_id, name, model, status, last_seen_at FROM devices LIMIT 1000`
 	args := []interface{}{}
 	
 	if statusFilter == "pending" {
-		query += ` WHERE site_id IS NULL`
+		query = `SELECT id, site_id, name, model, status, last_seen_at FROM devices WHERE site_id IS NULL LIMIT 1000`
 	}
 
-	rows, err := database.DB.Query(query, args...)
+	rows, err := database.Tx(r.Context()).Query(query, args...)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -63,7 +63,7 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json FROM devices WHERE site_id = $1`
-	rows, err := database.DB.Query(query, siteID)
+	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return

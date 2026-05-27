@@ -7,9 +7,9 @@ CONTROLLER_IP="10.0.0.6"
 PORT="3000"
 BASE_URL="http://$CONTROLLER_IP:$PORT/api"
 TELEMETRY_URL="$BASE_URL/telemetry"
-CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 # Obtener MAC de la interfaz puente como ID único
-DEVICE_ID=$(cat /sys/class/net/br-lan/address | tr '[:lower:]' '[:upper:]')
+DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]' || cat /sys/class/net/eth0/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
+CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 
 # Instalar dependencias si faltan (opcional)
 # opkg update && opkg install iwinfo curl
@@ -18,7 +18,10 @@ T_FAILS=0
 
 while true; do
     # 0. CHECK AUTO-UPDATE
-    AGENT_VERSION=$(sha256sum "$0" | awk '{print $1}')
+    # Reconstruct default config before hashing to match the raw database version_hash
+    AGENT_VERSION=$(sed -e 's|^SITE_KEY=.*|SITE_KEY="TU_API_KEY_AQUI"|' \
+                        -e 's|^CONTROLLER_IP=.*|CONTROLLER_IP="10.0.0.6"|' \
+                        -e 's|^PORT=.*|PORT="3000"|' "$0" | sha256sum | awk '{print $1}')
     LATEST_JSON=$(curl -m 5 -s -X GET -H "X-Site-Key: $SITE_KEY" "$BASE_URL/agent/latest")
     
     if [ -n "$LATEST_JSON" ]; then
@@ -29,6 +32,17 @@ while true; do
                 TMP_HASH=$(sha256sum "$0.tmp" | awk '{print $1}')
                 if [ "$TMP_HASH" = "$LATEST_HASH" ]; then
                     logger -t agent "Agent downloaded securely. Updating and restarting."
+                    
+                    # Preserve config from the current agent script
+                    CURRENT_SITE_KEY=$(grep -E "^SITE_KEY=" "$0" | cut -d'"' -f2)
+                    CURRENT_CONTROLLER_IP=$(grep -E "^CONTROLLER_IP=" "$0" | cut -d'"' -f2)
+                    CURRENT_PORT=$(grep -E "^PORT=" "$0" | cut -d'"' -f2)
+                    
+                    # Replace default config in the new agent script if they were set in the old one
+                    [ -n "$CURRENT_SITE_KEY" ] && sed -i "s|^SITE_KEY=.*|SITE_KEY=\"$CURRENT_SITE_KEY\"|" "$0.tmp"
+                    [ -n "$CURRENT_CONTROLLER_IP" ] && sed -i "s|^CONTROLLER_IP=.*|CONTROLLER_IP=\"$CURRENT_CONTROLLER_IP\"|" "$0.tmp"
+                    [ -n "$CURRENT_PORT" ] && sed -i "s|^PORT=.*|PORT=\"$CURRENT_PORT\"|" "$0.tmp"
+                    
                     cp "$0" "$0.old"
                     mv "$0.tmp" "$0"
                     chmod +x "$0"
@@ -359,6 +373,15 @@ EOF
                 
                 logger -t agent "WIREGUARD: wg0 committed. Bringing interface up."
                 ifup wg0
+            fi
+        else
+            WG_EXISTS=$(uci -q get network.wg0.proto)
+            if [ "$WG_EXISTS" = "wireguard" ]; then
+                logger -t agent "WIREGUARD: Disabling and deleting wg0 interface..."
+                ifdown wg0 2>/dev/null || true
+                uci -q delete network.wg0
+                uci -q delete network.wg0_control
+                uci commit network
             fi
         fi
     fi

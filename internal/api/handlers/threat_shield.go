@@ -26,7 +26,7 @@ func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var siteID string
-	err := database.DB.QueryRow(
+	err := database.Tx(r.Context()).QueryRow(
 		"SELECT id FROM sites WHERE api_key = $1", siteKey,
 	).Scan(&siteID)
 	if err != nil || siteID == "" {
@@ -36,7 +36,7 @@ func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Only serve if the site has threat_shield enabled
 	var enabled bool
-	_ = database.DB.QueryRow(
+	_ = database.Tx(r.Context()).QueryRow(
 		"SELECT COALESCE(threat_shield_enabled, false) FROM sites WHERE id = $1", siteID,
 	).Scan(&enabled)
 	if !enabled {
@@ -68,7 +68,7 @@ func ToggleThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := database.DB.Exec(
+	_, err := database.Tx(r.Context()).Exec(
 		"UPDATE sites SET threat_shield_enabled = $1 WHERE id = $2",
 		req.Enabled, siteID,
 	)
@@ -90,7 +90,7 @@ func GetSiteThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 
 	var enabled bool
-	err := database.DB.QueryRow(
+	err := database.Tx(r.Context()).QueryRow(
 		"SELECT COALESCE(threat_shield_enabled, false) FROM sites WHERE id = $1", siteID,
 	).Scan(&enabled)
 	if err != nil {
@@ -99,7 +99,7 @@ func GetSiteThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Collect per-device drop stats
-	rows, _ := database.DB.Query(`
+	rows, _ := database.Tx(r.Context()).Query(`
 		SELECT id, COALESCE(name, id), COALESCE(threat_shield_drops, 0)
 		FROM devices
 		WHERE site_id = $1

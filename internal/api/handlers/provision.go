@@ -38,12 +38,24 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	providedKey := r.Header.Get("X-Site-Key")
+	if providedKey == "" {
+		http.Error(w, `{"error": "Forbidden: missing site key"}`, http.StatusForbidden)
+		return
+	}
+
+	tenantSchema, err := database.GetTenantSchemaForSiteKey(providedKey)
+	if err != nil {
+		http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
+		return
+	}
+
 	// --- Módulo 3: Hardening - Validar X-Device-Token ---
 	token := r.Header.Get("X-Device-Token")
 	if token != "" {
 		// Solo valida si se envía un token; sin token = acceso sin auth (modo legado)
 		var storedToken sql.NullString
-		err := database.DB.QueryRow("SELECT device_token FROM devices WHERE id = $1", deviceID).Scan(&storedToken)
+		err := database.Tx(r.Context()).QueryRow("SELECT device_token FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&storedToken)
 		if err == nil && storedToken.Valid && storedToken.String != "" && storedToken.String != token {
 			http.Error(w, `{"error": "invalid device token"}`, http.StatusUnauthorized)
 			return
@@ -52,10 +64,10 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	var siteID sql.NullString
 	var siteKey *string
-	err := database.DB.QueryRow(`
+	err = database.Tx(r.Context()).QueryRow(`
 		SELECT d.site_id, s.api_key 
-		FROM devices d 
-		LEFT JOIN sites s ON d.site_id = s.id 
+		FROM `+tenantSchema+`.devices d 
+		LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id 
 		WHERE d.id = $1`, deviceID).Scan(&siteID, &siteKey)
 
 	if err == sql.ErrNoRows {
@@ -66,7 +78,6 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	providedKey := r.Header.Get("X-Site-Key")
 	if siteKey != nil && *siteKey != "" {
 		if providedKey != *siteKey {
 			http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
@@ -85,13 +96,13 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Módulo 2: Actualizar last_config_pulled_at ---
-	_, _ = database.DB.Exec(
-		"UPDATE devices SET last_config_pulled_at = CURRENT_TIMESTAMP WHERE id = $1",
+	_, _ = database.Tx(r.Context()).Exec(
+		"UPDATE "+tenantSchema+".devices SET last_config_pulled_at = CURRENT_TIMESTAMP WHERE id = $1",
 		deviceID,
 	)
 
-	rows, err := database.DB.Query(
-		"SELECT ssid, security, password FROM wlans WHERE site_id = $1 AND enabled = true",
+	rows, err := database.Tx(r.Context()).Query(
+		"SELECT ssid, security, password FROM "+tenantSchema+".wlans WHERE site_id = $1 AND enabled = true",
 		siteID.String,
 	)
 	if err != nil {
@@ -125,24 +136,24 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Módulo SECURE_TUNNEL: Wireguard Config ---
-	var wgPrivKey, wgPubKey, wgIP, wgEndpoint, siteWgPubKey sql.NullString
-	_ = database.DB.QueryRow(`
-		SELECT d.wg_privkey, d.wg_pubkey, d.wg_ip, s.wg_endpoint, s.wg_pubkey 
-		FROM devices d 
-		LEFT JOIN sites s ON d.site_id = s.id 
-		WHERE d.id = $1`, deviceID).Scan(&wgPrivKey, &wgPubKey, &wgIP, &wgEndpoint, &siteWgPubKey)
+	var wgPrivKey, wgPubKey, wgIP, wgEndpoint, siteWgPubKey, deviceRole sql.NullString
+	_ = database.Tx(r.Context()).QueryRow(`
+		SELECT d.wg_privkey, d.wg_pubkey, d.wg_ip, s.wg_endpoint, s.wg_pubkey, d.device_role 
+		FROM `+tenantSchema+`.devices d 
+		LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id 
+		WHERE d.id = $1`, deviceID).Scan(&wgPrivKey, &wgPubKey, &wgIP, &wgEndpoint, &siteWgPubKey, &deviceRole)
 
 	if !wgPrivKey.Valid || wgPrivKey.String == "" {
 		priv, pub, err := services.GenerateWireGuardKeys()
 		if err == nil {
-			database.DB.Exec("UPDATE devices SET wg_privkey = $1, wg_pubkey = $2 WHERE id = $3", priv, pub, deviceID)
+			database.Tx(r.Context()).Exec("UPDATE "+tenantSchema+".devices SET wg_privkey = $1, wg_pubkey = $2 WHERE id = $3", priv, pub, deviceID)
 			wgPrivKey = sql.NullString{String: priv, Valid: true}
 			wgPubKey = sql.NullString{String: pub, Valid: true}
 		}
 	}
 	
 	if !wgIP.Valid || wgIP.String == "" {
-		ip, err := services.AssignInternalIP(deviceID)
+		ip, err := services.AssignInternalIP(tenantSchema, deviceID)
 		if err == nil {
 			wgIP = sql.NullString{String: ip, Valid: true}
 		}
@@ -153,13 +164,14 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		// Generate site controller key if missing
 		sitePriv, sitePub, err := services.GenerateWireGuardKeys()
 		if err == nil {
-			database.DB.Exec("UPDATE sites SET wg_privkey = $1, wg_pubkey = $2 WHERE id = $3", sitePriv, sitePub, siteID.String)
+			database.Tx(r.Context()).Exec("UPDATE "+tenantSchema+".sites SET wg_privkey = $1, wg_pubkey = $2 WHERE id = $3", sitePriv, sitePub, siteID.String)
 			siteWgPubKey = sql.NullString{String: sitePub, Valid: true}
 		}
 	}
 
 	wgConfig := make(map[string]interface{})
-	if wgEndpoint.Valid && wgEndpoint.String != "" {
+	isGateway := deviceRole.Valid && strings.EqualFold(deviceRole.String, "gateway")
+	if wgEndpoint.Valid && wgEndpoint.String != "" && isGateway {
 		wgConfig["enabled"] = true
 		wgConfig["private_key"] = wgPrivKey.String
 		wgConfig["controller_pubkey"] = siteWgPubKey.String
@@ -172,8 +184,8 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch threat shield setting for this site
 	var threatShieldEnabled bool
-	_ = database.DB.QueryRow(
-		"SELECT COALESCE(threat_shield_enabled, false) FROM sites WHERE id = $1", siteID.String,
+	_ = database.Tx(r.Context()).QueryRow(
+		"SELECT COALESCE(threat_shield_enabled, false) FROM "+tenantSchema+".sites WHERE id = $1", siteID.String,
 	).Scan(&threatShieldEnabled)
 
 	json.NewEncoder(w).Encode(map[string]interface{}{

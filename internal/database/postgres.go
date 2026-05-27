@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -38,8 +39,8 @@ func InitPostgres() error {
 		return fmt.Errorf("failed to create landlord tables: %w", err)
 	}
 
-	if err := migrateExistingDataToDefaultTenant(); err != nil {
-		log.Printf("Warning: default tenant migration: %v", err)
+	if err := runMigrationsForAllTenants(); err != nil {
+		log.Printf("Warning: tenant migrations failed: %v", err)
 	}
 
 	return nil
@@ -372,162 +373,28 @@ func createTenantTables(schema string) error {
 }
 
 // ─── DATA MIGRATION ──────────────────────────────────────────────────────────
-// One-time migration of existing public schema data into tenant_example.
 
-func migrateExistingDataToDefaultTenant() error {
-	// Check if default tenant already exists
-	var count int
-	err := DB.QueryRow("SELECT COUNT(*) FROM tenants WHERE schema_alias = 'examplecorp'").Scan(&count)
+func runMigrationsForAllTenants() error {
+	rows, err := DB.Query("SELECT schema_alias FROM tenants WHERE is_active = true")
 	if err != nil {
-		return fmt.Errorf("failed to check for default tenant: %w", err)
-	}
-
-	if count > 0 {
-		// Check if tenant schema has data already
-		var tenantSites int
-		DB.QueryRow("SELECT COUNT(*) FROM tenant_examplecorp.sites").Scan(&tenantSites)
-		if tenantSites > 0 {
-			// Already migrated with data — just run migrations to keep schema updated
-			return RunTenantMigrations("tenant_examplecorp")
-		}
-		// Tenant exists but migration failed previously — re-run migration
-		log.Println("[LANDLORD] Re-running data migration for tenant_examplecorp...")
-		if err := RunTenantMigrations("tenant_examplecorp"); err != nil {
-			return err
-		}
-		return migrateDataToTenantSchema("tenant_examplecorp")
-	}
-
-	// Check if there is any existing data to migrate
-	var siteCount int
-	err = DB.QueryRow("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'sites'").Scan(&siteCount)
-	if err != nil || siteCount == 0 {
-		return nil // No existing sites table, nothing to migrate
-	}
-
-	var existingSites int
-	err = DB.QueryRow("SELECT COUNT(*) FROM public.sites").Scan(&existingSites)
-	if err != nil || existingSites == 0 {
-		return nil // No existing sites, nothing to migrate
-	}
-
-	log.Println("[LANDLORD] Migrating existing data to tenant_examplecorp schema...")
-
-	// 1. Create the tenant record
-	_, err = DB.Exec(
-		"INSERT INTO tenants (name, schema_alias) VALUES ($1, $2)",
-		"ExampleCorp", "examplecorp",
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create default tenant: %w", err)
-	}
-
-	// 2. Create schema and tables
-	if err := RunTenantMigrations("tenant_examplecorp"); err != nil {
-		return fmt.Errorf("failed to run tenant migrations for examplecorp: %w", err)
-	}
-
-	// 3. Migrate data
-	if err := migrateDataToTenantSchema("tenant_examplecorp"); err != nil {
-		return err
-	}
-
-	// 4. Bind existing non-superadmin users to this tenant
-	var tenantID string
-	err = DB.QueryRow("SELECT id FROM tenants WHERE schema_alias = 'examplecorp'").Scan(&tenantID)
-	if err == nil {
-		DB.Exec("UPDATE users SET tenant_id = $1 WHERE tenant_id IS NULL AND role != 'SUPERADMIN'", tenantID)
-	}
-
-	log.Println("[LANDLORD] Data migration to tenant_examplecorp complete.")
-	return nil
-}
-
-// migrateDataToTenantSchema copies data from public schema tables to the tenant schema.
-// Uses explicit column names to avoid column-order mismatches.
-func migrateDataToTenantSchema(schema string) error {
-	// Tables to migrate in FK-dependency order
-	tables := []string{
-		"controllers",
-		"profiles",
-		"sites",
-		"devices",
-		"wlans",
-		"site_settings",
-		"incidents",
-		"backups",
-		"firmwares",
-		"agent_versions",
-		"system_logs",
-		"client_hostnames",
-		"ai_insights",
-		"shaping_rules",
-		"site_configs",
-		"guest_vouchers",
-		"portal_settings",
-	}
-
-	for _, table := range tables {
-		// Find column names common to both public and tenant schema
-		cols, err := getCommonColumns("public", schema, table)
-		if err != nil || len(cols) == 0 {
-			continue // Table doesn't exist in one of the schemas
-		}
-
-		colList := strings.Join(cols, ", ")
-		query := fmt.Sprintf(
-			"INSERT INTO %s.%s (%s) SELECT %s FROM public.%s ON CONFLICT DO NOTHING",
-			schema, table, colList, colList, table,
-		)
-
-		if _, err := DB.Exec(query); err != nil {
-			log.Printf("[LANDLORD] migration warning [%s]: %v", table, err)
-		} else {
-			var rowCount int
-			DB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s.%s", schema, table)).Scan(&rowCount)
-			if rowCount > 0 {
-				log.Printf("[LANDLORD] ✓ Migrated %s: %d rows", table, rowCount)
-			}
-		}
-	}
-
-	// Threat intel meta has SERIAL PK, needs special handling
-	DB.Exec(fmt.Sprintf(
-		"INSERT INTO %s.threat_intel_meta (fetched_at, ip_count, sources_count) SELECT fetched_at, ip_count, sources_count FROM public.threat_intel_meta ON CONFLICT DO NOTHING",
-		schema,
-	))
-
-	return nil
-}
-
-// getCommonColumns returns column names that exist in both the source and target table.
-func getCommonColumns(srcSchema, dstSchema, table string) ([]string, error) {
-	query := `
-		SELECT s.column_name
-		FROM information_schema.columns s
-		JOIN information_schema.columns d
-			ON s.column_name = d.column_name
-		WHERE s.table_schema = $1 AND s.table_name = $3
-		  AND d.table_schema = $2 AND d.table_name = $3
-		ORDER BY s.ordinal_position
-	`
-	rows, err := DB.Query(query, srcSchema, dstSchema, table)
-	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to query active tenants for migration: %w", err)
 	}
 	defer rows.Close()
 
-	var cols []string
 	for rows.Next() {
-		var col string
-		if err := rows.Scan(&col); err == nil {
-			cols = append(cols, col)
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			log.Printf("Warning: failed to scan tenant schema alias: %v", err)
+			continue
+		}
+		schemaAlias := "tenant_" + alias
+		log.Printf("[LANDLORD] Running migrations for tenant: %s", schemaAlias)
+		if err := RunTenantMigrations(schemaAlias); err != nil {
+			log.Printf("Error running migrations for tenant %s: %v", schemaAlias, err)
 		}
 	}
-	return cols, nil
+	return nil
 }
-
-// ─── SEED FUNCTIONS ──────────────────────────────────────────────────────────
 
 func seedSuperAdminUser() error {
 	var count int
@@ -538,7 +405,14 @@ func seedSuperAdminUser() error {
 
 	if count == 0 {
 		// Fresh install — create SUPERADMIN
-		hash, err := bcrypt.GenerateFromPassword([]byte("REPLACE_WITH_BOOTSTRAP_PASSWORD"), bcrypt.DefaultCost)
+		adminPass := os.Getenv("SUPERADMIN_DEFAULT_PASSWORD")
+		if adminPass == "" {
+			b := make([]byte, 12)
+			rand.Read(b)
+			adminPass = hex.EncodeToString(b)
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(adminPass), bcrypt.DefaultCost)
 		if err != nil {
 			return fmt.Errorf("failed to hash bootstrap password: %w", err)
 		}
@@ -549,7 +423,12 @@ func seedSuperAdminUser() error {
 		if err != nil {
 			return fmt.Errorf("failed to seed superadmin user: %w", err)
 		}
-		log.Println("Bootstrap SUPERADMIN user created (username: admin)")
+		log.Println("=========================================================")
+		log.Println("Bootstrap SUPERADMIN user created!")
+		log.Println("Username: admin")
+		log.Printf("Password: %s\n", adminPass)
+		log.Println("Please change this password immediately after login.")
+		log.Println("=========================================================")
 	} else {
 		// Upgrade existing admin to SUPERADMIN if no SUPERADMIN exists
 		var saCount int
@@ -723,4 +602,21 @@ func GetTenantSchemaForSiteKey(siteKey string) (string, error) {
 	}
 
 	return "", fmt.Errorf("site key not found in any tenant schema")
+}
+
+type Queryer interface {
+	Query(query string, args ...any) (*sql.Rows, error)
+	QueryRow(query string, args ...any) *sql.Row
+	Exec(query string, args ...any) (sql.Result, error)
+}
+
+type txKeyType string
+
+const TxKey = txKeyType("tx")
+
+func Tx(ctx context.Context) Queryer {
+	if tx, ok := ctx.Value(TxKey).(*sql.Tx); ok {
+		return tx
+	}
+	return DB // Fallback to global connection pool if no transaction
 }
