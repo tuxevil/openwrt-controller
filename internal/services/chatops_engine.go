@@ -45,7 +45,7 @@ Respond ONLY with a valid JSON block, using this strict schema:
 }`
 
 // ProcessChatOpsQuery takes natural language from the user, determines the intent via the LLM, and explicitly maps it to safe data functions execution.
-func ProcessChatOpsQuery(query string) (*ChatOpsResponse, error) {
+func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 	settings := database.GetPlatformSettings()
 	ollamaHost := settings.OllamaHost
 	if ollamaHost == "" {
@@ -209,7 +209,7 @@ func ProcessChatOpsQuery(query string) (*ChatOpsResponse, error) {
 			response.Data = nil
 		} else {
 			// Trigger Vault Audit securely
-			result, err := RunVaultAudit(intent.TargetDevice)
+			result, err := RunVaultAudit(schema, intent.TargetDevice)
 			if err != nil {
 				response.Summary = fmt.Sprintf("Failed to run audit on %s: %v", intent.TargetDevice, err)
 			} else {

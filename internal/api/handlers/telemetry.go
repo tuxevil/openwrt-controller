@@ -233,14 +233,14 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			if err := database.InsertDeviceLogs(schema, devID, logs); err != nil {
 				log.Printf("Error inserting logs: %v\n", err)
 			}
-			services.AnalyzeLogs(devID, logs)
+			services.AnalyzeLogs(tenantSchema, devID, logs)
 		}(deviceID, parsedLogs, tenantSchema)
 	}
 
 	// 4. The Signal (Alerts Evaluation)
 	var sID string
 	_ = database.Tx(r.Context()).QueryRow("SELECT site_id FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&sID)
-	go services.ProcessTelemetry(deviceID, sID, metrics)
+	go services.ProcessTelemetry(tenantSchema, deviceID, sID, metrics)
 
 	// 5. FLOW_SENSE — process conntrack snapshot
 	if rawFlows, ok := raw["flow_sense"].([]interface{}); ok && len(rawFlows) > 0 {

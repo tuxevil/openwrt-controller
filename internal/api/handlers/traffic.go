@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -65,7 +66,7 @@ func SniperBandwidthHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Clear {
-		if err := services.ClearShaping(req.DeviceID, req.MAC); err != nil {
+		if err := services.ClearShaping(middleware.GetTenantSchema(r), req.DeviceID, req.MAC); err != nil {
 			http.Error(w, fmt.Sprintf("Clear shaping failed: %v", err), http.StatusInternalServerError)
 			return
 		}
@@ -74,7 +75,7 @@ func SniperBandwidthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := services.ApplySniperShaping(req.DeviceID, req.MAC, req.Rate, req.Duration); err != nil {
+	if err := services.ApplySniperShaping(middleware.GetTenantSchema(r), req.DeviceID, req.MAC, req.Rate, req.Duration); err != nil {
 		if err.Error() == "Incompatible Engine: nftables not supported on this device" {
 			http.Error(w, err.Error(), http.StatusNotImplemented)
 		} else {

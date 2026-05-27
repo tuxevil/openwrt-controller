@@ -17,7 +17,7 @@ var (
 )
 
 // AnalyzeLogs hooks into the LogHarvester ingestion stream to act as the Reactive Pipeline.
-func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
+func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 	// 1. Evaluate Sniper Shaping (Active Defense) BEFORE any debounce or AI trigger logic
 	triggerSniper := false
 	var targetIP string
@@ -47,7 +47,7 @@ func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
 		
 		// Attempt to resolve MAC from ARP table
 		var stateJSON []byte
-		err := database.DB.QueryRow("SELECT state_json FROM devices WHERE id = $1", deviceID).Scan(&stateJSON)
+		err := database.DB.QueryRow(fmt.Sprintf("SELECT state_json FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&stateJSON)
 		if err == nil && len(stateJSON) > 0 {
 			var state map[string]interface{}
 			if json.Unmarshal(stateJSON, &state) == nil {
@@ -65,7 +65,7 @@ func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
 					}
 					
 					if targetMac != "" {
-						err := ApplySniperShaping(deviceID, targetMac, 64, 5) // Hard limit 64 KB/s for 5 mins
+						err := ApplySniperShaping(schema, deviceID, targetMac, 64, 5) // Hard limit 64 KB/s for 5 mins
 						if err == nil {
 							log.Printf("[SENTINEL_AI] Sniper Shaping applied to %s (%s)", targetIP, targetMac)
 							notifyTelegram(fmt.Sprintf("🛡️ *ACTIVE DEFENSE TRIGGERED*\n\nLocal brute force detected from %s (%s).\nSniper Shaping deployed for 5 minutes.", targetIP, targetMac))
@@ -108,7 +108,7 @@ func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
 	go func(targetTime time.Time) {
 		log.Println("[SENTINEL_AI] Critical trigger detected. Gathering fleet context...")
 
-		contextLogs := database.GetGlobalContext(targetTime, 100)
+		contextLogs := database.GetGlobalContext(schema, targetTime, 100)
 		if contextLogs == "" {
 			return
 		}
@@ -123,10 +123,10 @@ func AnalyzeLogs(deviceID string, logs []database.LogEntry) {
 		correlationID := fmt.Sprintf("AI-CORR-%d", targetTime.Unix())
 		involvedJSON, _ := json.Marshal(involvedDevices)
 
-		_, err = database.DB.Exec(`
-			INSERT INTO ai_insights (correlation_id, diagnosis, severity, involved_devices)
+		_, err = database.DB.Exec(fmt.Sprintf(`
+			INSERT INTO %s.ai_insights (correlation_id, diagnosis, severity, involved_devices)
 			VALUES ($1, $2, $3, $4)
-		`, correlationID, diagnosis, severity, string(involvedJSON))
+		`, schema), correlationID, diagnosis, severity, string(involvedJSON))
 
 		if err != nil {
 			log.Printf("[SENTINEL_AI] DB Insert error: %v", err)

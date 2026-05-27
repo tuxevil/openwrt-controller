@@ -20,30 +20,37 @@ func StartSniperReaper() {
 }
 
 func reapExpiredRules() {
-	rows, err := database.DB.Query(`
-		SELECT device_id, mac FROM shaping_rules 
-		WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP
-	`)
+	tenants, err := ListTenants()
 	if err != nil {
 		return
 	}
-	defer rows.Close()
-
-	var targets []struct{ dev, mac string }
-	for rows.Next() {
-		var t struct{ dev, mac string }
-		if err := rows.Scan(&t.dev, &t.mac); err == nil {
-			targets = append(targets, t)
+	for _, t := range tenants {
+		schema := "tenant_" + t.SchemaAlias
+		rows, err := database.DB.Query(fmt.Sprintf(`
+			SELECT device_id, mac FROM %s.shaping_rules 
+			WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP
+		`, schema))
+		if err != nil {
+			continue
 		}
-	}
 
-	for _, t := range targets {
-		ClearShaping(t.dev, t.mac)
+		var targets []struct{ dev, mac string }
+		for rows.Next() {
+			var tg struct{ dev, mac string }
+			if err := rows.Scan(&tg.dev, &tg.mac); err == nil {
+				targets = append(targets, tg)
+			}
+		}
+		rows.Close()
+
+		for _, tg := range targets {
+			ClearShaping(schema, tg.dev, tg.mac)
+		}
 	}
 }
 
 // ApplySniperShaping creates or overrides a shaping rule for a specific MAC
-func ApplySniperShaping(deviceID, mac string, rateMbytes int, durationMinutes int) error {
+func ApplySniperShaping(schema, deviceID, mac string, rateMbytes int, durationMinutes int) error {
 	// First execute the SSH command
 	// nft add table inet sentinel_shaping
 	// nft add chain inet sentinel_shaping forward { type filter hook forward priority 0; }
@@ -82,20 +89,20 @@ func ApplySniperShaping(deviceID, mac string, rateMbytes int, durationMinutes in
 	}
 
 	// Persist to database
-	_, err = database.DB.Exec(`
-		INSERT INTO shaping_rules (device_id, mac, rate_mbytes, expires_at, created_at)
+	_, err = database.DB.Exec(fmt.Sprintf(`
+		INSERT INTO %s.shaping_rules (device_id, mac, rate_mbytes, expires_at, created_at)
 		VALUES ($1, $2, $3, $4, CURRENT_TIMESTAMP)
 		ON CONFLICT (device_id, mac) DO UPDATE SET 
 			rate_mbytes = EXCLUDED.rate_mbytes,
 			expires_at = EXCLUDED.expires_at,
 			created_at = CURRENT_TIMESTAMP
-	`, deviceID, mac, rateMbytes, expiresAt)
+	`, schema), deviceID, mac, rateMbytes, expiresAt)
 
 	return err
 }
 
 // ClearShaping removes the shaping for a specific MAC
-func ClearShaping(deviceID, mac string) error {
+func ClearShaping(schema, deviceID, mac string) error {
 	cmd := fmt.Sprintf(`
 		MAC="%s"
 		nft list table inet sentinel_shaping >/dev/null 2>&1 || exit 0
@@ -111,6 +118,6 @@ func ClearShaping(deviceID, mac string) error {
 		log.Printf("[SNIPER] Clear shaping executor error: %v", err)
 	}
 
-	_, dbErr := database.DB.Exec("DELETE FROM shaping_rules WHERE device_id = $1 AND mac = $2", deviceID, mac)
+	_, dbErr := database.DB.Exec(fmt.Sprintf("DELETE FROM %s.shaping_rules WHERE device_id = $1 AND mac = $2", schema), deviceID, mac)
 	return dbErr
 }

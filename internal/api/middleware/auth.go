@@ -3,12 +3,12 @@ package middleware
 import (
 	"context"
 	"fmt"
+	"os"
 	"net/http"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"openwrt-controller/internal/api/handlers"
 	"openwrt-controller/internal/database"
 )
 
@@ -42,7 +42,7 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
 			}
-			return handlers.JWTSecret(), nil
+			return []byte(getJWTSecret()), nil
 		})
 
 		if err != nil || !token.Valid {
@@ -177,4 +177,11 @@ func GetTenantSchema(r *http.Request) string {
 		return schema
 	}
 	return ""
+}
+
+func getJWTSecret() string {
+	if s := os.Getenv("JWT_SECRET"); s != "" {
+		return s
+	}
+	return "REPLACE_WITH_JWT_SECRET"
 }

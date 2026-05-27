@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -137,7 +138,7 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	// into The Vault as a safety net.
 	log.Printf("[CENTRAL_LUCI] Triggering pre-change Vault backup for device %s, config: %s", deviceID, config)
 	go func() {
-		if err := services.CreateBackup(deviceID); err != nil {
+		if err := services.CreateBackup(middleware.GetTenantSchema(r), deviceID); err != nil {
 			log.Printf("[CENTRAL_LUCI][WARN] Pre-change backup failed for %s: %v", deviceID, err)
 		} else {
 			log.Printf("[CENTRAL_LUCI] Pre-change backup stored in Vault for %s", deviceID)

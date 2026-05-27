@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"github.com/google/uuid"
 	"io"
@@ -32,7 +33,7 @@ func CreateBackupTrigger(w http.ResponseWriter, r *http.Request) {
 
 	// Correr asincrónicamente para no bloquear UI
 	go func() {
-		if err := services.CreateBackup(deviceID); err != nil {
+		if err := services.CreateBackup(middleware.GetTenantSchema(r), deviceID); err != nil {
 			log.Printf("[VAULT][ERROR] Backup failed for device %s: %v", deviceID, err)
 		} else {
 			log.Printf("[VAULT][OK] Backup completed for device %s", deviceID)

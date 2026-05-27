@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"net/http"
 	
@@ -23,7 +24,7 @@ func ChatOpsQueryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response, err := services.ProcessChatOpsQuery(req.Query)
+	response, err := services.ProcessChatOpsQuery(middleware.GetTenantSchema(r), req.Query)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)

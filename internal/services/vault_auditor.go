@@ -58,7 +58,7 @@ type AuditResult struct {
 
 // RunVaultAudit extracts UCI configs from the latest backup for a device,
 // sends them to Sentinel AI for compliance analysis, and persists the result.
-func RunVaultAudit(deviceID string) (*AuditResult, error) {
+func RunVaultAudit(schema, deviceID string) (*AuditResult, error) {
 	// 1. Pull the latest backup content from The Vault
 	var backupID string
 	var content []byte

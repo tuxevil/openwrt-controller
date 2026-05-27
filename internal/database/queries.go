@@ -7,7 +7,7 @@ import (
 )
 
 // GetGlobalContext fetches the most recent logs from the fleet around the target timestamp (±2min).
-func GetGlobalContext(targetTimestamp time.Time, limit int) string {
+func GetGlobalContext(schema string, targetTimestamp time.Time, limit int) string {
 	if DB == nil {
 		return ""
 	}
@@ -15,14 +15,14 @@ func GetGlobalContext(targetTimestamp time.Time, limit int) string {
 	start := targetTimestamp.Add(-2 * time.Minute)
 	end := targetTimestamp.Add(2 * time.Minute)
 
-	query := `
+	query := fmt.Sprintf(`
 		SELECT d.name, sl.log_timestamp, sl.message
-		FROM system_logs sl
-		LEFT JOIN devices d ON sl.device_id = d.id
+		FROM %s.system_logs sl
+		LEFT JOIN %s.devices d ON sl.device_id = d.id
 		WHERE sl.log_timestamp >= $1 AND sl.log_timestamp <= $2
 		ORDER BY sl.log_timestamp DESC
 		LIMIT $3
-	`
+	`, schema, schema)
 	rows, err := DB.Query(query, start, end, limit)
 	if err != nil {
 		return ""
@@ -55,18 +55,18 @@ func GetGlobalContext(targetTimestamp time.Time, limit int) string {
 
 // GetRecentContext fetches the N most recent logs from the fleet with no time restriction.
 // Used by the manual Sentinel AI trigger to always have data to analyze.
-func GetRecentContext(limit int) string {
+func GetRecentContext(schema string, limit int) string {
 	if DB == nil {
 		return ""
 	}
 
-	query := `
+	query := fmt.Sprintf(`
 		SELECT d.name, sl.log_timestamp, sl.message
-		FROM system_logs sl
-		LEFT JOIN devices d ON sl.device_id = d.id
+		FROM %s.system_logs sl
+		LEFT JOIN %s.devices d ON sl.device_id = d.id
 		ORDER BY sl.log_timestamp DESC
 		LIMIT $1
-	`
+	`, schema, schema)
 	rows, err := DB.Query(query, limit)
 	if err != nil {
 		return ""

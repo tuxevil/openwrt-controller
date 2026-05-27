@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -51,7 +52,7 @@ func TriggerVaultAuditHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go services.RunVaultAudit(deviceID)
+	go services.RunVaultAudit(middleware.GetTenantSchema(r), deviceID)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)

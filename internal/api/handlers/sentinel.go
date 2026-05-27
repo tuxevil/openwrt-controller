@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -30,7 +31,7 @@ func TriggerManualSentinelHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetTime := time.Now()
-	contextLogs := database.GetRecentContext(req.Limit)
+	contextLogs := database.GetRecentContext(middleware.GetTenantSchema(r), req.Limit)
 	if contextLogs == "" {
 		http.Error(w, "No logs available for analysis", http.StatusInternalServerError)
 		return

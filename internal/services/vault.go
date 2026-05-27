@@ -13,10 +13,10 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func CreateBackup(deviceID string) error {
+func CreateBackup(schema, deviceID string) error {
 	// Obtenemos la topología/IP más reciente
 	var ip string
-	err := database.DB.QueryRow(`SELECT COALESCE(last_ip, '') FROM devices WHERE id = $1`, deviceID).Scan(&ip)
+	err := database.DB.QueryRow(fmt.Sprintf(`SELECT COALESCE(last_ip, '') FROM %s.devices WHERE id = $1`, schema), deviceID).Scan(&ip)
 	if err != nil || ip == "" {
 		return fmt.Errorf("device IP not found")
 	}
@@ -69,10 +69,10 @@ func CreateBackup(deviceID string) error {
 	hasher.Write(rawBytes)
 	checksum := hex.EncodeToString(hasher.Sum(nil))
 
-	_, err = database.DB.Exec(`
-		INSERT INTO backups (device_id, checksum, content)
+	_, err = database.DB.Exec(fmt.Sprintf(`
+		INSERT INTO %s.backups (device_id, checksum, content)
 		VALUES ($1, $2, $3)
-	`, deviceID, checksum, rawBytes)
+	`, schema), deviceID, checksum, rawBytes)
 
 	log.Printf("[VAULT] Backup completed for %s. Checksum: %s", deviceID, checksum[:8])
 	return err
@@ -87,21 +87,28 @@ func StartVaultCron() {
 	go func() {
 		for range ticker.C {
 			log.Println("[VAULT] Running scheduled mass backup...")
-			rows, err := database.DB.Query(`SELECT id FROM devices WHERE last_ip IS NOT NULL AND status != 'OFFLINE'`)
+			tenants, err := ListTenants()
 			if err != nil {
 				continue
 			}
-			var devices []string
-			for rows.Next() {
-				var id string
-				if err := rows.Scan(&id); err == nil {
-					devices = append(devices, id)
+			for _, t := range tenants {
+				schema := "tenant_" + t.SchemaAlias
+				rows, err := database.DB.Query(fmt.Sprintf(`SELECT id FROM %s.devices WHERE last_ip IS NOT NULL AND status != 'OFFLINE'`, schema))
+				if err != nil {
+					continue
 				}
-			}
-			rows.Close()
+				var devices []string
+				for rows.Next() {
+					var id string
+					if err := rows.Scan(&id); err == nil {
+						devices = append(devices, id)
+					}
+				}
+				rows.Close()
 
-			for _, dev := range devices {
-				go CreateBackup(dev) // Parallel backup map-reduce
+				for _, dev := range devices {
+					go CreateBackup(schema, dev) // Parallel backup map-reduce
+				}
 			}
 		}
 	}()
