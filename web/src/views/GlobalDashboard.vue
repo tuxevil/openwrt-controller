@@ -38,6 +38,17 @@ const fetchData = async () => {
   }
 }
 
+const handleDeleteSite = async (site) => {
+  if (!confirm(`Are you sure you want to delete site ${site.name}? This will orphan its devices.`)) return
+  try {
+    await api.deleteSite(site.id)
+    await fetchData()
+  } catch (e) {
+    alert('Failed to delete site')
+    console.error(e)
+  }
+}
+
 const handleCreateSite = async () => {
   if (!newSiteName.value) return
   await api.createSite(newSiteName.value)
@@ -100,7 +111,10 @@ const jumpToSite = (siteId) => {
           <div v-for="site in sites" :key="site.id" class="border border-neon-green/30 p-3 hover:border-neon-green transition-colors flex justify-between items-center group cursor-pointer" @click="jumpToSite(site.id)">
             <span class="neon-text-green">> {{ site.name }}</span>
             <span class="text-xs text-muted">{{ site.id.substring(0, 8) }}</span>
-            <button class="text-neon-green text-sm px-2 py-1 border border-transparent group-hover:border-neon-green/50">JUMP</button>
+            <div class="flex gap-2">
+              <button class="text-neon-green text-sm px-2 py-1 border border-transparent group-hover:border-neon-green/50">JUMP</button>
+              <button @click.stop="handleDeleteSite(site)" class="text-neon-red text-sm px-2 py-1 border border-transparent group-hover:border-neon-red/50">DELETE</button>
+            </div>
           </div>
           <div v-if="sites.length === 0" class="text-neon-red glitch-anim text-sm py-4">>> EMPTY_DATASET</div>
         </div>

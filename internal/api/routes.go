@@ -28,6 +28,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/chatops/query", middleware.WithAuth(handlers.ChatOpsQueryHandler))
 	mux.HandleFunc("GET /api/sites", middleware.WithAuth(handlers.GetSitesHandler))
 	mux.HandleFunc("POST /api/sites", middleware.WithAuth(handlers.CreateSiteHandler))
+	mux.HandleFunc("DELETE /api/sites/{site_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteSiteHandler)))
 
 	// ── Users / RBAC ────────────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/users", middleware.WithAuth(middleware.RequireAdmin(handlers.GetUsersHandler)))

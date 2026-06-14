@@ -125,3 +125,39 @@ func ToggleAutoAdoptHandler(w http.ResponseWriter, r *http.Request) {
 		"site_id":    siteID,
 	})
 }
+
+func DeleteSiteHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	if siteID == "" {
+		http.Error(w, `{"error": "site_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	schema := getTenantSchema(r)
+
+	// Clean up related data manually since ON DELETE CASCADE is not ubiquitous
+	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".guest_vouchers WHERE site_id = $1", siteID)
+	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".portal_settings WHERE site_id = $1", siteID)
+	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".client_hostnames WHERE site_id = $1", siteID)
+	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".incidents WHERE site_id = $1", siteID)
+	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".site_settings WHERE site_id = $1", siteID)
+	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".wlans WHERE site_id = $1", siteID)
+	
+	// Orphan the devices
+	database.Tx(r.Context()).Exec("UPDATE " + schema + ".devices SET site_id = NULL, status = 'Pending' WHERE site_id = $1", siteID)
+
+	res, err := database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".sites WHERE id = $1", siteID)
+	if err != nil {
+		http.Error(w, `{"error": "database error: ` + err.Error() + `"}`, http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, `{"error": "site not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
+}

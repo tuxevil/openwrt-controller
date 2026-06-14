@@ -53,6 +53,9 @@ export default {
   getSites() {
     return apiClient.get('/sites')
   },
+  deleteSite(siteId) {
+    return apiClient.delete(`/sites/${siteId}`)
+  },
   createSite(name) {
     return apiClient.post('/sites', { name })
   },
