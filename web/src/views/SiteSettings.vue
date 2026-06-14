@@ -65,7 +65,8 @@ const generatingVouchers = ref(false)
 // ─── Wireless SSIDs ───────────────────────────────────────────────────────────
 const wlans = ref([])
 const roamingEnabled = ref(localStorage.getItem('fast_roaming') === 'true')
-const wlanForm = ref({ ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value })
+const wlanForm = ref({ ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, band: 'both', target_mode: 'all', custom_devices: [] })
+const editingWlanId = ref(null)
 const creatingWlan = ref(false)
 const wlanError = ref('')
 const securityOptions = ['psk2', 'psk2+ccmp', 'psk-mixed', 'sae', 'sae-mixed', 'none']
@@ -200,16 +201,27 @@ async function savePortalSettings() {
 }
 
 // ─── Wireless SSID ops ────────────────────────────────────────────────────────
-async function createWlan() {
+function editWlan(w) {
+  editingWlanId.value = w.id;
+  wlanForm.value = { ...w };
+}
+function cancelEditWlan() {
+  editingWlanId.value = null;
+  wlanForm.value = { ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, band: 'both', target_mode: 'all', custom_devices: [] };
+}
+async function saveWlan() {
   if (!wlanForm.value.ssid) { wlanError.value = 'SSID_REQUIRED'; return }
   wlanError.value = ''
   creatingWlan.value = true
   try {
-    await api.createWLAN(props.site_id, { ...wlanForm.value })
-    const keep = wlanForm.value.roaming_enabled
-    wlanForm.value = { ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: keep }
+    if (editingWlanId.value) {
+      await api.updateWLAN(props.site_id, editingWlanId.value, { ...wlanForm.value })
+    } else {
+      await api.createWLAN(props.site_id, { ...wlanForm.value })
+    }
+    cancelEditWlan()
     await loadWlans()
-  } catch { wlanError.value = 'CREATE_FAILED' }
+  } catch { wlanError.value = 'SAVE_FAILED' }
   finally { creatingWlan.value = false }
 }
 async function deleteWlan(id) {
@@ -447,11 +459,11 @@ async function toggleAutoAdopt() {
         <div class="mt-4 pt-4 border-t border-gray-800/50 px-3">
           <p class="text-[9px] text-gray-600 tracking-widest mb-2">FLEET ROLES</p>
           <div v-if="!devices.length" class="text-[10px] text-gray-700">No devices</div>
-          <div v-for="dev in devices" :key="dev.device_id" class="mb-2">
-            <div class="text-[10px] text-gray-400 truncate">{{ dev.hostname || dev.device_id.substring(0, 12) }}</div>
+          <div v-for="dev in devices" :key="dev.device_id || dev.DeviceID || dev.id" class="mb-2">
+            <div class="text-[10px] text-gray-400 truncate">{{ dev.hostname || dev.device_id || dev.DeviceID || dev.id.substring(0, 12) }}</div>
             <select
               :value="dev.device_role"
-              @change="e => changeRole(dev.device_id, e.target.value)"
+              @change="e => changeRole(dev.device_id || dev.DeviceID || dev.id, e.target.value)"
               class="w-full mt-0.5 bg-[#0a0a10] border border-gray-700/50 text-[10px] font-mono rounded px-1 py-0.5 focus:outline-none"
               :class="{
                 'text-[#f59e0b] border-amber-500/40': dev.device_role === 'Gateway',
@@ -592,10 +604,47 @@ async function toggleAutoAdopt() {
                   </div>
                 </div>
 
+                
+                <!-- Band & Target Mode -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
+                  <div>
+                    <label class="block text-[10px] text-gray-500 mb-1 tracking-widest">FREQUENCY BAND</label>
+                    <select v-model="wlanForm.band" class="w-full bg-black/40 border border-neon-green/30 text-neon-green text-xs font-mono px-3 py-2 focus:border-neon-green focus:outline-none clip-chamfer cursor-pointer appearance-none">
+                      <option value="both" class="bg-black">Dual-Band (2.4/5GHz)</option>
+                      <option value="2.4GHz" class="bg-black">2.4 GHz Only</option>
+                      <option value="5GHz" class="bg-black">5 GHz Only</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="block text-[10px] text-gray-500 mb-1 tracking-widest">DEPLOYMENT TARGET</label>
+                    <select v-model="wlanForm.target_mode" class="w-full bg-black/40 border border-neon-green/30 text-neon-green text-xs font-mono px-3 py-2 focus:border-neon-green focus:outline-none clip-chamfer cursor-pointer appearance-none">
+                      <option value="all" class="bg-black">Global (All Nodes)</option>
+                      <option value="custom" class="bg-black">Specific Nodes Only</option>
+                    </select>
+                  </div>
+                </div>
+
+                <!-- Custom Devices Selection -->
+                <div v-if="wlanForm.target_mode === 'custom'" class="mb-4 p-4 border border-yellow-500/30 bg-yellow-500/5 clip-chamfer">
+                  <label class="block text-[10px] text-yellow-500/80 mb-3 tracking-widest">>> SELECT TARGET NODES</label>
+                  <div class="space-y-2 max-h-40 overflow-y-auto pr-2">
+                    <label v-for="dev in devices" :key="dev.device_id || dev.DeviceID || dev.id" class="flex items-center space-x-3 cursor-pointer group">
+                      <div class="relative flex items-center justify-center w-4 h-4 border border-yellow-500/50 bg-black group-hover:border-yellow-500 transition-colors">
+                        <input type="checkbox" :value="dev.device_id || dev.DeviceID || dev.id" v-model="wlanForm.custom_devices" class="absolute opacity-0 w-full h-full cursor-pointer">
+                        <div v-if="(wlanForm.custom_devices || []).includes(dev.device_id || dev.DeviceID || dev.id)" class="w-2 h-2 bg-yellow-500"></div>
+                      </div>
+                      <span class="text-xs font-mono text-gray-300 group-hover:text-yellow-400 transition-colors">{{ dev.hostname || 'Unknown' }} [{{ dev.device_id || dev.DeviceID || dev.id }}] Keys: {{ Object.keys(dev) }} </span>
+                    </label>
+                  </div>
+                </div>
+
                 <div v-if="wlanError" class="text-red-400 text-xs">>> ERR: {{ wlanError }}</div>
-                <button @click="createWlan" :disabled="creatingWlan" class="flex items-center gap-2 px-4 py-2 border border-neon-green text-neon-green text-xs font-bold tracking-widest hover:bg-neon-green hover:text-black transition-all clip-chamfer disabled:opacity-40">
-                  {{ creatingWlan ? 'DEPLOYING...' : 'BROADCAST SSID' }}
+                <div class="flex items-center gap-4 pt-2">
+                  <button @click="cancelEditWlan" v-if="editingWlanId" class="px-4 py-2 border border-red-500/50 text-red-400 hover:bg-red-500/20 transition-colors text-xs font-bold tracking-widest clip-chamfer">CANCEL</button>
+                  <button @click="saveWlan" :disabled="creatingWlan" class="flex items-center gap-2 px-4 py-2 border border-neon-green text-neon-green text-xs font-bold tracking-widest hover:bg-neon-green hover:text-black transition-all clip-chamfer disabled:opacity-40">
+                  {{ creatingWlan ? 'SAVING...' : (editingWlanId ? 'UPDATE SSID' : 'BROADCAST SSID') }}
                 </button>
+                </div>
               </div>
 
               <!-- Active WLAN list -->
@@ -605,6 +654,8 @@ async function toggleAutoAdopt() {
                   <thead class="text-neon-green border-b border-neon-green/20">
                     <tr>
                       <th class="py-2 font-normal tracking-widest">SSID</th>
+                      <th class="py-2 font-normal tracking-widest">BAND</th>
+                      <th class="py-2 font-normal tracking-widest">TARGETS</th>
                       <th class="py-2 font-normal tracking-widest">ENCRYPTION</th>
                       <th class="py-2 font-normal tracking-widest">STATE</th>
                       <th class="py-2 font-normal tracking-widest">ACTION</th>
@@ -613,12 +664,15 @@ async function toggleAutoAdopt() {
                   <tbody>
                     <tr v-for="w in wlans" :key="w.id" class="border-b border-gray-800/30 hover:bg-neon-green/5 transition-colors">
                       <td class="py-2.5 text-neon-green">{{ w.ssid }}</td>
+                      <td class="py-2.5 text-cyan-400 text-[10px]">{{ w.band }}</td>
+                      <td class="py-2.5 text-yellow-500 text-[10px]">{{ w.target_mode === "all" ? "GLOBAL" : "CUSTOM" }}</td>
                       <td class="py-2.5 text-gray-500">{{ w.security?.toUpperCase() }}</td>
                       <td class="py-2.5">
                         <span class="px-2 py-0.5 border rounded text-[10px]" :class="w.enabled ? 'bg-neon-green/10 text-neon-green border-neon-green/30' : 'bg-red-900/20 text-red-400 border-red-500/30'">{{ w.enabled ? 'LIVE' : 'DARK' }}</span>
                         <span v-if="w.roaming_enabled" class="ml-1 px-1 bg-neon-green/10 text-neon-green border border-neon-green/20 rounded text-[9px]">⚡ 802.11r</span>
                       </td>
-                      <td class="py-2.5">
+                      <td class="py-2.5 flex gap-2">
+                        <button @click="editWlan(w)" class="text-blue-400 border border-blue-500/40 px-2 py-0.5 rounded hover:bg-blue-600 hover:text-white transition-colors text-[10px]">EDIT</button>
                         <button @click="deleteWlan(w.id)" class="text-red-400 border border-red-500/40 px-2 py-0.5 rounded hover:bg-red-600 hover:text-white transition-colors text-[10px]">KILL</button>
                       </td>
                     </tr>
@@ -1080,7 +1134,7 @@ async function toggleAutoAdopt() {
           </button>
         </div>
         <div class="flex-1 overflow-auto p-5 space-y-3">
-          <div v-for="dev in overlayDevices" :key="dev.device_id || dev.DeviceID" class="bg-[#08080f] border border-gray-800/40 rounded-lg overflow-hidden">
+          <div v-for="dev in overlayDevices" :key="dev.device_id || dev.DeviceID || dev.id || dev.DeviceID" class="bg-[#08080f] border border-gray-800/40 rounded-lg overflow-hidden">
             <div class="px-4 py-2 bg-[#0e0e18] border-b border-gray-800/30 flex items-center justify-between">
               <div class="flex items-center gap-3 font-mono text-sm">
                 <span :class="dev.role === 'Gateway' ? 'text-amber-400' : dev.role === 'AP' ? 'text-[#00ffff]' : 'text-gray-500'">{{ dev.role }}</span>

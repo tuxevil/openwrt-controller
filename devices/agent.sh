@@ -327,6 +327,79 @@ EOF
             }
         fi
 
+        # 7.5 CONFIGURACIÓN WIRELESS CENTRALIZADA
+        NEW_WIFI_HASH=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireless' 2>/dev/null | sha256sum | awk '{print $1}')
+        OLD_WIFI_HASH=$(cat /tmp/wifi_config.hash 2>/dev/null)
+        
+        if [ -n "$NEW_WIFI_HASH" ] && [ "$NEW_WIFI_HASH" != "$OLD_WIFI_HASH" ]; then
+            logger -t agent "WLAN config changed. Re-provisioning radios..."
+            
+            WLAN_COUNT=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireless.wlans[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
+            
+            if [ "$WLAN_COUNT" -gt 0 ]; then
+                while uci -q delete wireless.@wifi-iface[0]; do :; done
+                for CFG in $(uci show wireless | grep -o 'wireless\.cfg_radio[0-9]_[0-9]*' | cut -d. -f2 | sort -u); do uci delete wireless.$CFG; done
+                
+                for RADIO in $(uci -q show wireless | grep "=wifi-device" | cut -d'.' -f2 | cut -d'=' -f1); do
+                    M_BAND=""
+                    R_BAND=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.band" 2>/dev/null)
+                    if [ -n "$R_BAND" ]; then
+                        if [ "$R_BAND" = "2g" ] || [ "$R_BAND" = "2g-5g" ]; then M_BAND="2.4GHz"
+                        elif [ "$R_BAND" = "5g" ]; then M_BAND="5GHz"
+                        fi
+                    fi
+                    
+                    if [ -z "$M_BAND" ]; then
+                        R_HW=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.hwmode" 2>/dev/null)
+                        if [ "$R_HW" = "11a" ] || [ "$R_HW" = "11ac" ] || [ "$R_HW" = "11ax" ]; then M_BAND="5GHz"
+                        elif [ "$R_HW" = "11g" ] || [ "$R_HW" = "11b" ] || [ "$R_HW" = "11n" ]; then M_BAND="2.4GHz"
+                        fi
+                    fi
+                    
+                    if [ -z "$M_BAND" ]; then
+                        R_CHAN=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.channel" 2>/dev/null)
+                        if [ "$R_CHAN" != "auto" ] && [ "$R_CHAN" -gt 14 ]; then M_BAND="5GHz"
+                        else M_BAND="2.4GHz"
+                        fi
+                    fi
+
+                    i=0
+                    while [ $i -lt "$WLAN_COUNT" ]; do
+                        W_SSID=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ssid" 2>/dev/null)
+                        W_SEC=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].security" 2>/dev/null)
+                        W_KEY=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].key" 2>/dev/null)
+                        W_BAND=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].band" 2>/dev/null)
+                        W_ROAMING=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211r" 2>/dev/null)
+                        
+                        if [ "$W_BAND" = "both" ] || [ "$W_BAND" = "$M_BAND" ]; then
+                            SECTION="cfg_${RADIO}_${i}"
+                            uci set wireless.$SECTION=wifi-iface
+                            uci set wireless.$SECTION.device="$RADIO"
+                            uci set wireless.$SECTION.network='lan'
+                            uci set wireless.$SECTION.mode='ap'
+                            uci set wireless.$SECTION.ssid="$W_SSID"
+                            uci set wireless.$SECTION.encryption="$W_SEC"
+                            [ -n "$W_KEY" ] && uci set wireless.$SECTION.key="$W_KEY"
+                            
+                            if [ "$W_ROAMING" = "true" ]; then
+                                uci set wireless.$SECTION.ieee80211r='1'
+                                uci set wireless.$SECTION.ft_over_ds='0'
+                                uci set wireless.$SECTION.ft_psk_generate_local='1'
+                                uci set wireless.$SECTION.mobility_domain='1234'
+                            fi
+                        fi
+                        i=$((i+1))
+                    done
+                done
+                uci commit wireless
+                wifi reload
+                echo "$NEW_WIFI_HASH" > /tmp/wifi_config.hash
+                logger -t agent "WLAN config applied successfully."
+            else
+                logger -t agent "WLAN config empty. Skipping."
+            fi
+        fi
+
         # 8. CONFIGURACIÓN DE WIREGUARD (SECURE_TUNNEL)
         WG_ENABLED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.enabled' 2>/dev/null)
         if [ "$WG_ENABLED" = "true" ]; then
