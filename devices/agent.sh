@@ -12,7 +12,7 @@ DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:up
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 
 # Instalar dependencias si faltan (opcional)
-# opkg update && opkg install iwinfo curl
+# apk update && apk add iwinfo curl
 
 T_FAILS=0
 
