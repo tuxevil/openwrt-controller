@@ -45,6 +45,17 @@ const handleCreateSite = async () => {
   await fetchData()
 }
 
+const handleForget = async (device) => {
+  if (!confirm(`Are you sure you want to forget ${device.name || device.id}?`)) return
+  try {
+    await api.forgetDevice(device.id)
+    await fetchData()
+  } catch (e) {
+    alert('Failed to forget device')
+    console.error(e)
+  }
+}
+
 const handleAdopt = async (deviceId) => {
   if (!selectedSite.value) return alert("Select a site to adopt to!")
   await api.adoptDevice(deviceId, selectedSite.value)
@@ -112,7 +123,10 @@ const jumpToSite = (siteId) => {
               <span class="text-neon-amber">{{ device.id }}</span>
               <span class="text-xs font-mono text-muted">Model: {{ device.model || 'UNKNOWN' }} | Status: {{ device.status }}</span>
             </div>
-            <button @click="handleAdopt(device.id)" class="bg-transparent text-neon-amber border border-neon-amber px-3 py-1 hover:bg-neon-amber hover:text-black font-bold uppercase transition-colors clip-chamfer text-sm">ADOPT</button>
+            <div class="flex gap-2">
+              <button @click="handleAdopt(device.id)" class="bg-transparent text-neon-amber border border-neon-amber px-3 py-1 hover:bg-neon-amber hover:text-black font-bold uppercase transition-colors clip-chamfer text-sm">ADOPT</button>
+              <button @click="handleForget(device)" class="bg-transparent text-neon-red border border-neon-red px-3 py-1 hover:bg-neon-red hover:text-black font-bold uppercase transition-colors clip-chamfer text-sm">FORGET</button>
+            </div>
           </div>
           <div v-if="pendingDevices.length === 0" class="text-neon-green text-sm py-4">>> QUEUE_CLEAR</div>
         </div>

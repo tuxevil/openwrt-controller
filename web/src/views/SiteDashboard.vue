@@ -34,6 +34,17 @@ const fetchDevices = async () => {
   } catch (e) { console.error(e) }
 }
 
+const forgetDevice = async (device) => {
+  if (!confirm(`Are you sure you want to forget ${device.name || device.id}? This will remove it from the controller.`)) return
+  try {
+    await api.forgetDevice(device.id)
+    fetchDevices()
+  } catch (e) {
+    alert('Failed to forget device')
+    console.error(e)
+  }
+}
+
 const fetchMetrics = async () => {
   if (!devices.value.length) { activeMetrics.value = []; return }
   try {
@@ -283,6 +294,9 @@ const goBack = () => router.push('/global')
               </button>
               <button @click="router.push(`/site/${site_id}/device/${dev.id}/central-config`)" class="text-purple-400 hover:bg-purple-500/20 border border-purple-500/60 px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none shadow-[0_0_6px_rgba(168,85,247,0.15)]" title="Central LuCI — Device Configuration">
                 ⚙ CONFIG
+              </button>
+              <button @click="forgetDevice(dev)" class="text-neon-red hover:bg-neon-red hover:text-black border border-neon-red px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none" title="Forget Device">
+                FORGET
               </button>
             </td>
           </tr>

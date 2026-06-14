@@ -107,3 +107,30 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		"error": nil,
 	})
 }
+
+func ForgetDeviceHandler(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("device_id")
+	if deviceID == "" {
+		http.Error(w, `{"error": "device_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	// Clean up child tables to prevent foreign key constraint violations
+	database.Tx(r.Context()).Exec("DELETE FROM backups WHERE device_id = $1", deviceID)
+	database.Tx(r.Context()).Exec("DELETE FROM incidents WHERE device_id = $1", deviceID)
+
+	res, err := database.Tx(r.Context()).Exec("DELETE FROM devices WHERE id = $1", deviceID)
+	if err != nil {
+		http.Error(w, `{"error": "database error: " + err.Error()}`, http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := res.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, `{"error": "device not found"}`, http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
+}

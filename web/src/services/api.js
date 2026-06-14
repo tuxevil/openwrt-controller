@@ -143,6 +143,9 @@ export default {
   createWLAN(siteId, payload) {
     return apiClient.post(`/sites/${siteId}/wlans`, payload)
   },
+  forgetDevice(deviceId) {
+    return apiClient.delete(`/devices/${deviceId}`)
+  },
   deleteWLAN(wlanId) {
     return apiClient.delete(`/wlans/${wlanId}`)
   },

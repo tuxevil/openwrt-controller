@@ -38,6 +38,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/audit-logs", middleware.WithAuth(middleware.RequireAdmin(handlers.GetAuditLogsHandler)))
 
 	mux.HandleFunc("GET /api/devices", middleware.WithAuth(handlers.GetDevicesHandler))
+	mux.HandleFunc("DELETE /api/devices/{device_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.ForgetDeviceHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/devices", middleware.WithAuth(handlers.GetSiteDevicesHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/adopt", middleware.WithAuth(handlers.AdoptDeviceHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/migrate", middleware.WithAuth(handlers.MigrateDeviceHandler))
