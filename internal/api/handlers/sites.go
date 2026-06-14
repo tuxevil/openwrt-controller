@@ -143,6 +143,9 @@ func DeleteSiteHandler(w http.ResponseWriter, r *http.Request) {
 	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".site_settings WHERE site_id = $1", siteID)
 	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".wlans WHERE site_id = $1", siteID)
 	
+	// Clean up or orphan agent versions
+	database.Tx(r.Context()).Exec("UPDATE " + schema + ".agent_versions SET site_id = NULL WHERE site_id = $1", siteID)
+	
 	// Orphan the devices
 	database.Tx(r.Context()).Exec("UPDATE " + schema + ".devices SET site_id = NULL, status = 'Pending' WHERE site_id = $1", siteID)
 
