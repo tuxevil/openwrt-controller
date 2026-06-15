@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"openwrt-controller/internal/database"
@@ -22,8 +23,8 @@ type RFHealthResult struct {
 	Clients       []RFClientRecord `json:"clients"`
 }
 
-func AnalyzeSiteRF(siteID string) (RFHealthResult, error) {
-	rows, err := database.DB.Query(`
+func AnalyzeSiteRF(ctx context.Context, siteID string) (RFHealthResult, error) {
+	rows, err := database.Tx(ctx).Query(`
 		SELECT state_json->'wireless_stations'
 		FROM devices 
 		WHERE site_id = $1 AND state_json->'wireless_stations' IS NOT NULL

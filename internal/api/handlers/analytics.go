@@ -19,7 +19,7 @@ func GetAnalyticsThroughputHandler(w http.ResponseWriter, r *http.Request) {
 		timeRange = "24h"
 	}
 
-	data, err := services.GetWANThroughputHistory(siteID, timeRange)
+	data, err := services.GetWANThroughputHistory(r.Context(), siteID, timeRange)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -41,7 +41,7 @@ func GetAnalyticsTopTalkersHandler(w http.ResponseWriter, r *http.Request) {
 		timeRange = "24h"
 	}
 
-	data, err := services.GetTopTalkers(siteID, timeRange)
+	data, err := services.GetTopTalkers(r.Context(), siteID, timeRange)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -63,7 +63,7 @@ func GetAnalyticsProtocolsHandler(w http.ResponseWriter, r *http.Request) {
 		timeRange = "24h"
 	}
 
-	data, err := services.GetProtocolDistribution(siteID, timeRange)
+	data, err := services.GetProtocolDistribution(r.Context(), siteID, timeRange)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -1,15 +1,16 @@
 package services
 
 import (
+	"context"
 	"openwrt-controller/internal/database"
 )
 
-func GetGlobalHealth() int {
+func GetGlobalHealth(ctx context.Context) int {
 	health := 0.0
 
 	// 1. Status de Nodos (40%)
 	var totalNodes, onlineNodes int
-	err := database.DB.QueryRow(`
+	err := database.Tx(ctx).QueryRow(`
 		SELECT count(*), sum(case when status='ONLINE' then 1 else 0 end) 
 		FROM devices
 	`).Scan(&totalNodes, &onlineNodes)
@@ -24,9 +25,9 @@ func GetGlobalHealth() int {
 	var siteID string
 	// Just use the first available site for a global average to save DB hit complexity
 	// In a real scenario we average all.
-	err = database.DB.QueryRow(`SELECT id FROM sites LIMIT 1`).Scan(&siteID)
+	err = database.Tx(ctx).QueryRow(`SELECT id FROM sites LIMIT 1`).Scan(&siteID)
 	if err == nil && siteID != "" {
-		res, err := AnalyzeSiteRF(siteID)
+		res, err := AnalyzeSiteRF(ctx, siteID)
 		if err == nil {
 			health += (float64(res.OverallHealth) / 100.0) * 30.0
 		}
@@ -37,7 +38,7 @@ func GetGlobalHealth() int {
 	// 3. Integridad de backups recientes (30%)
 	var recentBackups int
 	// Any backup in last 2 days
-	err = database.DB.QueryRow(`
+	err = database.Tx(ctx).QueryRow(`
 		SELECT count(*) FROM backups 
 		WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '2 days'
 	`).Scan(&recentBackups)

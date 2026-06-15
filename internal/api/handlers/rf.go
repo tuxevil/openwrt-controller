@@ -14,7 +14,7 @@ func GetRFOptimizationHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := services.AnalyzeSiteRF(siteID)
+	result, err := services.AnalyzeSiteRF(r.Context(), siteID)
 	if err != nil {
 		http.Error(w, `{"error":"rf analysis failed"}`, http.StatusInternalServerError)
 		return
@@ -35,7 +35,7 @@ func RunRFFixHandler(w http.ResponseWriter, r *http.Request) {
 	// Actually hardcodes auto channel and restarts wireless
 	cmd := "uci set wireless.radio0.channel=auto && uci commit wireless && wifi"
 	
-	results := services.RunMassCommand(siteID, cmd)
+	results := services.RunMassCommand(r.Context(), siteID, cmd)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{

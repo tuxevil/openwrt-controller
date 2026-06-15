@@ -98,7 +98,7 @@ func MassCommandHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Set timeout header
 	start := time.Now()
-	results := services.RunMassCommand(body.SiteID, body.Command)
+	results := services.RunMassCommand(r.Context(), body.SiteID, body.Command)
 	elapsed := time.Since(start).Milliseconds()
 
 	username := GetUsernameFromReq(r)

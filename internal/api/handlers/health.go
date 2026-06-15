@@ -8,7 +8,7 @@ import (
 )
 
 func GetGlobalHealthHandler(w http.ResponseWriter, r *http.Request) {
-	score := services.GetGlobalHealth()
+	score := services.GetGlobalHealth(r.Context())
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"health": score})
 }

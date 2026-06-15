@@ -33,8 +33,8 @@ var knownPorts = map[int]string{
 	6881: "BitTorrent",
 }
 
-func getSiteDevices(siteID string) ([]string, error) {
-	rows, err := database.DB.Query("SELECT id FROM devices WHERE site_id = $1", siteID)
+func getSiteDevices(ctx context.Context, siteID string) ([]string, error) {
+	rows, err := database.Tx(ctx).Query("SELECT id FROM devices WHERE site_id = $1", siteID)
 	if err != nil {
 		return nil, err
 	}
@@ -50,9 +50,9 @@ func getSiteDevices(siteID string) ([]string, error) {
 	return ids, nil
 }
 
-func GetWANThroughputHistory(siteID, timeRange string) (map[string][]SeriesPoint, error) {
+func GetWANThroughputHistory(ctx context.Context, siteID, timeRange string) (map[string][]SeriesPoint, error) {
 	startStr := "-" + timeRange
-	deviceIDs, err := getSiteDevices(siteID)
+	deviceIDs, err := getSiteDevices(ctx, siteID)
 	if err != nil {
 		return nil, err
 	}
@@ -119,9 +119,9 @@ func GetWANThroughputHistory(siteID, timeRange string) (map[string][]SeriesPoint
 	return map[string][]SeriesPoint{"rx": rxPoints, "tx": txPoints}, nil
 }
 
-func GetTopTalkers(siteID, timeRange string) ([]TopTalkerData, error) {
+func GetTopTalkers(ctx context.Context, siteID, timeRange string) ([]TopTalkerData, error) {
 	startStr := "-" + timeRange
-	deviceIDs, err := getSiteDevices(siteID)
+	deviceIDs, err := getSiteDevices(ctx, siteID)
 	if err != nil {
 		return nil, err
 	}
@@ -184,9 +184,9 @@ func GetTopTalkers(siteID, timeRange string) ([]TopTalkerData, error) {
 	return talkers, nil
 }
 
-func GetProtocolDistribution(siteID, timeRange string) ([]ProtocolData, error) {
+func GetProtocolDistribution(ctx context.Context, siteID, timeRange string) ([]ProtocolData, error) {
 	startStr := "-" + timeRange
-	deviceIDs, err := getSiteDevices(siteID)
+	deviceIDs, err := getSiteDevices(ctx, siteID)
 	if err != nil {
 		return nil, err
 	}

@@ -404,8 +404,8 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 	return err
 }
 
-func GetSiteDevicesWithRoles(siteID string) ([]DeviceRoleInfo, error) {
-	rows, err := database.DB.Query(`
+func GetSiteDevicesWithRoles(ctx context.Context, siteID string) ([]DeviceRoleInfo, error) {
+	rows, err := database.Tx(ctx).Query(`
 		SELECT id, COALESCE(state_json->'board'->>'hostname','UNKNOWN'),
 		       COALESCE(last_ip,''), COALESCE(device_role,'AP')
 		FROM devices WHERE site_id = $1 AND status != 'OFFLINE'

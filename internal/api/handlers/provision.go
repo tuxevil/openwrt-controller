@@ -32,7 +32,7 @@ func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
 }
 
 func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
-	deviceID := r.PathValue("device_id")
+	deviceID := strings.ToLower(r.PathValue("device_id"))
 	if deviceID == "" {
 		http.Error(w, `{"error": "device_id is required"}`, http.StatusBadRequest)
 		return
@@ -102,7 +102,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	rows, err := database.Tx(r.Context()).Query(
-		"SELECT ssid, security, password FROM "+tenantSchema+".wlans WHERE site_id = $1 AND enabled = true",
+		"SELECT ssid, security, password, band, COALESCE(roaming_enabled, false), COALESCE(ieee80211k, false), COALESCE(ieee80211v, false) FROM "+tenantSchema+".wlans WHERE site_id = $1 AND enabled = true",
 		siteID.String,
 	)
 	if err != nil {
@@ -111,23 +111,34 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer rows.Close()
 
-	var wlansList []map[string]string
+	var wlansList []map[string]interface{}
 	for rows.Next() {
-		var ssid, security, password string
-		if err := rows.Scan(&ssid, &security, &password); err == nil {
-			wlan := map[string]string{
+		var ssid, security, password, band string
+		var roaming, k, v bool
+		if err := rows.Scan(&ssid, &security, &password, &band, &roaming, &k, &v); err == nil {
+			wlan := map[string]interface{}{
 				"ssid":     ssid,
 				"security": security,
+				"band":     band,
 			}
 			if password != "" {
 				wlan["key"] = password
+			}
+			if roaming {
+				wlan["ieee80211r"] = "1"
+			}
+			if k {
+				wlan["ieee80211k"] = "1"
+			}
+			if v {
+				wlan["ieee80211v"] = "1"
 			}
 			wlansList = append(wlansList, wlan)
 		}
 	}
 
 	if wlansList == nil {
-		wlansList = make([]map[string]string, 0)
+		wlansList = make([]map[string]interface{}, 0)
 	}
 
 	sshConfig := make(map[string]interface{})

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 
@@ -108,7 +109,7 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	go services.AddWLANConfig(siteID, req.SSID, req.Security, req.Password, roamingEnabled, ieee80211k, ieee80211v)
+	go services.AddWLANConfig(context.Background(), siteID, req.SSID, req.Security, req.Password, roamingEnabled, ieee80211k, ieee80211v)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

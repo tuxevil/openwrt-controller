@@ -150,7 +150,7 @@ func TriggerSysupgradeHandler(w http.ResponseWriter, r *http.Request) {
 	// logic triggers Orchestrator or runMassCommand
 	// For demo:
 	cmd := "echo 'FLASHING NOW' && sysupgrade -n /tmp/fw.bin"
-	res := services.RunMassCommand(deviceID, cmd) // Using mass command for single device using deviceID instead of siteID? Actually RunMassCommand uses site_id!
+	res := services.RunMassCommand(r.Context(), deviceID, cmd) // Using mass command for single device using deviceID instead of siteID? Actually RunMassCommand uses site_id!
 	// I'll emit a simple response
 	_ = res
 

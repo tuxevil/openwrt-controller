@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"bytes"
 	"fmt"
 	"log"
@@ -21,7 +22,7 @@ type DeviceResult struct {
 	Error    string `json:"error,omitempty"`
 }
 
-func RunMassCommand(siteID, command string) []DeviceResult {
+func RunMassCommand(ctx context.Context, siteID, command string) []DeviceResult {
 	// Load controller private key
 	keyPath := "./certs/id_controller"
 	keyBytes, err := os.ReadFile(keyPath)
@@ -37,7 +38,7 @@ func RunMassCommand(siteID, command string) []DeviceResult {
 	}
 
 	// Fetch all devices in site with their last known IP
-	rows, err := database.DB.Query(`
+	rows, err := database.Tx(ctx).Query(`
 		SELECT id, COALESCE(last_ip, '') as ip
 		FROM devices 
 		WHERE site_id = $1 AND last_ip IS NOT NULL AND last_ip != ''

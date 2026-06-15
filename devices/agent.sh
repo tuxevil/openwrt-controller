@@ -370,6 +370,8 @@ EOF
                         W_KEY=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].key" 2>/dev/null)
                         W_BAND=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].band" 2>/dev/null)
                         W_ROAMING=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211r" 2>/dev/null)
+                        W_80211K=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211k" 2>/dev/null)
+                        W_80211V=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211v" 2>/dev/null)
                         
                         if [ "$W_BAND" = "both" ] || [ "$W_BAND" = "$M_BAND" ]; then
                             SECTION="cfg_${RADIO}_${i}"
@@ -381,11 +383,20 @@ EOF
                             uci set wireless.$SECTION.encryption="$W_SEC"
                             [ -n "$W_KEY" ] && uci set wireless.$SECTION.key="$W_KEY"
                             
-                            if [ "$W_ROAMING" = "true" ]; then
+                            if [ "$W_ROAMING" = "1" ] || [ "$W_ROAMING" = "true" ]; then
                                 uci set wireless.$SECTION.ieee80211r='1'
                                 uci set wireless.$SECTION.ft_over_ds='0'
                                 uci set wireless.$SECTION.ft_psk_generate_local='1'
                                 uci set wireless.$SECTION.mobility_domain='1234'
+                            fi
+                            if [ "$W_80211K" = "1" ] || [ "$W_80211K" = "true" ]; then
+                                uci set wireless.$SECTION.ieee80211k='1'
+                            fi
+                            if [ "$W_80211V" = "1" ] || [ "$W_80211V" = "true" ]; then
+                                uci set wireless.$SECTION.bss_transition='1'
+                                uci set wireless.$SECTION.wnm_sleep_mode='1'
+                                uci set wireless.$SECTION.time_advertisement='2'
+                                uci set wireless.$SECTION.time_zone='<-05>5'
                             fi
                         fi
                         i=$((i+1))

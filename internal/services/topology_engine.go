@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -29,7 +30,7 @@ type EchoGraph struct {
 	Links []EchoEdge `json:"links"`
 }
 
-func GenerateEchoLocation(siteID string) (EchoGraph, error) {
+func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error) {
 	graph := EchoGraph{
 		Nodes: []EchoNode{},
 		Links: []EchoEdge{},
@@ -37,7 +38,7 @@ func GenerateEchoLocation(siteID string) (EchoGraph, error) {
 
 	nodesMap := make(map[string]EchoNode)
 
-	rows, err := database.DB.Query("SELECT id, state_json, device_role FROM devices WHERE site_id = $1", siteID)
+	rows, err := database.Tx(ctx).Query("SELECT id, state_json, device_role FROM devices WHERE site_id = $1", siteID)
 	if err != nil {
 		log.Printf("Topology query error: %v", err)
 		return graph, err
@@ -68,7 +69,7 @@ func GenerateEchoLocation(siteID string) (EchoGraph, error) {
 	}
 
 	activeIncidents := make(map[string]bool)
-	incRows, err := database.DB.Query("SELECT device_id FROM incidents WHERE site_id = $1 AND status = 'OPEN'", siteID)
+	incRows, err := database.Tx(ctx).Query("SELECT device_id FROM incidents WHERE site_id = $1 AND status = 'OPEN'", siteID)
 	if err == nil {
 		defer incRows.Close()
 		for incRows.Next() {
@@ -80,7 +81,7 @@ func GenerateEchoLocation(siteID string) (EchoGraph, error) {
 	}
 
 	customHostnames := make(map[string]string)
-	hRows, err := database.DB.Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	hRows, err := database.Tx(ctx).Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
 	if err == nil {
 		defer hRows.Close()
 		for hRows.Next() {

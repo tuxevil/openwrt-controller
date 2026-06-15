@@ -129,7 +129,7 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 func GetSiteDeviceRolesHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 
-	devs, err := services.GetSiteDevicesWithRoles(siteID)
+	devs, err := services.GetSiteDevicesWithRoles(r.Context(), siteID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -185,7 +185,7 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devs, err := services.GetSiteDevicesWithRoles(siteID)
+	devs, err := services.GetSiteDevicesWithRoles(r.Context(), siteID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -236,7 +236,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	devs, err := services.GetSiteDevicesWithRoles(siteID)
+	devs, err := services.GetSiteDevicesWithRoles(r.Context(), siteID)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)

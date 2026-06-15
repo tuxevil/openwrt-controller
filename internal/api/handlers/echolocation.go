@@ -14,7 +14,7 @@ func GetSiteEchoLocationHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	graph, err := services.GenerateEchoLocation(siteID)
+	graph, err := services.GenerateEchoLocation(r.Context(), siteID)
 	if err != nil {
 		http.Error(w, `{"error": "internal server error"}`, http.StatusInternalServerError)
 		return
