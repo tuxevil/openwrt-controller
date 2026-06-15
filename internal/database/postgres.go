@@ -178,7 +178,22 @@ func createTenantTables(schema string) error {
 		password VARCHAR(255),
 		enabled BOOLEAN DEFAULT true,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		band VARCHAR(50) DEFAULT 'both',
+		target_mode VARCHAR(50) DEFAULT 'all',
+		roaming_enabled BOOLEAN DEFAULT false,
+		ieee80211k BOOLEAN DEFAULT false,
+		ieee80211v BOOLEAN DEFAULT false
+	);
+
+	CREATE TABLE IF NOT EXISTS %[1]s.device_wlans (
+
+		wlan_id UUID REFERENCES %[1]s.wlans(id) ON DELETE CASCADE,
+
+		device_id VARCHAR(50) REFERENCES %[1]s.devices(id) ON DELETE CASCADE,
+
+		PRIMARY KEY (wlan_id, device_id)
+
 	);
 
 	CREATE TABLE IF NOT EXISTS %[1]s.site_settings (
@@ -354,6 +369,8 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS threat_shield_drops BIGINT DEFAULT 0", s),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS device_role VARCHAR(50) DEFAULT 'AP'", s),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false", s),
+		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211k BOOLEAN DEFAULT false", s),
+		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211v BOOLEAN DEFAULT false", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS dhcp_reservations JSONB DEFAULT '[]'", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS port_forwarding_rules JSONB DEFAULT '[]'", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false", s),

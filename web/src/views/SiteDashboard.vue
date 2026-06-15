@@ -79,6 +79,45 @@ const getHealth = (dev) => {
   return diffSeconds < 120 ? 'ONLINE' : 'OFFLINE'
 }
 
+// Parse lldp_info from neighbor_stats to extract discovered LLDP neighbors.
+// Real lldpctl -f json structure (lldpd 1.0.x):
+// {"lldp":{"interface":[{"<local_iface>":{"chassis":{"<hostname>":{"id":{"type":"mac","value":"..."},...}},"port":{...}}}]}}
+// Each array entry is an object with ONE key = local interface name.
+// chassis is also an object with ONE key = neighbor hostname.
+const lldpNeighbors = (dev) => {
+  try {
+    const ns = dev?.state_json?.neighbor_stats
+    if (!ns) return []
+    const ifaceList = ns.lldp_info?.lldp?.interface
+    if (!Array.isArray(ifaceList)) return []
+    const results = []
+    for (const ifaceEntry of ifaceList) {
+      // ifaceEntry = { "eth0": { chassis: {...}, port: {...} } }
+      for (const [localIface, neighborData] of Object.entries(ifaceEntry)) {
+        if (typeof neighborData !== 'object') continue
+        const chassisMap = neighborData.chassis || {}
+        const portData   = neighborData.port    || {}
+        // chassisMap = { "hostname": { id: {type, value}, descr, mgmt-ip, ... } }
+        for (const [chassisName, chassisVal] of Object.entries(chassisMap)) {
+          if (typeof chassisVal !== 'object') continue
+          const idBlock = chassisVal.id || {}
+          results.push({
+            local_iface:  localIface,
+            chassis_name: chassisName,
+            chassis_mac:  idBlock.type === 'mac' ? idBlock.value : null,
+            chassis_ip:   Array.isArray(chassisVal['mgmt-ip']) ? chassisVal['mgmt-ip'][0] : (chassisVal['mgmt-ip'] || null),
+            port_id:      portData.id?.value || null,
+            port_descr:   portData.descr     || null,
+          })
+        }
+      }
+    }
+    return results
+  } catch (_) {
+    return []
+  }
+}
+
 const selectedDeviceDetails = ref(null)
 const sites = ref([])
 const targetSiteId = ref('')
@@ -344,6 +383,34 @@ const goBack = () => router.push('/global')
                 <div class="flex flex-col"><span class="text-muted text-xs mb-1">LOCAL_TIME</span> <span>{{ selectedDeviceDetails.state_json.system?.localtime ? new Date(selectedDeviceDetails.state_json.system.localtime * 1000).toLocaleString() : 'N/A' }}</span></div>
                 <div class="flex flex-col"><span class="text-muted text-xs mb-1">ROOTFS_FREE</span> <span>{{ selectedDeviceDetails.state_json.system?.root?.free ? selectedDeviceDetails.state_json.system.root.free + ' KB' : 'N/A' }}</span></div>
                 <div class="flex flex-col"><span class="text-muted text-xs mb-1">TMPFS_FREE</span> <span>{{ selectedDeviceDetails.state_json.system?.tmp?.free ? selectedDeviceDetails.state_json.system.tmp.free + ' KB' : 'N/A' }}</span></div>
+              </div>
+            </div>
+            <!-- LLDP DISCOVERED NEIGHBORS -->
+            <div>
+              <h3 class="text-neon-amber border-b border-neon-amber/30 pb-1 w-full uppercase text-sm mb-3">> LLDP_DISCOVERED_NEIGHBORS</h3>
+              <div v-if="lldpNeighbors(selectedDeviceDetails).length" class="space-y-2">
+                <div v-for="(nb, idx) in lldpNeighbors(selectedDeviceDetails)" :key="idx"
+                  class="grid grid-cols-2 lg:grid-cols-4 gap-4 bg-black/40 p-3 border border-white/5 clip-chamfer text-xs font-mono">
+                  <div class="flex flex-col">
+                    <span class="text-muted mb-1">LOCAL_IFACE</span>
+                    <span class="text-neon-cyan">{{ nb.local_iface }}</span>
+                  </div>
+                  <div class="flex flex-col">
+                    <span class="text-muted mb-1">NEIGHBOR_HOST</span>
+                    <span class="text-neon-green font-bold">{{ nb.chassis_name || 'UNKNOWN' }}</span>
+                  </div>
+                  <div class="flex flex-col">
+                    <span class="text-muted mb-1">MGMT_IP</span>
+                    <span class="text-cyan-400">{{ nb.chassis_ip || 'N/A' }}</span>
+                  </div>
+                  <div class="flex flex-col">
+                    <span class="text-muted mb-1">CHASSIS_MAC</span>
+                    <span class="text-purple-400">{{ nb.chassis_mac || 'N/A' }}</span>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="text-gray-600 text-xs font-mono p-3 bg-black/30 border border-white/5 clip-chamfer">
+                > NO_LLDP_NEIGHBORS_DISCOVERED — verify lldpd is running and peers support LLDP
               </div>
             </div>
           </div>

@@ -65,7 +65,7 @@ const generatingVouchers = ref(false)
 // ─── Wireless SSIDs ───────────────────────────────────────────────────────────
 const wlans = ref([])
 const roamingEnabled = ref(localStorage.getItem('fast_roaming') === 'true')
-const wlanForm = ref({ ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, band: 'both', target_mode: 'all', custom_devices: [] })
+const wlanForm = ref({ ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, ieee80211k: false, ieee80211v: false, band: 'both', target_mode: 'all', custom_devices: [] })
 const editingWlanId = ref(null)
 const creatingWlan = ref(false)
 const wlanError = ref('')
@@ -207,7 +207,7 @@ function editWlan(w) {
 }
 function cancelEditWlan() {
   editingWlanId.value = null;
-  wlanForm.value = { ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, band: 'both', target_mode: 'all', custom_devices: [] };
+  wlanForm.value = { ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, ieee80211k: false, ieee80211v: false, band: 'both', target_mode: 'all', custom_devices: [] };
 }
 async function saveWlan() {
   if (!wlanForm.value.ssid) { wlanError.value = 'SSID_REQUIRED'; return }
@@ -231,6 +231,12 @@ async function deleteWlan(id) {
 function toggleRoaming() {
   wlanForm.value.roaming_enabled = !wlanForm.value.roaming_enabled
   localStorage.setItem('fast_roaming', wlanForm.value.roaming_enabled)
+}
+function toggle80211k() {
+  wlanForm.value.ieee80211k = !wlanForm.value.ieee80211k
+}
+function toggle80211v() {
+  wlanForm.value.ieee80211v = !wlanForm.value.ieee80211v
 }
 
 // ─── Static lease ops ─────────────────────────────────────────────────────────
@@ -605,6 +611,29 @@ async function toggleAutoAdopt() {
                 </div>
 
                 
+                
+                <!-- 802.11k Radio Resource Management -->
+                <div class="border border-neon-green/20 bg-neon-green/5 rounded p-3 flex items-center justify-between mt-2">
+                  <div>
+                    <p class="text-xs text-neon-green font-bold tracking-widest">📡 802.11k (Radio Resource Management)</p>
+                  </div>
+                  <div class="flex border border-neon-green clip-chamfer cursor-pointer select-none overflow-hidden ml-4" @click="toggle80211k">
+                    <div class="px-3 py-2 text-xs font-bold transition-colors" :class="wlanForm.ieee80211k ? 'bg-transparent text-gray-600' : 'bg-red-600 text-white'">OFF</div>
+                    <div class="px-3 py-2 text-xs font-bold transition-colors" :class="wlanForm.ieee80211k ? 'bg-neon-green text-black' : 'bg-transparent text-gray-600'">ON</div>
+                  </div>
+                </div>
+                
+                <!-- 802.11v BSS Transition Management -->
+                <div class="border border-neon-green/20 bg-neon-green/5 rounded p-3 flex items-center justify-between mt-2">
+                  <div>
+                    <p class="text-xs text-neon-green font-bold tracking-widest">📶 802.11v (BSS Transition Management)</p>
+                  </div>
+                  <div class="flex border border-neon-green clip-chamfer cursor-pointer select-none overflow-hidden ml-4" @click="toggle80211v">
+                    <div class="px-3 py-2 text-xs font-bold transition-colors" :class="wlanForm.ieee80211v ? 'bg-transparent text-gray-600' : 'bg-red-600 text-white'">OFF</div>
+                    <div class="px-3 py-2 text-xs font-bold transition-colors" :class="wlanForm.ieee80211v ? 'bg-neon-green text-black' : 'bg-transparent text-gray-600'">ON</div>
+                  </div>
+                </div>
+
                 <!-- Band & Target Mode -->
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 mb-4">
                   <div>
@@ -670,6 +699,8 @@ async function toggleAutoAdopt() {
                       <td class="py-2.5">
                         <span class="px-2 py-0.5 border rounded text-[10px]" :class="w.enabled ? 'bg-neon-green/10 text-neon-green border-neon-green/30' : 'bg-red-900/20 text-red-400 border-red-500/30'">{{ w.enabled ? 'LIVE' : 'DARK' }}</span>
                         <span v-if="w.roaming_enabled" class="ml-1 px-1 bg-neon-green/10 text-neon-green border border-neon-green/20 rounded text-[9px]">⚡ 802.11r</span>
+                        <span v-if="w.ieee80211k" class="ml-1 px-1 bg-cyan-900/40 text-cyan-400 border border-cyan-500/30 rounded text-[9px]">📡 802.11k</span>
+                        <span v-if="w.ieee80211v" class="ml-1 px-1 bg-purple-900/40 text-purple-400 border border-purple-500/30 rounded text-[9px]">📶 802.11v</span>
                       </td>
                       <td class="py-2.5 flex gap-2">
                         <button @click="editWlan(w)" class="text-blue-400 border border-blue-500/40 px-2 py-0.5 rounded hover:bg-blue-600 hover:text-white transition-colors text-[10px]">EDIT</button>

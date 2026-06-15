@@ -66,3 +66,42 @@ func ExecuteCommand(schema, deviceID string, cmd string) error {
 
 	return nil
 }
+
+// ExecuteCommandWithOutput runs a bash command over SSH and returns the stdout/stderr
+func ExecuteCommandWithOutput(schema, deviceID string, cmd string) (string, error) {
+	var targetIP sql.NullString
+	err := database.DB.QueryRow(fmt.Sprintf("SELECT last_ip FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&targetIP)
+	if err != nil || !targetIP.Valid || targetIP.String == "" {
+		return "", fmt.Errorf("device ip not found")
+	}
+
+	if privateKey == nil {
+		return "", fmt.Errorf("ssh private key not loaded")
+	}
+
+	config := &ssh.ClientConfig{
+		User: "root",
+		Auth: []ssh.AuthMethod{
+			ssh.PublicKeys(privateKey),
+		},
+		HostKeyCallback: TofuHostKeyCallback,
+	}
+
+	sshConn, err := ssh.Dial("tcp", targetIP.String+":22", config)
+	if err != nil {
+		return "", fmt.Errorf("ssh connection failed: %v", err)
+	}
+	defer sshConn.Close()
+
+	session, err := sshConn.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("failed to create ssh session: %v", err)
+	}
+	defer session.Close()
+
+	out, err := session.CombinedOutput(cmd)
+	if err != nil {
+		return string(out), fmt.Errorf("command execution failed: %v", err)
+	}
+	return string(out), nil
+}
