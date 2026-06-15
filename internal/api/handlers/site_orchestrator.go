@@ -17,7 +17,7 @@ import (
 func GetSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 
-	sc, err := services.GetSiteConfig(siteID)
+	sc, err := services.GetSiteConfig(r.Context(), siteID)
 	if err != nil {
 		// No config yet — return defaults
 		w.Header().Set("Content-Type", "application/json")
@@ -110,7 +110,7 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		ThreatShieldEnabled:  dto.ThreatShieldEnabled,
 	}
 
-	if err := services.UpsertSiteConfig(sc); err != nil {
+	if err := services.UpsertSiteConfig(r.Context(), sc); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -179,7 +179,7 @@ func PutDeviceRoleHandler(w http.ResponseWriter, r *http.Request) {
 func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 
-	sc, err := services.GetSiteConfig(siteID)
+	sc, err := services.GetSiteConfig(r.Context(), siteID)
 	if err != nil {
 		http.Error(w, `{"error":"no site config found — save a template first"}`, http.StatusBadRequest)
 		return
@@ -230,7 +230,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	username := GetUsernameFromReq(r)
 
-	sc, err := services.GetSiteConfig(siteID)
+	sc, err := services.GetSiteConfig(r.Context(), siteID)
 	if err != nil {
 		http.Error(w, `{"error":"no site config found — save a template first"}`, http.StatusBadRequest)
 		return

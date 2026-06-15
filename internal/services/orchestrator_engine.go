@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"context"
 
 	"openwrt-controller/internal/database"
 )
@@ -330,9 +331,9 @@ func renderMwan3Commands(wans []WANInterface) []UciCommand {
 
 // ─── Database Operations ─────────────────────────────────────────────────────
 
-func GetSiteConfig(siteID string) (*SiteConfig, error) {
+func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 	var sc SiteConfig
-	err := database.DB.QueryRow(`
+	err := database.Tx(ctx).QueryRow(`
 		SELECT id, site_id, global_ssid, global_wpa_key, global_encryption,
 		       lan_ipaddr, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 		       dns_primary, dns_secondary, timezone, hostname_prefix,
@@ -359,12 +360,12 @@ func GetSiteConfig(siteID string) (*SiteConfig, error) {
 	return &sc, nil
 }
 
-func UpsertSiteConfig(sc SiteConfig) error {
+func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 	// Ensure wan_interfaces is a valid JSON array — never NULL
 	if len(sc.WANInterfaces) == 0 {
 		sc.WANInterfaces = json.RawMessage(`[]`)
 	}
-	_, err := database.DB.Exec(`
+	_, err := database.Tx(ctx).Exec(`
 		INSERT INTO site_configs (
 			site_id, global_ssid, global_wpa_key, global_encryption,
 			lan_ipaddr, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,

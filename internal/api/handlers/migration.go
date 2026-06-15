@@ -81,7 +81,7 @@ func CommitOmadaMigration(w http.ResponseWriter, r *http.Request) {
 		fwBytes = []byte("[]")
 	}
 
-	sc, err := services.GetSiteConfig(payload.SiteID)
+	sc, err := services.GetSiteConfig(r.Context(), payload.SiteID)
 	if err != nil {
 		// Initialize empty config if not found
 		sc = &services.SiteConfig{
@@ -92,7 +92,7 @@ func CommitOmadaMigration(w http.ResponseWriter, r *http.Request) {
 	sc.DHCPReservations = dhcpBytes
 	sc.PortForwardingRules = fwBytes
 
-	if err := services.UpsertSiteConfig(*sc); err != nil {
+	if err := services.UpsertSiteConfig(r.Context(), *sc); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{
