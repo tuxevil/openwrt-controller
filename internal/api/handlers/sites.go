@@ -10,10 +10,12 @@ import (
 type createSiteRequest struct {
 	Name         string `json:"name"`
 	ControllerID string `json:"controller_id,omitempty"`
+	Latitude *float64 `json:"latitude,omitempty"`
+	Longitude *float64 `json:"longitude,omitempty"`
 }
 
 func GetSitesHandler(w http.ResponseWriter, r *http.Request) {
-	rows, err := database.Tx(r.Context()).Query("SELECT id, controller_id, name, COALESCE(auto_adopt, false), created_at, updated_at FROM sites")
+	rows, err := database.Tx(r.Context()).Query("SELECT id, controller_id, name, COALESCE(auto_adopt, false), latitude, longitude, created_at, updated_at FROM sites")
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -26,11 +28,14 @@ func GetSitesHandler(w http.ResponseWriter, r *http.Request) {
 		var controllerID *string
 		var autoAdopt bool
 		var created, updated string
-		if err := rows.Scan(&id, &controllerID, &name, &autoAdopt, &created, &updated); err == nil {
+		var lat, lon *float64
+		if err := rows.Scan(&id, &controllerID, &name, &autoAdopt, &lat, &lon, &created, &updated); err == nil {
 			site := map[string]interface{}{
 				"id":         id,
 				"name":       name,
 				"auto_adopt": autoAdopt,
+				"latitude":   lat,
+				"longitude":  lon,
 				"created_at": created,
 				"updated_at": updated,
 			}
@@ -163,4 +168,23 @@ func DeleteSiteHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
+}
+
+func UpdateSiteLocationHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	var req createSiteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error": "invalid json"}`, http.StatusBadRequest)
+		return
+	}
+	_, err := database.Tx(r.Context()).Exec(
+		"UPDATE sites SET latitude = $1, longitude = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
+		req.Latitude, req.Longitude, siteID,
+	)
+	if err != nil {
+		http.Error(w, `{"error":"update failed"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 }

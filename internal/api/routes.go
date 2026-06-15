@@ -27,6 +27,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/global/settings", middleware.WithAuth(handlers.UpdatePlatformSettingsHandler))
 	mux.HandleFunc("POST /api/chatops/query", middleware.WithAuth(handlers.ChatOpsQueryHandler))
 	mux.HandleFunc("GET /api/sites", middleware.WithAuth(handlers.GetSitesHandler))
+	mux.HandleFunc("PUT /api/sites/{site_id}/location", middleware.WithAuth(handlers.UpdateSiteLocationHandler))
 	mux.HandleFunc("POST /api/sites", middleware.WithAuth(handlers.CreateSiteHandler))
 	mux.HandleFunc("DELETE /api/sites/{site_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteSiteHandler)))
 
@@ -40,6 +41,8 @@ func SetupRoutes() *http.ServeMux {
 
 	mux.HandleFunc("GET /api/devices", middleware.WithAuth(handlers.GetDevicesHandler))
 	mux.HandleFunc("DELETE /api/devices/{device_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.ForgetDeviceHandler)))
+	mux.HandleFunc("POST /api/devices/{device_id}/pcap", middleware.WithAuth(handlers.CapturePacketHandler))
+	mux.HandleFunc("POST /api/devices/{device_id}/iperf", middleware.WithAuth(handlers.RunIperfHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/devices", middleware.WithAuth(handlers.GetSiteDevicesHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/adopt", middleware.WithAuth(handlers.AdoptDeviceHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/migrate", middleware.WithAuth(handlers.MigrateDeviceHandler))
@@ -136,6 +139,25 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/devices/{device_id}/role", middleware.WithAuth(middleware.RequireAdmin(handlers.PutDeviceRoleHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/preview", middleware.WithAuth(middleware.RequireAdmin(handlers.PreviewSyncHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/sync", middleware.WithAuth(middleware.RequireAdmin(handlers.SyncFleetHandler)))
+
+	// ── VPN MESH ORCHESTRATION ─────────────────────────────────────────────
+
+	mux.HandleFunc("GET /api/webhooks", middleware.WithAuth(middleware.RequireAdmin(handlers.GetWebhooksHandler)))
+	mux.HandleFunc("POST /api/webhooks", middleware.WithAuth(middleware.RequireAdmin(handlers.CreateWebhookHandler)))
+	mux.HandleFunc("DELETE /api/webhooks/{webhook_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteWebhookHandler)))
+
+	mux.HandleFunc("GET /api/vpn-meshes", middleware.WithAuth(middleware.RequireAdmin(handlers.GetVPNMeshesHandler)))
+
+	mux.HandleFunc("POST /api/vpn-meshes", middleware.WithAuth(middleware.RequireAdmin(handlers.CreateVPNMeshHandler)))
+
+	mux.HandleFunc("DELETE /api/vpn-meshes/{mesh_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteVPNMeshHandler)))
+
+	mux.HandleFunc("GET /api/vpn-meshes/{mesh_id}/nodes", middleware.WithAuth(middleware.RequireAdmin(handlers.GetVPNMeshNodesHandler)))
+
+	mux.HandleFunc("POST /api/vpn-meshes/{mesh_id}/nodes", middleware.WithAuth(middleware.RequireAdmin(handlers.AddVPNMeshNodeHandler)))
+
+	mux.HandleFunc("DELETE /api/vpn-mesh-nodes/{node_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteVPNMeshNodeHandler)))
+	mux.HandleFunc("POST /api/vpn-meshes/{mesh_id}/sync", middleware.WithAuth(middleware.RequireAdmin(handlers.SyncVPNMeshHandler)))
 
 	// ── LANDLORD / Multi-Tenant Management (SuperAdmin only) ─────────────────
 	mux.HandleFunc("GET /api/landlord/tenants", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetTenantsHandler)))

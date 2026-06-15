@@ -415,13 +415,13 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	// 1. Upsert site configs
 	_, err = tx.Exec(`
 		INSERT INTO `+schema+`.site_configs (
-			site_id, global_ssid, global_wpa_key, global_encryption,
+			site_id, enable_global_ssid, global_ssid, global_wpa_key, global_encryption,
 			lan_ipaddr, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 			dns_primary, dns_secondary, timezone, hostname_prefix,
 			firewall_syn_flood, firewall_drop_invalid,
 			dropbear_port, dropbear_password_auth,
 			dhcp_reservations, port_forwarding_rules, updated_at
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP)
+		) VALUES ($1, true, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
 			global_ssid = EXCLUDED.global_ssid,
 			global_wpa_key = EXCLUDED.global_wpa_key,
@@ -464,7 +464,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		if !wlanExists {
 			_, err = tx.Exec(`
 				INSERT INTO `+schema+`.wlans (site_id, ssid, security, password, enabled, roaming_enabled)
-				VALUES ($1, $2, $3, $4, true, false)
+				VALUES ($1, true, $2, $3, $4, true, false)
 			`, siteID.String, wlan.SSID, wlan.Encryption, wlan.WpaKey)
 			if err != nil {
 				http.Error(w, fmt.Sprintf(`{"error": "Failed to insert WLAN: %s"}`, err.Error()), http.StatusInternalServerError)

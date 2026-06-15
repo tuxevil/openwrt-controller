@@ -107,6 +107,13 @@ func OpenIncident(schema, incidentType, deviceID, siteID, severity string) {
 	msg := fmt.Sprintf("[!] ALERT: %s | Device: %s", incidentType, deviceID)
 	log.Printf("\x1b[31m%s\x1b[0m", msg) // Red in terminal
 	notifyTelegram(msg)
+
+	go DispatchWebhook(schema, "incident_created", map[string]interface{}{
+		"device_id": deviceID,
+		"site_id": siteID,
+		"incident_type": incidentType,
+		"severity": severity,
+	})
 }
 
 func ResolveIncident(schema, incidentType, deviceID string) {

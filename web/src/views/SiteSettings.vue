@@ -3,6 +3,11 @@ import { ref, computed, onMounted } from 'vue'
 import api from '../services/api'
 
 const props = defineProps(['site_id'])
+const locationForm = ref({ lat: 0, lon: 0 })
+
+async function saveLocation() {
+  await api.updateSiteLocation(props.site_id, locationForm.value.lat, locationForm.value.lon)
+}
 
 // ─── Active Tab ───────────────────────────────────────────────────────────────
 const activeTab = ref('wired')
@@ -13,13 +18,15 @@ const tabs = [
   { id: 'security',  label: 'SECURITY & NAT',    icon: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z', color: '#ff4444',   glow: 'shadow-[0_0_12px_rgba(255,68,68,0.4)]',  border: 'border-red-500',    text: 'text-red-400',    badge: 'Gateway' },
   { id: 'sdwan',     label: 'SD-WAN & FAILOVER', icon: 'M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z', color: '#f97316', glow: 'shadow-[0_0_12px_rgba(249,115,22,0.4)]', border: 'border-orange-500', text: 'text-orange-400', badge: 'Gateway' },
   { id: 'portal',    label: 'GUEST PORTAL',      icon: 'M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z', color: '#ec4899',   glow: 'shadow-[0_0_12px_rgba(236,72,153,0.4)]', border: 'border-pink-500', text: 'text-pink-400', badge: 'Gateway' },
+  { id: 'qos',     label: 'TRAFFIC & DPI',   icon: 'M13 10V3L4 14h7v7l9-11h-7z', color: '#eab308',   glow: 'shadow-[0_0_12px_rgba(234,179,8,0.4)]', border: 'border-[#eab308]', text: 'text-[#eab308]', badge: 'Gateway' },
   { id: 'credentials', label: 'CREDENTIALS',    icon: 'M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z', color: '#f59e0b',   glow: 'shadow-[0_0_12px_rgba(245,158,11,0.4)]', border: 'border-amber-500',  text: 'text-amber-400',  badge: 'Admin' },
 ]
 const activeTabDef = computed(() => tabs.find(t => t.id === activeTab.value))
 
 // ─── Orchestrator site config ─────────────────────────────────────────────────
 const config = ref({
-  global_ssid: '', global_wpa_key: '', global_encryption: 'psk2',
+  enable_global_ssid: true,
+        global_ssid: '', global_wpa_key: '', global_encryption: 'psk2',
   lan_ipaddr: '192.168.1.1', lan_netmask: '255.255.255.0',
   dhcp_start: 100, dhcp_limit: 150, dhcp_leasetime: '12h',
   dns_primary: '9.9.9.9', dns_secondary: '1.1.1.1',
@@ -27,6 +34,8 @@ const config = ref({
   firewall_syn_flood: true, firewall_drop_invalid: true,
   dropbear_port: 22, dropbear_password_auth: true,
   threat_shield_enabled: false,
+  sqm_cake_enabled: false,
+  dpi_enabled: false,
   guest_portal_enabled: false,
 })
 
@@ -65,11 +74,11 @@ const generatingVouchers = ref(false)
 // ─── Wireless SSIDs ───────────────────────────────────────────────────────────
 const wlans = ref([])
 const roamingEnabled = ref(localStorage.getItem('fast_roaming') === 'true')
-const wlanForm = ref({ ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, ieee80211k: false, ieee80211v: false, band: 'both', target_mode: 'all', custom_devices: [] })
+const wlanForm = ref({ ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, ieee80211k: false, ieee80211v: false, band: 'both', target_mode: 'all', custom_devices: [], ieee80211w: '0', auth_server: '', auth_secret: '', dynamic_vlan: '0' })
 const editingWlanId = ref(null)
 const creatingWlan = ref(false)
 const wlanError = ref('')
-const securityOptions = ['psk2', 'psk2+ccmp', 'psk-mixed', 'sae', 'sae-mixed', 'none']
+const securityOptions = ['psk2', 'psk2+ccmp', 'psk-mixed', 'sae', 'sae-mixed', 'wpa2-enterprise', 'wpa3-enterprise', 'none']
 
 // ─── DHCP static leases ───────────────────────────────────────────────────────
 const staticLeases = ref([])
@@ -207,7 +216,7 @@ function editWlan(w) {
 }
 function cancelEditWlan() {
   editingWlanId.value = null;
-  wlanForm.value = { ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, ieee80211k: false, ieee80211v: false, band: 'both', target_mode: 'all', custom_devices: [] };
+  wlanForm.value = { ssid: '', security: 'psk2', password: '', enabled: true, roaming_enabled: roamingEnabled.value, ieee80211k: false, ieee80211v: false, band: 'both', target_mode: 'all', custom_devices: [], ieee80211w: '0', auth_server: '', auth_secret: '', dynamic_vlan: '0' };
 }
 async function saveWlan() {
   if (!wlanForm.value.ssid) { wlanError.value = 'SSID_REQUIRED'; return }
@@ -547,8 +556,14 @@ async function toggleAutoAdopt() {
           <template v-if="activeTab === 'wireless'">
             <!-- Fleet Template SSID -->
             <section class="panel-section" style="border-color: rgba(0,255,65,0.2)">
-              <div class="panel-header" style="color: #00ff41">▸ GLOBAL FLEET SSID TEMPLATE <span class="text-[10px] text-gray-600 ml-2">(pushed via orchestrator to all radios)</span></div>
-              <div class="p-5 grid grid-cols-3 gap-5">
+              <div class="panel-header flex items-center justify-between" style="color: #00ff41">
+                <div>▸ GLOBAL FLEET SSID TEMPLATE <span class="text-[10px] text-gray-600 ml-2">(pushed via orchestrator to all radios)</span></div>
+                <div class="flex border border-neon-green clip-chamfer cursor-pointer select-none overflow-hidden" @click="config.enable_global_ssid = !config.enable_global_ssid; dirty = true">
+                  <div class="px-3 py-1 text-xs font-bold transition-colors" :class="config.enable_global_ssid ? 'bg-transparent text-gray-600' : 'bg-red-600 text-white'">[ DISABLED ]</div>
+                  <div class="px-3 py-1 text-xs font-bold transition-colors" :class="config.enable_global_ssid ? 'bg-neon-green text-black' : 'bg-transparent text-gray-600'">[ ENABLED ]</div>
+                </div>
+              </div>
+              <div class="p-5 grid grid-cols-3 gap-5" :class="!config.enable_global_ssid ? 'opacity-30 pointer-events-none' : ''">
                 <div>
                   <label class="field-label">SSID</label>
                   <input v-model="config.global_ssid" @input="dirty = true" class="field" placeholder="MyNetwork" style="border-color: rgba(0,255,65,0.4); color: #00ff41" />
@@ -589,6 +604,57 @@ async function toggleAutoAdopt() {
                   <div>
                     <label class="field-label">Pre-Shared Key</label>
                     <input v-model="wlanForm.password" type="password" class="field" placeholder="[ACCESS_KEY]" />
+                  </div>
+                  <template v-if="wlanForm.security.includes('enterprise')">
+
+                    <div>
+
+                      <label class="field-label">RADIUS Server IP</label>
+
+                      <input v-model="wlanForm.auth_server" class="field" placeholder="192.168.1.10" />
+
+                    </div>
+
+                    <div>
+
+                      <label class="field-label">RADIUS Secret</label>
+
+                      <input v-model="wlanForm.auth_secret" type="password" class="field" placeholder="secret_key" />
+
+                    </div>
+
+                    <div>
+
+                      <label class="field-label">Dynamic VLAN (802.1X)</label>
+
+                      <select v-model="wlanForm.dynamic_vlan" class="field">
+
+                        <option value="0">Disabled</option>
+
+                        <option value="1">Optional</option>
+
+                        <option value="2">Required</option>
+
+                      </select>
+
+                    </div>
+
+                  </template>
+
+                  <div>
+
+                    <label class="field-label">MFP (802.11w)</label>
+
+                    <select v-model="wlanForm.ieee80211w" class="field">
+
+                      <option value="0">Disabled</option>
+
+                      <option value="1">Optional</option>
+
+                      <option value="2">Required</option>
+
+                    </select>
+
                   </div>
                   <div class="flex flex-col gap-2">
                     <label class="field-label">State</label>
@@ -803,6 +869,74 @@ async function toggleAutoAdopt() {
                   </div>
                 </label>
               </div>
+            </section>
+
+            <!-- Tailscale Zero Trust -->
+
+            <section class="panel-section" style="border-color: rgba(255,68,68,0.2)">
+
+              <div class="panel-header" style="color: #ff4444">▸ ZERO TRUST OVERLAY <span class="text-[10px] text-gray-600 ml-2">(Tailscale / Headscale)</span></div>
+
+              <div class="p-5 flex flex-col gap-4">
+
+                <div class="flex items-center justify-between">
+
+                  <div>
+
+                    <p class="text-sm text-gray-300">Enable Micro-segmentation</p>
+
+                    <p class="text-[10px] text-gray-600 mt-0.5">Automates Tailscale mesh integration across the fleet</p>
+
+                  </div>
+
+                  <div class="flex border border-red-500/50 cursor-pointer select-none overflow-hidden rounded" @click="config.tailscale_enabled = !config.tailscale_enabled; dirty = true">
+
+                    <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.tailscale_enabled ? 'bg-transparent text-gray-600' : 'bg-gray-800 text-gray-400'">[ OFF ]</div>
+
+                    <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.tailscale_enabled ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(255,68,68,0.5)]' : 'bg-transparent text-gray-600'">[ ON ]</div>
+
+                  </div>
+
+                </div>
+
+                <div v-if="config.tailscale_enabled">
+
+                  <label class="field-label">Pre-Auth Key (Tailscale or Headscale)</label>
+
+                  <input v-model="config.tailscale_auth_key" @input="dirty = true" type="password" class="field font-mono" placeholder="tskey-auth-..." style="border-color: rgba(255,68,68,0.4)" />
+
+                </div>
+
+              </div>
+
+            </section>
+
+            <!-- Secure Tunnel -->
+
+            <section class="panel-section" style="border-color: rgba(255,68,68,0.2)">
+
+              <div class="panel-header" style="color: #ff4444">▸ SECURE TUNNEL <span class="text-[10px] text-gray-600 ml-2">(Remote SSH / Telemetry Link)</span></div>
+
+              <div class="p-5 flex items-center justify-between">
+
+                <div>
+
+                  <p class="text-sm text-gray-300">Management Tunnel (wg0_control)</p>
+
+                  <p class="text-[10px] text-gray-600 mt-0.5">Establishes secure WireGuard tunnel to Nerve Center for remote Shell / CLI execution</p>
+
+                </div>
+
+                <div class="flex border border-red-500/50 cursor-pointer select-none overflow-hidden rounded" @click="config.secure_tunnel_enabled = !config.secure_tunnel_enabled; dirty = true">
+
+                  <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.secure_tunnel_enabled ? 'bg-transparent text-gray-600' : 'bg-gray-800 text-gray-400'">[ OFF ]</div>
+
+                  <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.secure_tunnel_enabled ? 'bg-red-600 text-white shadow-[0_0_10px_rgba(255,68,68,0.5)]' : 'bg-transparent text-gray-600'">[ ON ]</div>
+
+                </div>
+
+              </div>
+
             </section>
 
             <!-- Threat Shield -->
@@ -1048,6 +1182,110 @@ async function toggleAutoAdopt() {
           <!-- ══════════════════════════════════════════════ -->
           <!--  TAB: GUEST PORTAL                            -->
           <!-- ══════════════════════════════════════════════ -->
+          <template v-if="activeTab === 'qos'">
+
+            <!-- Info banner -->
+
+            <div class="flex items-start gap-3 p-4 bg-yellow-950/30 border border-yellow-500/30 rounded-lg mb-4">
+
+              <svg class="w-5 h-5 text-yellow-400 mt-0.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+
+              <div>
+
+                <p class="text-xs text-yellow-300 font-bold tracking-widest">QOS & DEEP PACKET INSPECTION</p>
+
+                <p class="text-[10px] text-gray-500 mt-1 leading-relaxed">
+
+                  Enable Smart Queue Management (CAKE) to eliminate Bufferbloat by tracking round-trip times and intelligently pacing packets. Enable DPI to leverage nDPI for Layer 7 application detection and blocking.
+
+                </p>
+
+              </div>
+
+            </div>
+
+
+
+            <section class="panel-section" style="border-color: rgba(234,179,8,0.25)">
+
+              <div class="panel-header" style="color: #eab308">▸ SQM CAKE (Bufferbloat Mitigation)</div>
+
+              <div class="p-5 flex flex-col gap-4">
+
+                <div class="flex items-center justify-between">
+
+                  <div>
+
+                    <p class="text-sm text-gray-300">Enable SQM</p>
+
+                    <p class="text-[10px] text-gray-600 mt-0.5">Injects sqm-scripts onto eth1 (WAN)</p>
+
+                  </div>
+
+                  <div class="flex border border-yellow-500/50 cursor-pointer select-none overflow-hidden rounded" @click="config.sqm_cake_enabled = !config.sqm_cake_enabled; dirty = true">
+
+                    <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.sqm_cake_enabled ? 'bg-transparent text-gray-600' : 'bg-gray-800 text-gray-400'">[ OFF ]</div>
+
+                    <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.sqm_cake_enabled ? 'bg-yellow-600 text-white shadow-[0_0_10px_rgba(234,179,8,0.5)]' : 'bg-transparent text-gray-600'">[ ON ]</div>
+
+                  </div>
+
+                </div>
+
+                <div class="grid grid-cols-2 gap-4" :class="config.sqm_cake_enabled ? 'opacity-100' : 'opacity-30 pointer-events-none'">
+
+                  <div>
+
+                    <label class="field-label" style="color: #eab308">Download Speed (Kbps)</label>
+
+                    <input v-model.number="config.sqm_download" @input="dirty=true" type="number" class="field font-mono" placeholder="100000" style="border-color: rgba(234,179,8,0.4)" />
+
+                  </div>
+
+                  <div>
+
+                    <label class="field-label" style="color: #eab308">Upload Speed (Kbps)</label>
+
+                    <input v-model.number="config.sqm_upload" @input="dirty=true" type="number" class="field font-mono" placeholder="20000" style="border-color: rgba(234,179,8,0.4)" />
+
+                  </div>
+
+                </div>
+
+              </div>
+
+            </section>
+
+
+
+            <section class="panel-section mt-4" style="border-color: rgba(234,179,8,0.25)">
+
+              <div class="panel-header" style="color: #eab308">▸ DEEP PACKET INSPECTION (L7)</div>
+
+              <div class="p-5 flex items-center justify-between">
+
+                <div>
+
+                  <p class="text-sm text-gray-300">Enable nDPI Enforcement</p>
+
+                  <p class="text-[10px] text-gray-600 mt-0.5">Logs and flags P2P/BitTorrent traffic using iptables-mod-ndpi</p>
+
+                </div>
+
+                <div class="flex border border-yellow-500/50 cursor-pointer select-none overflow-hidden rounded" @click="config.dpi_enabled = !config.dpi_enabled; dirty = true">
+
+                  <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.dpi_enabled ? 'bg-transparent text-gray-600' : 'bg-gray-800 text-gray-400'">[ OFF ]</div>
+
+                  <div class="px-4 py-2 text-xs font-bold transition-colors" :class="config.dpi_enabled ? 'bg-yellow-600 text-white shadow-[0_0_10px_rgba(234,179,8,0.5)]' : 'bg-transparent text-gray-600'">[ ON ]</div>
+
+                </div>
+
+              </div>
+
+            </section>
+
+          </template>
+
           <template v-if="activeTab === 'portal'">
             <!-- Portal Orchestration Toggle -->
             <section class="panel-section" style="border-color: rgba(236,72,153,0.2)">

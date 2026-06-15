@@ -113,9 +113,9 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	var wlansList []map[string]interface{}
 	for rows.Next() {
-		var ssid, security, password, band string
+		var ssid, security, password, band, ieee80211w, auth_server, auth_secret, dynamic_vlan string
 		var roaming, k, v bool
-		if err := rows.Scan(&ssid, &security, &password, &band, &roaming, &k, &v); err == nil {
+		if err := rows.Scan(&ssid, &security, &password, &band, &roaming, &k, &v, &ieee80211w, &auth_server, &auth_secret, &dynamic_vlan); err == nil {
 			wlan := map[string]interface{}{
 				"ssid":     ssid,
 				"security": security,
@@ -148,6 +148,9 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	// --- Módulo SECURE_TUNNEL: Wireguard Config ---
 	var wgPrivKey, wgPubKey, wgIP, wgEndpoint, siteWgPubKey, deviceRole sql.NullString
+	var secureTunnelEnabled bool = true
+	_ = database.Tx(r.Context()).QueryRow("SELECT COALESCE(secure_tunnel_enabled, true) FROM "+tenantSchema+".site_configs WHERE site_id = $1", siteID.String).Scan(&secureTunnelEnabled)
+
 	_ = database.Tx(r.Context()).QueryRow(`
 		SELECT d.wg_privkey, d.wg_pubkey, d.wg_ip, s.wg_endpoint, s.wg_pubkey, d.device_role 
 		FROM `+tenantSchema+`.devices d 
@@ -182,7 +185,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	wgConfig := make(map[string]interface{})
 	isGateway := deviceRole.Valid && strings.EqualFold(deviceRole.String, "gateway")
-	if wgEndpoint.Valid && wgEndpoint.String != "" && isGateway {
+	if wgEndpoint.Valid && wgEndpoint.String != "" && isGateway && secureTunnelEnabled {
 		wgConfig["enabled"] = true
 		wgConfig["private_key"] = wgPrivKey.String
 		wgConfig["controller_pubkey"] = siteWgPubKey.String
@@ -195,6 +198,9 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch threat shield setting for this site
 	var threatShieldEnabled bool
+	var tailscaleEnabled bool
+	var tailscaleAuthKey string
+
 	_ = database.Tx(r.Context()).QueryRow(
 		"SELECT COALESCE(threat_shield_enabled, false) FROM "+tenantSchema+".sites WHERE id = $1", siteID.String,
 	).Scan(&threatShieldEnabled)
@@ -208,6 +214,10 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 			"ssh":           sshConfig,
 			"wireguard":     wgConfig,
 			"threat_shield": threatShieldEnabled,
+			"tailscale": map[string]interface{}{
+				"enabled":  tailscaleEnabled,
+				"auth_key": tailscaleAuthKey,
+			},
 		},
 	})
 }

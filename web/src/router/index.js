@@ -216,6 +216,16 @@ const router = createRouter({
       path: '/landlord',
       name: 'landlord',
       component: () => import('../views/LandlordDashboard.vue')
+    },
+    {
+      path: '/map',
+      name: 'map',
+      component: () => import('../views/MapView.vue')
+    },
+    {
+      path: '/webhooks',
+      name: 'webhooks',
+      component: () => import('../views/WebhooksView.vue')
     }
   ]
 })

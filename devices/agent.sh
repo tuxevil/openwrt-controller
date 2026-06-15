@@ -12,6 +12,10 @@ DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:up
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 
 # Instalar dependencias si faltan (opcional)
+if ! command -v tcpdump >/dev/null 2>&1; then
+    logger -t agent "Installing missing tcpdump..."
+    opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi; opkg install tcpdump iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale || apk update && apk add tcpdump iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale
+fi
 # apk update && apk add iwinfo curl
 
 T_FAILS=0
@@ -372,6 +376,13 @@ EOF
                         W_ROAMING=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211r" 2>/dev/null)
                         W_80211K=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211k" 2>/dev/null)
                         W_80211V=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211v" 2>/dev/null)
+                        W_MFP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211w" 2>/dev/null)
+
+                        W_AUTH_SERVER=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].auth_server" 2>/dev/null)
+
+                        W_AUTH_SECRET=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].auth_secret" 2>/dev/null)
+
+                        W_DYN_VLAN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].dynamic_vlan" 2>/dev/null)
                         
                         if [ "$W_BAND" = "both" ] || [ "$W_BAND" = "$M_BAND" ]; then
                             SECTION="cfg_${RADIO}_${i}"
@@ -382,6 +393,27 @@ EOF
                             uci set wireless.$SECTION.ssid="$W_SSID"
                             uci set wireless.$SECTION.encryption="$W_SEC"
                             [ -n "$W_KEY" ] && uci set wireless.$SECTION.key="$W_KEY"
+                            
+
+                            [ -n "$W_MFP" ] && uci set wireless.$SECTION.ieee80211w="$W_MFP"
+
+                            if [ -n "$W_AUTH_SERVER" ] && [ "$W_AUTH_SERVER" != "null" ]; then
+
+                                uci set wireless.$SECTION.auth_server="$W_AUTH_SERVER"
+
+                                uci set wireless.$SECTION.auth_secret="$W_AUTH_SECRET"
+
+                            fi
+
+                            if [ "$W_DYN_VLAN" = "1" ] || [ "$W_DYN_VLAN" = "2" ]; then
+
+                                uci set wireless.$SECTION.dynamic_vlan="$W_DYN_VLAN"
+
+                                uci set wireless.$SECTION.vlan_naming="1"
+
+                                uci set wireless.$SECTION.vlan_bridge="br-vlan"
+
+                            fi
                             
                             if [ "$W_ROAMING" = "1" ] || [ "$W_ROAMING" = "true" ]; then
                                 uci set wireless.$SECTION.ieee80211r='1'
@@ -422,10 +454,10 @@ EOF
                 apk update && apk add wireguard-tools
             fi
             
-            # Check if wg0 already configured in uci
-            WG_EXISTS=$(uci -q get network.wg0.proto)
+            # Check if wg_nerve already configured in uci
+            WG_EXISTS=$(uci -q get network.wg_nerve.proto)
             if [ "$WG_EXISTS" != "wireguard" ]; then
-                logger -t agent "WIREGUARD: Configuring wg0 interface..."
+                logger -t agent "WIREGUARD: Configuring wg_nerve interface..."
                 
                 WG_PRIV=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.private_key' 2>/dev/null)
                 WG_PUB=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.controller_pubkey' 2>/dev/null)
@@ -433,41 +465,87 @@ EOF
                 WG_IP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.internal_ip' 2>/dev/null)
                 WG_ALLOWED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.allowed_ips' 2>/dev/null)
                 
-                uci set network.wg0=interface
-                uci set network.wg0.proto='wireguard'
-                uci set network.wg0.private_key="$WG_PRIV"
+                uci set network.wg_nerve=interface
+                uci set network.wg_nerve.proto='wireguard'
+                uci set network.wg_nerve.private_key="$WG_PRIV"
                 
                 # Add an IP address for wireguard interface, we append /24 for subnet
-                uci -q delete network.wg0.addresses
-                uci add_list network.wg0.addresses="${WG_IP}/24"
+                uci -q delete network.wg_nerve.addresses
+                uci add_list network.wg_nerve.addresses="${WG_IP}/24"
 
                 # Define the controller peer
-                uci set network.wg0_control=wireguard_wg0
-                uci set network.wg0_control.public_key="$WG_PUB"
-                uci set network.wg0_control.endpoint_host="${WG_EP%%:*}"
-                uci set network.wg0_control.endpoint_port="${WG_EP##*:}"
-                uci set network.wg0_control.route_allowed_ips='1'
-                uci set network.wg0_control.persistent_keepalive='25'
+                uci set network.wg_nerve_peer=wireguard_wg_nerve
+                uci set network.wg_nerve_peer.public_key="$WG_PUB"
+                uci set network.wg_nerve_peer.endpoint_host="${WG_EP%%:*}"
+                uci set network.wg_nerve_peer.endpoint_port="${WG_EP##*:}"
+                uci set network.wg_nerve_peer.route_allowed_ips='1'
+                uci set network.wg_nerve_peer.persistent_keepalive='25'
                 
                 # Add allowed IPs
-                uci -q delete network.wg0_control.allowed_ips
-                uci add_list network.wg0_control.allowed_ips="$WG_ALLOWED"
+                uci -q delete network.wg_nerve_peer.allowed_ips
+                uci add_list network.wg_nerve_peer.allowed_ips="$WG_ALLOWED"
 
                 uci commit network
                 
-                logger -t agent "WIREGUARD: wg0 committed. Bringing interface up."
-                ifup wg0
+                logger -t agent "WIREGUARD: wg_nerve committed. Bringing interface up."
+                ifup wg_nerve
             fi
         else
-            WG_EXISTS=$(uci -q get network.wg0.proto)
+            WG_EXISTS=$(uci -q get network.wg_nerve.proto)
             if [ "$WG_EXISTS" = "wireguard" ]; then
-                logger -t agent "WIREGUARD: Disabling and deleting wg0 interface..."
-                ifdown wg0 2>/dev/null || true
-                uci -q delete network.wg0
-                uci -q delete network.wg0_control
+                logger -t agent "WIREGUARD: Disabling and deleting wg_nerve interface..."
+                ifdown wg_nerve 2>/dev/null || true
+                uci -q delete network.wg_nerve
+                uci -q delete network.wg_nerve_peer
                 uci commit network
             fi
         fi
+    fi
+
+    # 8.5 TAILSCALE / HEADSCALE ZERO TRUST OVERLAY
+
+    if [ -n "$CONFIG_RESPONSE" ]; then
+
+        TS_ENABLED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.tailscale.enabled' 2>/dev/null)
+
+        TS_KEY=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.tailscale.auth_key' 2>/dev/null)
+
+        if [ "$TS_ENABLED" = "true" ] && [ -n "$TS_KEY" ]; then
+
+            TS_STATUS=$(/etc/init.d/tailscale status 2>/dev/null)
+
+            if ! echo "$TS_STATUS" | grep -q "running"; then
+
+                logger -t agent "TAILSCALE: Starting and authenticating Zero Trust Overlay..."
+
+                /etc/init.d/tailscale enable
+
+                /etc/init.d/tailscale start
+
+                sleep 2
+
+                tailscale up --authkey "$TS_KEY" --accept-routes --reset
+
+            fi
+
+        elif [ "$TS_ENABLED" = "false" ]; then
+
+            TS_STATUS=$(/etc/init.d/tailscale status 2>/dev/null)
+
+            if echo "$TS_STATUS" | grep -q "running"; then
+
+                logger -t agent "TAILSCALE: Disabling overlay network..."
+
+                tailscale logout 2>/dev/null
+
+                /etc/init.d/tailscale stop
+
+                /etc/init.d/tailscale disable
+
+            fi
+
+        fi
+
     fi
 
     # 9. [THREAT_SHIELD] — nftables IP reputation enforcement

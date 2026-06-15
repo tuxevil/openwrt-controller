@@ -7,8 +7,8 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/openwrthub
-      - INFLUX_URL=http://influxdb:8086
+      - DATABASE_URL=postgres://postgres:postgres@172.18.0.3:5432/openwrthub
+      - INFLUX_URL=http://172.18.0.2:8086
       - INFLUX_ORG=openwrthub
       - INFLUX_BUCKET=telemetry
       - INFLUX_TOKEN=REPLACE_WITH_INFLUX_TOKEN

@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"context"
 
 	"openwrt-controller/internal/database"
@@ -25,6 +26,7 @@ type WANInterface struct {
 type SiteConfig struct {
 	ID                   string `json:"id"`
 	SiteID               string `json:"site_id"`
+	EnableGlobalSSID     bool   `json:"enable_global_ssid"`
 	GlobalSSID           string `json:"global_ssid"`
 	GlobalWPAKey         string `json:"global_wpa_key"`
 	GlobalEncryption     string `json:"global_encryption"`
@@ -37,6 +39,13 @@ type SiteConfig struct {
 	DNSSecondary         string `json:"dns_secondary"`
 	Timezone             string `json:"timezone"`
 	HostnamePrefix       string `json:"hostname_prefix"`
+	SQMCakeEnabled       bool   `json:"sqm_cake_enabled"`
+	SqmDownload          int    `json:"sqm_download"`
+	SqmUpload            int    `json:"sqm_upload"`
+	DPIEnabled           bool   `json:"dpi_enabled"`
+	SecureTunnelEnabled  bool   `json:"secure_tunnel_enabled"`
+	TailscaleEnabled     bool   `json:"tailscale_enabled"`
+	TailscaleAuthKey     string `json:"tailscale_auth_key"`
 	FirewallSynFlood     bool   `json:"firewall_syn_flood"`
 	FirewallDropInvalid  bool   `json:"firewall_drop_invalid"`
 	DropbearPort         int    `json:"dropbear_port"`
@@ -97,7 +106,7 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 
 		// ── WIRELESS (Gateway + AP) ──────────────────────────────────
 		if role == "Gateway" || role == "AP" {
-			if cfg.GlobalSSID != "" {
+			if cfg.EnableGlobalSSID && cfg.GlobalSSID != "" {
 				cmds = append(cmds,
 					UciCommand{Action: "set", Config: "wireless", Section: "default_radio0", Option: "ssid", Value: cfg.GlobalSSID},
 					UciCommand{Action: "set", Config: "wireless", Section: "default_radio0", Option: "encryption", Value: cfg.GlobalEncryption},
@@ -112,6 +121,58 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 					UciCommand{Action: "set", Config: "wireless", Section: "radio0", Option: "disabled", Value: "0"},
 				)
 			}
+		}
+
+		// ── SMART QOS (CAKE) (Gateway only) ─────────────────────────
+
+		if role == "Gateway" {
+
+			if cfg.SQMCakeEnabled {
+
+				cmds = append(cmds,
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "enabled", Value: "1"},
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "interface", Value: "eth1"},
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "download", Value: strconv.Itoa(cfg.SqmDownload)},
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "upload", Value: strconv.Itoa(cfg.SqmUpload)},
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "qdisc", Value: "cake"},
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "script", Value: "piece_of_cake.qos"},
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "linklayer", Value: "none"},
+
+				)
+
+			} else {
+
+				cmds = append(cmds,
+
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "enabled", Value: "0"},
+
+				)
+
+			}
+
+			// ── DEEP PACKET INSPECTION (nDPI) ──────────────────────────
+
+			if cfg.DPIEnabled {
+
+				cmds = append(cmds,
+
+					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "type", Value: "include"},
+
+					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "path", Value: "/etc/firewall.dpi"},
+
+					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "reload", Value: "1"},
+
+				)
+
+			}
+
 		}
 
 		// ── NETWORK (Gateway only) ───────────────────────────────────
@@ -185,6 +246,35 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 						)
 					}
 				}
+			}
+
+			
+			// ── SQM CAKE (Gateway only) ──────────────────────────────────
+			if cfg.SQMCakeEnabled {
+				cmds = append(cmds,
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "enabled", Value: "1"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "interface", Value: "eth0"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "download", Value: "0"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "upload", Value: "0"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "qdisc", Value: "cake"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "script", Value: "piece_of_cake.qos"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "linklayer", Value: "none"},
+				)
+			} else {
+				cmds = append(cmds,
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "enabled", Value: "0"},
+				)
+			}
+
+			// ── DEEP PACKET INSPECTION (nDPI) (Gateway only) ────────────
+			if cfg.DPIEnabled {
+				cmds = append(cmds,
+					UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "dpi_enabled", Value: "1"},
+				)
+			} else {
+				cmds = append(cmds,
+					UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "dpi_enabled", Value: "0"},
+				)
 			}
 
 			// ── GUEST PORTAL (Gateway only) ──────────────────────────────
@@ -334,8 +424,8 @@ func renderMwan3Commands(wans []WANInterface) []UciCommand {
 func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 	var sc SiteConfig
 	err := database.Tx(ctx).QueryRow(`
-		SELECT id, site_id, global_ssid, global_wpa_key, global_encryption,
-		       lan_ipaddr, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
+		SELECT id, site_id, enable_global_ssid, global_ssid, global_wpa_key, global_encryption,
+		       lan_ipaddr, COALESCE(sqm_cake_enabled, false), COALESCE(sqm_download, 0), COALESCE(sqm_upload, 0), COALESCE(dpi_enabled, false), COALESCE(secure_tunnel_enabled, true), COALESCE(tailscale_enabled, false), COALESCE(tailscale_auth_key, ''), lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 		       dns_primary, dns_secondary, timezone, hostname_prefix,
 		       firewall_syn_flood, firewall_drop_invalid,
 		       dropbear_port, dropbear_password_auth,
@@ -345,8 +435,8 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 		       COALESCE(wan_interfaces, '[]'::jsonb)
 		FROM site_configs WHERE site_id = $1
 	`, siteID).Scan(
-		&sc.ID, &sc.SiteID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
-		&sc.LanIPAddr, &sc.LanNetmask, &sc.DHCPStart, &sc.DHCPLimit, &sc.DHCPLeasetime,
+		&sc.ID, &sc.SiteID, &sc.EnableGlobalSSID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
+		&sc.LanIPAddr, &sc.SQMCakeEnabled, &sc.SqmDownload, &sc.SqmUpload, &sc.DPIEnabled, &sc.SecureTunnelEnabled, &sc.TailscaleEnabled, &sc.TailscaleAuthKey, &sc.LanNetmask, &sc.DHCPStart, &sc.DHCPLimit, &sc.DHCPLeasetime,
 		&sc.DNSPrimary, &sc.DNSSecondary, &sc.Timezone, &sc.HostnamePrefix,
 		&sc.FirewallSynFlood, &sc.FirewallDropInvalid,
 		&sc.DropbearPort, &sc.DropbearPasswordAuth,
@@ -367,18 +457,18 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 	}
 	_, err := database.Tx(ctx).Exec(`
 		INSERT INTO site_configs (
-			site_id, global_ssid, global_wpa_key, global_encryption,
-			lan_ipaddr, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
+			site_id, enable_global_ssid, global_ssid, global_wpa_key, global_encryption,
+			lan_ipaddr, sqm_cake_enabled, sqm_download, sqm_upload, dpi_enabled, secure_tunnel_enabled, tailscale_enabled, tailscale_auth_key, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 			dns_primary, dns_secondary, timezone, hostname_prefix,
 			firewall_syn_flood, firewall_drop_invalid,
 			dropbear_port, dropbear_password_auth,
 			dhcp_reservations, port_forwarding_rules, threat_shield_enabled, guest_portal_enabled,
 			wan_interfaces, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,CURRENT_TIMESTAMP)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
-			global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
+			enable_global_ssid=EXCLUDED.enable_global_ssid, global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
 			global_encryption=EXCLUDED.global_encryption,
-			lan_ipaddr=EXCLUDED.lan_ipaddr, lan_netmask=EXCLUDED.lan_netmask,
+			lan_ipaddr=EXCLUDED.lan_ipaddr, sqm_cake_enabled=EXCLUDED.sqm_cake_enabled, sqm_download=EXCLUDED.sqm_download, sqm_upload=EXCLUDED.sqm_upload, dpi_enabled=EXCLUDED.dpi_enabled, secure_tunnel_enabled=EXCLUDED.secure_tunnel_enabled, tailscale_enabled, tailscale_auth_key, lan_netmask=EXCLUDED.lan_netmask,
 			dhcp_start=EXCLUDED.dhcp_start, dhcp_limit=EXCLUDED.dhcp_limit,
 			dhcp_leasetime=EXCLUDED.dhcp_leasetime,
 			dns_primary=EXCLUDED.dns_primary, dns_secondary=EXCLUDED.dns_secondary,
@@ -393,8 +483,8 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 			guest_portal_enabled=EXCLUDED.guest_portal_enabled,
 			wan_interfaces=EXCLUDED.wan_interfaces,
 			updated_at=CURRENT_TIMESTAMP
-	`, sc.SiteID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
-		sc.LanIPAddr, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
+	`, sc.SiteID, sc.EnableGlobalSSID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
+		sc.LanIPAddr, sc.SQMCakeEnabled, sc.SqmDownload, sc.SqmUpload, sc.DPIEnabled, sc.SecureTunnelEnabled, sc.TailscaleEnabled, sc.TailscaleAuthKey, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
 		sc.DNSPrimary, sc.DNSSecondary, sc.Timezone, sc.HostnamePrefix,
 		sc.FirewallSynFlood, sc.FirewallDropInvalid,
 		sc.DropbearPort, sc.DropbearPasswordAuth,

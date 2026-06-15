@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"time"
 	"fmt"
 	"log"
 	"os"
@@ -28,8 +29,17 @@ func InitPostgres() error {
 		return fmt.Errorf("failed to open pgx connection: %w", err)
 	}
 
+	// Retry loop for ping
+	for i := 0; i < 10; i++ {
+		if err := db.Ping(); err == nil {
+			break
+		}
+		log.Printf("Waiting for postgres... (%d/10)", i+1)
+		time.Sleep(2 * time.Second)
+	}
+
 	if err := db.Ping(); err != nil {
-		return fmt.Errorf("failed to ping postgres: %w", err)
+		return fmt.Errorf("failed to ping postgres after retries: %w", err)
 	}
 
 	DB = db
@@ -54,6 +64,8 @@ func createLandlordTables() error {
 	CREATE TABLE IF NOT EXISTS tenants (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(255) NOT NULL,
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
 		schema_alias VARCHAR(100) UNIQUE NOT NULL,
 		is_active BOOLEAN DEFAULT true,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -143,6 +155,8 @@ func createTenantTables(schema string) error {
 	CREATE TABLE IF NOT EXISTS %[1]s.controllers (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(255) NOT NULL,
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
 		mac VARCHAR(50) UNIQUE,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -152,6 +166,8 @@ func createTenantTables(schema string) error {
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		controller_id UUID REFERENCES %[1]s.controllers(id),
 		name VARCHAR(255) NOT NULL,
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
@@ -160,6 +176,8 @@ func createTenantTables(schema string) error {
 		id VARCHAR(50) PRIMARY KEY,
 		site_id UUID REFERENCES %[1]s.sites(id),
 		name VARCHAR(255),
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
 		model VARCHAR(255),
 		status VARCHAR(50),
 		state_json JSONB,
@@ -179,6 +197,10 @@ func createTenantTables(schema string) error {
 		enabled BOOLEAN DEFAULT true,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		ieee80211w VARCHAR(10) DEFAULT '0',
+		auth_server VARCHAR(50),
+		auth_secret VARCHAR(255),
+		dynamic_vlan VARCHAR(10) DEFAULT '0',
 		band VARCHAR(50) DEFAULT 'both',
 		target_mode VARCHAR(50) DEFAULT 'all',
 		roaming_enabled BOOLEAN DEFAULT false,
@@ -214,9 +236,36 @@ func createTenantTables(schema string) error {
 		resolved_at TIMESTAMP WITH TIME ZONE
 	);
 
+	CREATE TABLE IF NOT EXISTS %[1]s.vpn_meshes (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		name VARCHAR(255) NOT NULL,
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
+		topology VARCHAR(50) DEFAULT 'hub_and_spoke',
+		hub_device_id VARCHAR(50) REFERENCES %[1]s.devices(id),
+		subnet VARCHAR(50) DEFAULT '10.9.0.0/24',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS %[1]s.vpn_mesh_nodes (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		mesh_id UUID REFERENCES %[1]s.vpn_meshes(id) ON DELETE CASCADE,
+		device_id VARCHAR(50) REFERENCES %[1]s.devices(id),
+		role VARCHAR(50) DEFAULT 'spoke',
+		private_key VARCHAR(255) NOT NULL,
+		public_key VARCHAR(255) NOT NULL,
+		listen_port INT DEFAULT 51821,
+		internal_ip VARCHAR(50) NOT NULL,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (mesh_id, device_id),
+		UNIQUE (mesh_id, internal_ip)
+	);
+
 	CREATE TABLE IF NOT EXISTS %[1]s.profiles (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(255) NOT NULL,
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
 		description TEXT,
 		config_json JSONB DEFAULT '{}',
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
@@ -234,6 +283,8 @@ func createTenantTables(schema string) error {
 	CREATE TABLE IF NOT EXISTS %[1]s.firmwares (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		filename VARCHAR(255) NOT NULL,
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
 		version VARCHAR(50),
 		model_compatibility VARCHAR(50),
 		data BYTEA,
@@ -264,6 +315,8 @@ func createTenantTables(schema string) error {
 		mac VARCHAR(50) PRIMARY KEY,
 		site_id UUID REFERENCES %[1]s.sites(id),
 		hostname VARCHAR(255) NOT NULL,
+		latitude NUMERIC(10, 6),
+		longitude NUMERIC(10, 6),
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -296,10 +349,23 @@ func createTenantTables(schema string) error {
 	CREATE TABLE IF NOT EXISTS %[1]s.site_configs (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		site_id UUID REFERENCES %[1]s.sites(id) ON DELETE CASCADE UNIQUE,
+		enable_global_ssid BOOLEAN DEFAULT true,
+		sqm_cake_enabled BOOLEAN DEFAULT false,
+		sqm_download INTEGER DEFAULT 0,
+		sqm_upload INTEGER DEFAULT 0,
+		dpi_enabled BOOLEAN DEFAULT false,
+		secure_tunnel_enabled BOOLEAN DEFAULT true,
+		tailscale_enabled BOOLEAN DEFAULT false,
+		tailscale_auth_key VARCHAR(255) DEFAULT '',
 		global_ssid VARCHAR(255) DEFAULT '',
 		global_wpa_key VARCHAR(255) DEFAULT '',
 		global_encryption VARCHAR(50) DEFAULT 'psk2',
 		lan_ipaddr VARCHAR(50) DEFAULT '192.168.1.1',
+		sqm_cake_enabled BOOLEAN DEFAULT false,
+		dpi_enabled BOOLEAN DEFAULT false,
+		secure_tunnel_enabled BOOLEAN DEFAULT true,
+		tailscale_enabled BOOLEAN DEFAULT false,
+		tailscale_auth_key VARCHAR(255) DEFAULT '',
 		lan_netmask VARCHAR(50) DEFAULT '255.255.255.0',
 		dhcp_start INT DEFAULT 100,
 		dhcp_limit INT DEFAULT 150,
@@ -374,7 +440,7 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS dhcp_reservations JSONB DEFAULT '[]'", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS port_forwarding_rules JSONB DEFAULT '[]'", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false", s),
-		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS guest_portal_enabled BOOLEAN DEFAULT false", s),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS guest_portal_enabled BOOLEAN DEFAULT false, sqm_enabled BOOLEAN DEFAULT false, sqm_download INTEGER DEFAULT 0, sqm_upload INTEGER DEFAULT 0", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS wan_interfaces JSONB DEFAULT '[]'", s),
 	}
 	for _, m := range migrations {

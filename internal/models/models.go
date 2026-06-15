@@ -17,6 +17,8 @@ type Site struct {
 	ID           string    `json:"id"`
 	ControllerID string    `json:"controller_id"`
 	Name         string    `json:"name"`
+	Latitude     *float64  `json:"latitude"`
+	Longitude    *float64  `json:"longitude"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 }
@@ -58,6 +60,10 @@ type WLAN struct {
 	Security  string    `json:"security"`
 	Password  string    `json:"password"`
 	Enabled   bool      `json:"enabled"`
+	Ieee80211w  string    `json:"ieee80211w"`
+	AuthServer  string    `json:"auth_server"`
+	AuthSecret  string    `json:"auth_secret"`
+	DynamicVlan string    `json:"dynamic_vlan"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -108,4 +114,35 @@ type Profile struct {
 	ConfigJSON  json.RawMessage `json:"config_json"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+type VPNMesh struct {
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Topology    string    `json:"topology"`
+	HubDeviceID string    `json:"hub_device_id"`
+	Subnet      string    `json:"subnet"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type VPNMeshNode struct {
+	ID          string    `json:"id"`
+	MeshID      string    `json:"mesh_id"`
+	DeviceID    string    `json:"device_id"`
+	DeviceName  string    `json:"device_name,omitempty"` // For UI
+	Role        string    `json:"role"`
+	PrivateKey  string    `json:"private_key"`
+	PublicKey   string    `json:"public_key"`
+	ListenPort  int       `json:"listen_port"`
+	InternalIP  string    `json:"internal_ip"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type Webhook struct {
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	Secret    string    `json:"secret"`
+	Events    []string  `json:"events"`
+	Enabled   bool      `json:"enabled"`
+	CreatedAt time.Time `json:"created_at"`
 }

@@ -68,6 +68,10 @@ done
 echo "[+] Controller reachable at $CONTROLLER_IP."
 
 # 5. Download the latest agent from the Nerve Center
+# Install required packages for remote diagnostics
+echo "[*] Installing required packages..."
+opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi; opkg install tcpdump curl iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale >/dev/null 2>&1 || true
+
 echo "[*] Downloading Nerve Center agent..."
 if curl -m 15 -s \
     -H "X-Site-Key: $SITE_KEY" \

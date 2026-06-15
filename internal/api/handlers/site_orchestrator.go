@@ -33,6 +33,7 @@ func GetSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 			DNSSecondary:        "1.1.1.1",
 			Timezone:            "UTC",
 			HostnamePrefix:      "nerve",
+			SecureTunnelEnabled: true,
 			FirewallSynFlood:    true,
 			FirewallDropInvalid: true,
 			DropbearPort:        22,
@@ -53,6 +54,7 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	// DTO: uses json.RawMessage for JSONB blobs so Go does not attempt
 	// base64-decoding (which happens with []byte fields).
 	var dto struct {
+		EnableGlobalSSID     bool            `json:"enable_global_ssid"`
 		GlobalSSID           string          `json:"global_ssid"`
 		GlobalWPAKey         string          `json:"global_wpa_key"`
 		GlobalEncryption     string          `json:"global_encryption"`
@@ -72,6 +74,13 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		DHCPReservations     json.RawMessage `json:"dhcp_reservations"`
 		PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
 		ThreatShieldEnabled  bool            `json:"threat_shield_enabled"`
+			SQMCakeEnabled       bool            `json:"sqm_cake_enabled"`
+		SqmDownload          int             `json:"sqm_download"`
+		SqmUpload            int             `json:"sqm_upload"`
+			DPIEnabled           bool            `json:"dpi_enabled"`
+		SecureTunnelEnabled  bool            `json:"secure_tunnel_enabled"`
+		TailscaleEnabled     bool            `json:"tailscale_enabled"`
+		TailscaleAuthKey     string          `json:"tailscale_auth_key"`
 	}
 	if !readBody(w, r, &dto) {
 		return
@@ -88,7 +97,15 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sc := services.SiteConfig{
+			SQMCakeEnabled:       dto.SQMCakeEnabled,
+			SqmDownload:          dto.SqmDownload,
+			SqmUpload:            dto.SqmUpload,
+			DPIEnabled:           dto.DPIEnabled,
+			SecureTunnelEnabled:  dto.SecureTunnelEnabled,
+			TailscaleEnabled:     dto.TailscaleEnabled,
+			TailscaleAuthKey:     dto.TailscaleAuthKey,
 		SiteID:               siteID,
+			EnableGlobalSSID:     dto.EnableGlobalSSID,
 		GlobalSSID:           dto.GlobalSSID,
 		GlobalWPAKey:         dto.GlobalWPAKey,
 		GlobalEncryption:     dto.GlobalEncryption,

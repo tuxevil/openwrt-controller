@@ -40,6 +40,10 @@ type createWLANRequest struct {
 	RoamingEnabled *bool    `json:"roaming_enabled"`
 	Band           string   `json:"band"`
 	TargetMode     string   `json:"target_mode"`
+	Ieee80211w     string   `json:"ieee80211w"`
+	AuthServer     string   `json:"auth_server"`
+	AuthSecret     string   `json:"auth_secret"`
+	DynamicVlan    string   `json:"dynamic_vlan"`
 	CustomDevices  []string `json:"custom_devices"`
 	Ieee80211k     *bool    `json:"ieee80211k"`
 	Ieee80211v     *bool    `json:"ieee80211v"`
@@ -94,7 +98,8 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 
 	var newID string
 	err := database.Tx(r.Context()).QueryRow(
-		"INSERT INTO wlans (site_id, ssid, security, password, enabled, roaming_enabled, band, target_mode, ieee80211k, ieee80211v) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING id",
+		"INSERT INTO wlans (site_id, ssid, security, password, enabled, roaming_enabled, band, target_mode, ieee80211k, ieee80211v, ieee80211w, auth_server, auth_secret, dynamic_vlan) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id",
+		siteID, req.SSID, req.Security, req.Password, enabled, roamingEnabled, band, targetMode, ieee80211k, ieee80211v, req.Ieee80211w, req.AuthServer, req.AuthSecret, req.DynamicVlan,
 		siteID, req.SSID, req.Security, req.Password, enabled, roamingEnabled, band, targetMode, ieee80211k, ieee80211v,
 	).Scan(&newID)
 
@@ -109,7 +114,7 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	go services.AddWLANConfig(context.Background(), siteID, req.SSID, req.Security, req.Password, roamingEnabled, ieee80211k, ieee80211v)
+	go services.AddWLANConfig(context.Background(), siteID, req.SSID, req.Security, req.Password, roamingEnabled, ieee80211k, ieee80211v, req.Ieee80211w, req.AuthServer, req.AuthSecret, req.DynamicVlan)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

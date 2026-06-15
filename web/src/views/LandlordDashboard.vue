@@ -5,6 +5,7 @@ import api from '../services/api'
 
 const router = useRouter()
 const tenants = ref([])
+const billingData = ref(null)
 const loading = ref(true)
 const error = ref('')
 const showCreateModal = ref(false)
@@ -234,6 +235,21 @@ const formatDate = (d) => {
               <th class="p-4 text-right font-normal">OPERATIONS</th>
             </tr>
           </thead>
+          <button @click="loadBilling" class="mb-4 px-4 py-2 border border-blue-500/30 text-blue-400 hover:bg-blue-900/30 rounded text-xs font-bold tracking-widest">LOAD BILLING USAGE</button>
+
+          <div v-if="billingData" class="mb-6 grid grid-cols-3 gap-4">
+
+             <div v-for="b in billingData" :key="b.schema_alias" class="p-4 border border-blue-500/20 bg-blue-950/10 rounded">
+
+                <p class="text-blue-400 font-bold mb-2">{{ b.tenant_name }}</p>
+
+                <p class="text-sm text-gray-400">Sites: <span class="text-white">{{ b.total_sites }}</span></p>
+
+                <p class="text-sm text-gray-400">Nodes: <span class="text-white">{{ b.total_nodes }}</span></p>
+
+             </div>
+
+          </div>
           <tbody class="text-sm">
             <tr
               v-for="tenant in tenants"
