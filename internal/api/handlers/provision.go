@@ -101,11 +101,24 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		deviceID,
 	)
 
-	rows, err := database.Tx(r.Context()).Query(
-		"SELECT ssid, security, password, band, COALESCE(roaming_enabled, false), COALESCE(ieee80211k, false), COALESCE(ieee80211v, false) FROM "+tenantSchema+".wlans WHERE site_id = $1 AND enabled = true",
-		siteID.String,
-	)
-	if err != nil {
+	var enableGlobalSSID bool = true
+	_ = database.Tx(r.Context()).QueryRow("SELECT COALESCE(enable_global_ssid, true) FROM "+tenantSchema+".site_configs WHERE site_id = $1", siteID.String).Scan(&enableGlobalSSID)
+
+	var rows *sql.Rows
+	var qErr error
+	if enableGlobalSSID {
+		rows, qErr = database.Tx(r.Context()).Query(`
+			SELECT ssid, security, COALESCE(password, ''), band, COALESCE(roaming_enabled, false), COALESCE(ieee80211k, false), COALESCE(ieee80211v, false), COALESCE(ieee80211w, '0'), COALESCE(auth_server, ''), COALESCE(auth_secret, ''), COALESCE(dynamic_vlan, '0')
+			FROM `+tenantSchema+`.wlans WHERE site_id = $1 AND enabled = true
+		`, siteID.String)
+	} else {
+		rows, qErr = database.Tx(r.Context()).Query(`
+			SELECT w.ssid, w.security, COALESCE(w.password, ''), w.band, COALESCE(w.roaming_enabled, false), COALESCE(w.ieee80211k, false), COALESCE(w.ieee80211v, false), COALESCE(w.ieee80211w, '0'), COALESCE(w.auth_server, ''), COALESCE(w.auth_secret, ''), COALESCE(w.dynamic_vlan, '0')
+			FROM `+tenantSchema+`.wlans w JOIN `+tenantSchema+`.device_wlans dw ON w.id = dw.wlan_id
+			WHERE w.site_id = $1 AND dw.device_id = $2 AND w.enabled = true
+		`, siteID.String, deviceID)
+	}
+	if qErr != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
 	}
@@ -132,6 +145,18 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			if v {
 				wlan["ieee80211v"] = "1"
+			}
+			if ieee80211w != "0" && ieee80211w != "" {
+				wlan["ieee80211w"] = ieee80211w
+			}
+			if auth_server != "" {
+				wlan["auth_server"] = auth_server
+			}
+			if auth_secret != "" {
+				wlan["auth_secret"] = auth_secret
+			}
+			if dynamic_vlan != "0" && dynamic_vlan != "" {
+				wlan["dynamic_vlan"] = dynamic_vlan
 			}
 			wlansList = append(wlansList, wlan)
 		}
