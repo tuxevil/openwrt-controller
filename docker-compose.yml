@@ -47,6 +47,29 @@ services:
       - influxdata:/var/lib/influxdb2
     restart: unless-stopped
 
+  freeradius:
+    image: freeradius/freeradius-server:latest-alpine
+    container_name: openwrt_radius
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    command: >
+      sh -c '
+      apk add --no-cache freeradius-postgresql &&
+      ln -sf /etc/raddb/mods-available/sql /etc/raddb/mods-enabled/sql &&
+      sed -i "s/driver = \"rlm_sql_null\"/driver = \"rlm_sql_postgresql\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/dialect = \"sqlite\"/dialect = \"postgresql\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/server = \"localhost\"/server = \"postgres\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/port = 3306/port = 5432/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/login = \"radius\"/login = \"postgres\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/password = \"radpass\"/password = \"postgres\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/radius_db = \"radius\"/radius_db = \"openwrthub\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/read_clients = no/read_clients = yes/g" /etc/raddb/mods-available/sql &&
+      radiusd -f'
+
 volumes:
   pgdata:
   influxdata:
