@@ -25,9 +25,13 @@ type AgentVersion struct {
 // resolveSiteByKey looks up a site by its api_key header value.
 // Returns the site UUID or an empty string if not found.
 func resolveSiteByKey(siteKey string) (string, error) {
+	schema, err := database.GetTenantSchemaForSiteKey(siteKey)
+	if err != nil {
+		return "", err
+	}
 	var siteID string
-	err := database.DB.QueryRow(
-		"SELECT id FROM public.sites WHERE api_key = $1", siteKey,
+	err = database.DB.QueryRow(
+		"SELECT id FROM " + schema + ".sites WHERE api_key = $1", siteKey,
 	).Scan(&siteID)
 	return siteID, err
 }
