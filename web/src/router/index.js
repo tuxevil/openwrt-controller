@@ -173,6 +173,11 @@ const router = createRouter({
       component: () => import('../views/PanopticonView.vue')
     },
     {
+      path: '/global/radius',
+      name: 'global-radius',
+      component: () => import('../views/RadiusMatrix.vue')
+    },
+    {
       path: '/site/:site_id/edge-nexus',
       name: 'site-edge-nexus',
       component: EdgeNexus,

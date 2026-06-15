@@ -611,7 +611,7 @@ async function toggleAutoAdopt() {
 
                       <label class="field-label">RADIUS Server IP</label>
 
-                      <input v-model="wlanForm.auth_server" class="field" placeholder="192.168.1.10" />
+                      <input v-model="wlanForm.auth_server" class="field" placeholder="AUTO (Uses Controller IP)" />
 
                     </div>
 
@@ -969,7 +969,7 @@ async function toggleAutoAdopt() {
                   </div>
                   <div>
                     <label class="field-label">Dest IP</label>
-                    <input v-model="newRule.dest_ip" class="field text-xs" placeholder="192.168.1.10" />
+                    <input v-model="newRule.dest_ip" class="field text-xs" placeholder="AUTO (Uses Controller IP)" />
                   </div>
                   <div>
                     <label class="field-label">Dest Port</label>

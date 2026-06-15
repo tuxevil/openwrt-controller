@@ -142,6 +142,10 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── VPN MESH ORCHESTRATION ─────────────────────────────────────────────
 
+	mux.HandleFunc("GET /api/radius/users", middleware.WithAuth(handlers.GetRadiusUsersHandler))
+	mux.HandleFunc("POST /api/radius/users", middleware.WithAuth(handlers.CreateRadiusUserHandler))
+	mux.HandleFunc("DELETE /api/radius/users", middleware.WithAuth(handlers.DeleteRadiusUserHandler))
+
 	mux.HandleFunc("GET /api/webhooks", middleware.WithAuth(middleware.RequireAdmin(handlers.GetWebhooksHandler)))
 	mux.HandleFunc("POST /api/webhooks", middleware.WithAuth(middleware.RequireAdmin(handlers.CreateWebhookHandler)))
 	mux.HandleFunc("DELETE /api/webhooks/{webhook_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteWebhookHandler)))

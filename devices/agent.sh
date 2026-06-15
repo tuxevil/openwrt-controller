@@ -398,6 +398,7 @@ EOF
                             [ -n "$W_MFP" ] && uci set wireless.$SECTION.ieee80211w="$W_MFP"
 
                             if [ -n "$W_AUTH_SERVER" ] && [ "$W_AUTH_SERVER" != "null" ]; then
+								if [ "$W_AUTH_SERVER" = "AUTO" ]; then W_AUTH_SERVER="$CONTROLLER_IP"; fi
 
                                 uci set wireless.$SECTION.auth_server="$W_AUTH_SERVER"
 
