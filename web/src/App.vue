@@ -41,7 +41,7 @@ const sectorRoutes = {
   CORE_VISIBILITY:    [/^\/site\/[^/]+$/, /topology/, /clients/, /advanced-telemetry/],
   ACTIVE_DEFENSE_SOC: [/threat-shield/, /flow-radar/, /bandwidth/, /incidents/, /diagnostics/],
   RF_TELEMETRY:       [/\/rf$/],
-  SYSTEM_OPS:         [/vault/, /logs/, /site-settings/, /settings/, /central-config/, /orchestrator/],
+  SYSTEM_OPS:         [/vault/, /logs/, /site-settings/, /settings/, /central-config/, /orchestrator/, /migration/],
 }
 
 function detectSector(path) {
