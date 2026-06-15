@@ -21,7 +21,11 @@ func AddWLANConfig(siteID, ssid, security, password string, roaming, k, v bool) 
 	}
 	
 	if v {
-		cmd += "&& uci set wireless.@wifi-iface[-1].ieee80211v='1' "
+		// 802.11v in OpenWrt is BSS Transition + WNM Sleep Mode
+		cmd += "&& uci set wireless.@wifi-iface[-1].bss_transition='1' "
+		cmd += "&& uci set wireless.@wifi-iface[-1].wnm_sleep_mode='1' "
+		cmd += "&& uci set wireless.@wifi-iface[-1].time_advertisement='2' "
+		cmd += "&& uci set wireless.@wifi-iface[-1].time_zone='<-05>5' "
 	}
 
 	cmd += "&& uci commit wireless && /sbin/wifi reload"

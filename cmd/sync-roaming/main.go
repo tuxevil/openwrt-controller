@@ -66,7 +66,7 @@ func main() {
 
 			fmt.Printf("Syncing roaming config from device %s for site %s\n", devID, siteID)
 
-			cmd := "uci show wireless | grep ieee80211"
+			cmd := "uci show wireless"
 			out, err := orchestrator.ExecuteCommandWithOutput(schema, devID, cmd)
 			if err != nil {
 				fmt.Printf("Failed to execute command on device %s: %v. Output: %s\n", devID, err, out)
@@ -101,9 +101,9 @@ func main() {
 						kEnabled[ssid] = true
 					}
 				}
-				if strings.Contains(line, ".ieee80211v='1'") {
+				if strings.Contains(line, ".bss_transition='1'") {
 					parts := strings.Split(line, "=")
-					iface := strings.TrimSuffix(parts[0], ".ieee80211v")
+					iface := strings.TrimSuffix(parts[0], ".bss_transition")
 					if ssid, ok := ifSsidMap[iface]; ok {
 						vEnabled[ssid] = true
 					}
@@ -111,8 +111,18 @@ func main() {
 			}
 
 			for ssid, wid := range wlans {
-				k := kEnabled[ssid]
-				v := vEnabled[ssid]
+				k := false
+				v := false
+				for devSSID, isK := range kEnabled {
+					if strings.Contains(devSSID, ssid) && isK {
+						k = true
+					}
+				}
+				for devSSID, isV := range vEnabled {
+					if strings.Contains(devSSID, ssid) && isV {
+						v = true
+					}
+				}
 				_, err = database.DB.Exec(fmt.Sprintf("UPDATE %s.wlans SET ieee80211k = $1, ieee80211v = $2 WHERE id = $3", schema), k, v, wid)
 				if err != nil {
 					fmt.Printf("Failed to update wlan %s (%s): %v\n", wid, ssid, err)
