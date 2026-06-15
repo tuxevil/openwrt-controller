@@ -111,6 +111,12 @@ const router = createRouter({
       props: true
     },
     {
+      path: '/site/:site_id/diagnostics',
+      name: 'site-diagnostics',
+      component: () => import('../views/Diagnostics.vue'),
+      props: true
+    },
+    {
       path: '/site/:site_id/advanced-telemetry',
       name: 'site-advanced-telemetry',
       component: AdvancedTelemetry,
