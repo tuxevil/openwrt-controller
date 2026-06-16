@@ -39,7 +39,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	providedKey := r.Header.Get("X-Site-Key")
-	
+
 	log.Printf("[DEBUG] Telemetry received from device_id=%s, IP=%s, X-Site-Key=%s", deviceID, r.RemoteAddr, providedKey)
 
 	if providedKey == "" {
@@ -92,7 +92,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			modelStr = model
 		}
 	}
-	
+
 	agentVersion := ""
 	if v, ok := raw["agent_version"].(string); ok {
 		agentVersion = v
@@ -158,7 +158,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	
+
 	if clientCount > 0 {
 		metrics.SignalDBM = totalSignal / float64(clientCount)
 	} else {
@@ -198,10 +198,10 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			// We try several common formats. The reference time fields MUST match
 			// Go's magic reference (Mon=Mon Jan=Jan 2=2 15=15 04=04 05=05 2006=2006).
 			syslogFormats := []string{
-				"Mon Jan _2 15:04:05 2006", // OpenWrt default with year
-				"Mon Jan  2 15:04:05 2006", // double-space variant
-				"Jan _2 15:04:05",          // RFC3164 without year
-				"Jan  2 15:04:05",          // RFC3164 double-space
+				"Mon Jan _2 15:04:05 2006",  // OpenWrt default with year
+				"Mon Jan  2 15:04:05 2006",  // double-space variant
+				"Jan _2 15:04:05",           // RFC3164 without year
+				"Jan  2 15:04:05",           // RFC3164 double-space
 				"2006-01-02T15:04:05Z07:00", // ISO-8601
 				"2006-01-02 15:04:05",       // SQL-ish
 			}
@@ -252,7 +252,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			if len(enriched) == 0 {
 				return
 			}
-			
+
 			// Extract flow analytics for dashboard matrix
 			var analytics []database.FlowAnalytic
 			for _, e := range enriched {

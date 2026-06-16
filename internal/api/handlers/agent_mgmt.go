@@ -12,8 +12,6 @@ import (
 	"openwrt-controller/internal/database"
 )
 
-
-
 type AgentVersion struct {
 	ID            string    `json:"id"`
 	VersionHash   string    `json:"version_hash"`
@@ -31,7 +29,7 @@ func resolveSiteByKey(siteKey string) (string, error) {
 	}
 	var siteID string
 	err = database.DB.QueryRow(
-		"SELECT id FROM " + schema + ".sites WHERE api_key = $1", siteKey,
+		"SELECT id FROM "+schema+".sites WHERE api_key = $1", siteKey,
 	).Scan(&siteID)
 	return siteID, err
 }
@@ -231,7 +229,7 @@ func GetAgentVersionsStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Per-site active hashes
 	siteHashRows, err := database.DB.Query(`
 		SELECT site_id, version_hash 
-		FROM `+schema+`.agent_versions 
+		FROM ` + schema + `.agent_versions 
 		WHERE is_active = true
 	`)
 	if err != nil {
@@ -251,8 +249,8 @@ func GetAgentVersionsStatusHandler(w http.ResponseWriter, r *http.Request) {
 	// Device list with their current agent version
 	rows, err := database.DB.Query(`
 		SELECT d.id, d.name, s.id, s.name, d.agent_version, d.last_seen_at 
-		FROM `+schema+`.devices d
-		LEFT JOIN `+schema+`.sites s ON d.site_id = s.id
+		FROM ` + schema + `.devices d
+		LEFT JOIN ` + schema + `.sites s ON d.site_id = s.id
 	`)
 	if err != nil {
 		http.Error(w, "Database error", http.StatusInternalServerError)
@@ -327,4 +325,3 @@ func GetSiteAgentRawHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte(scriptContent))
 }
-

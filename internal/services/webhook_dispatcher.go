@@ -56,7 +56,7 @@ func DispatchWebhook(schema string, event string, payload interface{}) {
 			Payload:   payload,
 			Timestamp: time.Now(),
 		}
-		
+
 		bodyBytes, _ := json.Marshal(whEvent)
 
 		req, err := http.NewRequestWithContext(context.Background(), "POST", url, bytes.NewBuffer(bodyBytes))
@@ -65,7 +65,7 @@ func DispatchWebhook(schema string, event string, payload interface{}) {
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		
+
 		if secret != "" {
 			h := hmac.New(sha256.New, []byte(secret))
 			h.Write(bodyBytes)

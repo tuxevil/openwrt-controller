@@ -7,9 +7,10 @@ import (
 	"os"
 	"time"
 
+	"openwrt-controller/internal/models"
+
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
 	"github.com/influxdata/influxdb-client-go/v2/api"
-	"openwrt-controller/internal/models"
 )
 
 var (
@@ -36,7 +37,7 @@ func InitInflux() error {
 	}
 
 	InfluxClient = influxdb2.NewClient(url, token)
-	
+
 	// Check connection with timeout to prevent blocking startup
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -129,7 +130,7 @@ func GetSiteHistory(deviceIDs []string, metric string) ([]TimeValuePair, error) 
 		fieldFilter = `r["_field"] == "signal_dbm"`
 		fn = "mean"
 	case "traffic":
-		// Traffic is sum of rx and tx, but since we need a single metric or sum, let's just chart sum of RX for now 
+		// Traffic is sum of rx and tx, but since we need a single metric or sum, let's just chart sum of RX for now
 		// or chart both. The prompt asked for: "El acumulado de Mbps (TX/RX) por interfaz".
 		// We'll chart rx sum for simplicity, or we can write a more complex flux. Let's just track tx_mbps + rx_mbps or just rx
 		fieldFilter = `(r["_field"] == "rx_mbps" or r["_field"] == "tx_mbps")`
@@ -151,7 +152,7 @@ func GetSiteHistory(deviceIDs []string, metric string) ([]TimeValuePair, error) 
 	}
 
 	queryAPI := InfluxClient.QueryAPI(org)
-	
+
 	var query string
 	if metric == "traffic" {
 		query = fmt.Sprintf(`
@@ -230,7 +231,7 @@ func WriteFlowAnalyticsBatch(deviceID string, flows []FlowAnalytic) error {
 			AddTag("dport", fmt.Sprintf("%d", f.Port)).
 			AddField("conns", f.Conns).
 			SetTime(now)
-		
+
 		err := WriteAPI.WritePoint(context.Background(), p)
 		if err != nil {
 			return err

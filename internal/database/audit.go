@@ -45,7 +45,7 @@ func GetAuditLogs(limit, offset int) ([]AuditLog, error) {
 		if err := rows.Scan(&l.ID, &l.Username, &l.Action, &l.ResourceType, &l.ResourceID, &l.Payload, &l.IPAddr, &l.CreatedAt); err != nil {
 			return nil, err
 		}
-		
+
 		// Remove null characters that might break JSON serialization
 		l.Payload = strings.ReplaceAll(l.Payload, "\x00", "")
 

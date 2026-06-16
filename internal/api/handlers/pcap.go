@@ -55,7 +55,7 @@ func CapturePacketHandler(w http.ResponseWriter, r *http.Request) {
 	// The output might contain some bash warnings or newlines. Base64 ignores newlines usually,
 	// but we should trim.
 	b64str := strings.TrimSpace(out)
-	
+
 	pcapData, err := base64.StdEncoding.DecodeString(b64str)
 	if err != nil {
 		http.Error(w, "Failed to decode pcap file from device", http.StatusInternalServerError)

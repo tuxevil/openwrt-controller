@@ -10,10 +10,10 @@ import (
 
 func GetDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
-	
+
 	query := `SELECT id, site_id, name, model, status, last_seen_at FROM devices LIMIT 1000`
 	args := []interface{}{}
-	
+
 	if statusFilter == "pending" {
 		query = `SELECT id, site_id, name, model, status, last_seen_at FROM devices WHERE site_id IS NULL LIMIT 1000`
 	}

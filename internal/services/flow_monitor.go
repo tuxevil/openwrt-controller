@@ -48,14 +48,14 @@ func ProcessFlowSense(deviceID string, rawFlows []interface{}, controllerIP stri
 
 	// Build whitelist: controller IP + common internal DNS/NTP
 	whitelist := map[string]bool{
-		controllerIP: true,
-		"8.8.8.8":    true,
-		"8.8.4.4":    true,
-		"1.1.1.1":    true,
-		"1.0.0.1":    true,
-		"9.9.9.9":    true,
+		controllerIP:     true,
+		"8.8.8.8":        true,
+		"8.8.4.4":        true,
+		"1.1.1.1":        true,
+		"1.0.0.1":        true,
+		"9.9.9.9":        true,
 		"208.67.222.222": true,
-		"127.0.0.1":  true,
+		"127.0.0.1":      true,
 	}
 
 	// Also whitelist the 10.8.0.x WireGuard range (internal)

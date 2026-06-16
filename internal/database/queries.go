@@ -42,13 +42,13 @@ func GetGlobalContext(schema string, targetTimestamp time.Time, limit int) strin
 			lines = append(lines, fmt.Sprintf("[%s] | [%s] | %s", name, ts.Format(time.RFC3339), msg))
 		}
 	}
-	
+
 	// Reverse to make it chronological
 	for i, j := 0, len(lines)-1; i < j; i, j = i+1, j-1 {
 		lines[i], lines[j] = lines[j], lines[i]
 	}
 
-	// The prompt requests recent logs from EVERY device, but practically 
+	// The prompt requests recent logs from EVERY device, but practically
 	// we just return a unified feed up to the specified limit.
 	return strings.Join(lines, "\n")
 }
@@ -94,4 +94,3 @@ func GetRecentContext(schema string, limit int) string {
 
 	return strings.Join(lines, "\n")
 }
-

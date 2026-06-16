@@ -12,9 +12,9 @@ import (
 var knownBadPorts = map[int]bool{
 	6881: true, 6889: true, // BitTorrent
 	4662: true, 4672: true, // eMule
-	51413: true,            // Transmission
-	1194:  true,            // Generic VPN tunnel (unlicensed)
-	9001: true, 9030: true, // Tor relay/dir
+	51413: true,             // Transmission
+	1194:  true,             // Generic VPN tunnel (unlicensed)
+	9001:  true, 9030: true, // Tor relay/dir
 	4444: true, 31337: true, 8888: true, // C2 / metasploit
 }
 var standardPorts = map[int]bool{

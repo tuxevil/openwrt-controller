@@ -76,12 +76,12 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 	if req.RoamingEnabled != nil {
 		roamingEnabled = *req.RoamingEnabled
 	}
-	
+
 	ieee80211k := false
 	if req.Ieee80211k != nil {
 		ieee80211k = *req.Ieee80211k
 	}
-	
+
 	ieee80211v := false
 	if req.Ieee80211v != nil {
 		ieee80211v = *req.Ieee80211v
@@ -216,12 +216,12 @@ func UpdateWLANHandler(w http.ResponseWriter, r *http.Request) {
 	if req.RoamingEnabled != nil {
 		roamingEnabled = *req.RoamingEnabled
 	}
-	
+
 	ieee80211k := false
 	if req.Ieee80211k != nil {
 		ieee80211k = *req.Ieee80211k
 	}
-	
+
 	ieee80211v := false
 	if req.Ieee80211v != nil {
 		ieee80211v = *req.Ieee80211v
@@ -264,7 +264,7 @@ func UpdateWLANHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":  "updated",
-		"error": nil,
+		"status": "updated",
+		"error":  nil,
 	})
 }

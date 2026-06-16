@@ -11,7 +11,7 @@ import (
 
 func GetSiteSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
-	
+
 	var settings models.SiteSettings
 	err := database.Tx(r.Context()).QueryRow("SELECT site_id, dns_servers, dhcp_server, updated_at FROM site_settings WHERE site_id = $1", siteID).Scan(
 		&settings.SiteID, &settings.DNSServers, &settings.DHCPServer, &settings.UpdatedAt,

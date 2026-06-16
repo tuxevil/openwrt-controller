@@ -12,14 +12,14 @@ import (
 
 // AggregatedClient is the unified client record after joining all data sources
 type AggregatedClient struct {
-	MAC            string  `json:"mac"`
-	Hostname       string  `json:"hostname"`
-	IPAddress      string  `json:"ip_address"`
-	UplinkDevice   string  `json:"uplink"`
-	UplinkName     string  `json:"uplink_name"`
-	SSID           string  `json:"ssid"`
-	Signal         float64 `json:"signal"`
-	Noise          float64 `json:"noise"`
+	MAC                string  `json:"mac"`
+	Hostname           string  `json:"hostname"`
+	IPAddress          string  `json:"ip_address"`
+	UplinkDevice       string  `json:"uplink"`
+	UplinkName         string  `json:"uplink_name"`
+	SSID               string  `json:"ssid"`
+	Signal             float64 `json:"signal"`
+	Noise              float64 `json:"noise"`
 	TXRate             float64 `json:"tx_rate"`
 	RXRate             float64 `json:"rx_rate"`
 	TxMCS              float64 `json:"tx_mcs"`
@@ -111,11 +111,11 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 						}
 						// rx_rate and tx_rate come as strings e.g. "65.0"
 						clientMap[mac] = &AggregatedClient{
-							MAC:            mac,
-							UplinkDevice:   devID,
-							UplinkName:     nodeName,
-							SSID:           ifaceName,
-							Signal:         floatVal(st, "signal"),
+							MAC:                mac,
+							UplinkDevice:       devID,
+							UplinkName:         nodeName,
+							SSID:               ifaceName,
+							Signal:             floatVal(st, "signal"),
 							Noise:              floatVal(st, "noise"),
 							TXRate:             anyToFloat(st["tx_rate"]),
 							RXRate:             anyToFloat(st["rx_rate"]),

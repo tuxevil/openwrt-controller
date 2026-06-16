@@ -34,7 +34,6 @@ type User struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-
 func GetUsersHandler(w http.ResponseWriter, r *http.Request) {
 	rows, err := database.Tx(r.Context()).Query("SELECT id, username, role, created_at FROM users ORDER BY created_at ASC LIMIT 1000")
 	if err != nil {

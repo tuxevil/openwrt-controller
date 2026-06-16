@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"net/http"
-	
+	"openwrt-controller/internal/api/middleware"
+
 	"openwrt-controller/internal/services"
 )
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
@@ -29,7 +28,6 @@ func CreateBackup(ctx context.Context, schema, deviceID string) error {
 	// SSH soporta binario nativo — no necesitamos base64.
 	// /sbin/sysupgrade --create-backup - escribe tar.gz a stdout.
 	cmd := "/sbin/sysupgrade --create-backup -"
-
 
 	// Obtenemos la llave asimétrica para auth
 	signer, err := orchestrator.GetKeyStore().Get()
@@ -77,26 +75,6 @@ func CreateBackup(ctx context.Context, schema, deviceID string) error {
 
 	log.Printf("[VAULT] Backup completed for %s. Checksum: %s", deviceID, checksum[:8])
 	return err
-}
-
-func loadControllerPrivateKey() ([]byte, error) {
-	// Deprecated — the canonical key loader is orchestrator.LoadKeyStore.
-	// Kept as a thin shim for any external caller that still imports it.
-	ks := orchestrator.GetKeyStore()
-	if ks == nil {
-		return nil, fmt.Errorf("controller SSH key not loaded")
-	}
-	signer, err := ks.Get()
-	if err != nil {
-		return nil, err
-	}
-	// MarshalPrivateKey returns a *pem.Block; encode it to PEM bytes for
-	// backwards compatibility with the previous byte-slice signature.
-	pemBlock, err := ssh.MarshalPrivateKey(signer, "")
-	if err != nil {
-		return nil, fmt.Errorf("marshal private key: %w", err)
-	}
-	return pem.EncodeToMemory(pemBlock), nil
 }
 
 var _ = ssh.AuthMethod(nil) // keep ssh import in use while migrating

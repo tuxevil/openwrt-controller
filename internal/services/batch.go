@@ -1,8 +1,8 @@
 package services
 
 import (
-	"context"
 	"bytes"
+	"context"
 	"fmt"
 	"log"
 	"strings"
@@ -126,4 +126,3 @@ func runSSHCommand(deviceID, ip, command string, signer ssh.Signer) DeviceResult
 // The old `knownHostsPath` / `knownHostsMu` globals were removed: the
 // canonical TOFU + known_hosts store now lives in
 // orchestrator.HostKeyManager (see internal/orchestrator/hostkey.go).
-

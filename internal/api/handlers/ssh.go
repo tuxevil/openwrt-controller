@@ -62,8 +62,8 @@ func checkWSOrigin(r *http.Request) bool {
 // orchestrator.GetKeyStore(); the package-level aliases are populated by
 // RefreshSSHKeys() which is called from main on startup.
 var (
-	PrivateKey        ssh.Signer
-	PublicKey         string
+	PrivateKey         ssh.Signer
+	PublicKey          string
 	refreshSSHKeysOnce sync.Once
 )
 

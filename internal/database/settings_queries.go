@@ -15,7 +15,7 @@ func GetPlatformSettings() PlatformSettings {
 		SELECT ollama_host, ollama_model, sentinel_prompt, telegram_bot_token, telegram_chat_id
 		FROM platform_settings WHERE id = 1
 	`).Scan(&s.OllamaHost, &s.OllamaModel, &s.SentinelPrompt, &s.TelegramBotToken, &s.TelegramChatID)
-	
+
 	if err != nil {
 		// Provide basic defaults if the DB somehow fails
 		s.OllamaHost = "127.0.0.1:11434"

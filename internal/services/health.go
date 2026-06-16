@@ -47,7 +47,11 @@ func GetGlobalHealth(ctx context.Context) int {
 	}
 
 	final := int(health)
-	if final > 100 { final = 100 }
-	if final < 0 { final = 0 }
+	if final > 100 {
+		final = 100
+	}
+	if final < 0 {
+		final = 0
+	}
 	return final
 }

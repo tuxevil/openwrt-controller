@@ -23,7 +23,7 @@ func GetRadiusUsersHandler(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN public.radreply r ON c.username = r.username AND c.site_id = r.site_id AND r.attribute = 'Tunnel-Private-Group-Id'
 		WHERE c.tenant_id = $1 AND c.attribute = 'Cleartext-Password'
 	`, tenantID)
-	
+
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return
@@ -41,7 +41,7 @@ func GetRadiusUsersHandler(w http.ResponseWriter, r *http.Request) {
 			users = append(users, u)
 		}
 	}
-	
+
 	if users == nil {
 		users = make([]RadiusUser, 0)
 	}
@@ -52,7 +52,7 @@ func GetRadiusUsersHandler(w http.ResponseWriter, r *http.Request) {
 
 func CreateRadiusUserHandler(w http.ResponseWriter, r *http.Request) {
 	tenantID := r.Context().Value("tenant_id").(string)
-	
+
 	var req RadiusUser
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)

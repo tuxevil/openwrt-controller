@@ -157,9 +157,9 @@ func MassCommandHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"action":    body.Action,
+		"action":     body.Action,
 		"elapsed_ms": elapsed,
-		"results":   results,
+		"results":    results,
 	})
 }
 

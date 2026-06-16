@@ -10,12 +10,12 @@ import (
 )
 
 type EchoNode struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`      // 'gateway', 'ap', or 'client'
-	HasAlert  bool   `json:"has_alert"`
-	Hostname  string `json:"hostname,omitempty"`
-	CPULoad   string `json:"cpu_load,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"` // 'gateway', 'ap', or 'client'
+	HasAlert bool   `json:"has_alert"`
+	Hostname string `json:"hostname,omitempty"`
+	CPULoad  string `json:"cpu_load,omitempty"`
 }
 
 type EchoEdge struct {
@@ -111,14 +111,14 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 
 	for _, dev := range allDevices {
 		devMAC := dev["_id"].(string)
-		
+
 		hostname := devMAC
 		if board, ok := dev["board"].(map[string]interface{}); ok {
 			if h, ok := board["hostname"].(string); ok {
 				hostname = h
 			}
 		}
-		
+
 		cpuLoad := "N/A"
 		if sys, ok := dev["system"].(map[string]interface{}); ok {
 			if loadStr, ok := sys["load"].([]interface{}); ok && len(loadStr) > 0 {
@@ -189,8 +189,8 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 									}
 								}
 								graph.Links = append(graph.Links, EchoEdge{
-									Source: devMAC, 
-									Target: clientMAC,      
+									Source: devMAC,
+									Target: clientMAC,
 									Type:   "wireless",
 								})
 							}

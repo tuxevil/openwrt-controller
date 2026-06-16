@@ -213,7 +213,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 			wgPubKey = sql.NullString{String: pub, Valid: true}
 		}
 	}
-	
+
 	if !wgIP.Valid || wgIP.String == "" {
 		ip, err := services.AssignInternalIP(tenantSchema, deviceID)
 		if err == nil {

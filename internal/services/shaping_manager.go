@@ -56,7 +56,7 @@ func ApplySniperShaping(schema, deviceID, mac string, rateMbytes int, durationMi
 	// nft add chain inet sentinel_shaping forward { type filter hook forward priority 0; }
 	// The prompt specified limiting rx and tx identically via the forward chain.
 	// Since we need to replace or add, we'll flush the specific rule if it exists? We can handle it via handles or just simple filter.
-	// nftables allows naming sets or doing inline drops. We can do: 
+	// nftables allows naming sets or doing inline drops. We can do:
 	cmd := fmt.Sprintf(`
 		# Ensure the table and chain exist
 		nft list table inet sentinel_shaping >/dev/null 2>&1 || {

@@ -18,8 +18,8 @@ func GetPortalAuthHandler(w http.ResponseWriter, r *http.Request) {
 	// OpenNDS fas format usually contains: clientip, clientmac, gatewaymac, etc.
 	// We can find the site_id by looking up the gatewaymac in devices table.
 	// But let's assume the router hits /portal/auth/{site_id} or just /portal/auth
-	
-	// Since OpenNDS doesn't know the site_id unless we pass it in faspath, 
+
+	// Since OpenNDS doesn't know the site_id unless we pass it in faspath,
 	// we should expect the route to be: /api/public/portal/{site_id}/auth
 
 	siteID := r.PathValue("site_id")
@@ -92,7 +92,7 @@ func ValidatePortalHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Unpack FAS (AES encrypted by OpenNDS usually, or clear text if fas_secure_enabled=0)
-	// For this test, assume opennds sends cleartext fas or base64. 
+	// For this test, assume opennds sends cleartext fas or base64.
 	// Due to complexity of FAS AES, many setups use fas_secure_enabled=0 and fas string is base64 of "clientip,clientmac,gatewaymac,tok"
 	// For simplicity, we just authorize by returning an HTTP redirect back to gatewayip:2050/opennds_auth/?tok=...
 
@@ -109,17 +109,16 @@ func ValidatePortalHandler(w http.ResponseWriter, r *http.Request) {
 
 	// MOCK FAS parsing: normally we read gateway IP from FAS string.
 	// For now, OpenNDS expects: http://<gatewayip>:<gatewayport>/opennds_auth/?tok=<tok>
-	// Since we don't have gateway IP without fully parsing FAS, we can just return a success page 
+	// Since we don't have gateway IP without fully parsing FAS, we can just return a success page
 	// instructing to go back, or if opennds supports it, we redirect perfectly.
 	// We will simply mark voucher as used.
 	services.MarkVoucherUsed(code, "unknown-fas-mac")
 
-	// Usually FAS decrypts to get the true 'tok'. 
+	// Usually FAS decrypts to get the true 'tok'.
 	// We'll just print Auth Success for now.
 
 	w.Write([]byte("AUTH SUCCESS. You are now connected to the network."))
 }
-
 
 // ─── ADMIN ENDPOINTS ────────────────────────────────────────────────────────
 
@@ -165,7 +164,7 @@ func GetPortalVouchersHandler(w http.ResponseWriter, r *http.Request) {
 
 func GeneratePortalVouchersHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
-	
+
 	type req struct {
 		Count    int `json:"count"`
 		Duration int `json:"duration_minutes"`

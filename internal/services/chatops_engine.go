@@ -97,7 +97,7 @@ func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 
 	content := strings.TrimSpace(result.Message.Content)
 	var intent ChatOpsIntent
-	
+
 	// Fallback cleanly if LLM hallucinated markdown code blocks
 	content = strings.TrimPrefix(content, "```json")
 	content = strings.TrimSuffix(content, "```")
@@ -117,12 +117,12 @@ func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 		Summary: intent.Summary,
 	}
 
-	// Safely map intent to existing database/service routines 
+	// Safely map intent to existing database/service routines
 	switch intent.Intent {
 	case "GET_DEVICE_STATUS":
 		q := "SELECT id, name, model, status, last_seen_at FROM devices"
 		args := []interface{}{}
-		
+
 		target := strings.ToLower(intent.TargetDevice)
 		if target != "" && target != "all" && target != "todos" && target != "none" {
 			q += " WHERE id = $1 OR name ILIKE $2"
@@ -130,7 +130,7 @@ func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 		} else {
 			q += " ORDER BY last_seen_at DESC LIMIT 20"
 		}
-		
+
 		rows, err := database.DB.Query(q, args...)
 		if err != nil {
 			return nil, fmt.Errorf("database err: %w", err)

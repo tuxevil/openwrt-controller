@@ -10,12 +10,12 @@ import (
 )
 
 type GraphNode struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Type      string `json:"type"`      // 'router' or 'client'
-	HasAlert  bool   `json:"has_alert"` // From The Signal incidents
-	Hostname  string `json:"hostname,omitempty"`
-	CPULoad   string `json:"cpu_load,omitempty"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Type     string `json:"type"`      // 'router' or 'client'
+	HasAlert bool   `json:"has_alert"` // From The Signal incidents
+	Hostname string `json:"hostname,omitempty"`
+	CPULoad  string `json:"cpu_load,omitempty"`
 }
 
 type GraphEdge struct {
@@ -116,14 +116,14 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 	// 3. Process each router
 	for _, dev := range allDevices {
 		devMAC := dev["_id"].(string)
-		
+
 		hostname := devMAC
 		if board, ok := dev["board"].(map[string]interface{}); ok {
 			if h, ok := board["hostname"].(string); ok {
 				hostname = h
 			}
 		}
-		
+
 		cpuLoad := "N/A"
 		if sys, ok := dev["system"].(map[string]interface{}); ok {
 			if loadStr, ok := sys["load"].([]interface{}); ok && len(loadStr) > 0 {
@@ -182,14 +182,14 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 										ID:       clientMAC,
 										Name:     clientName,
 										Type:     "client",
-										HasAlert: false, 
+										HasAlert: false,
 									}
 								}
 								edgeID := fmt.Sprintf("edge%d", edgeCounter)
 								edgeCounter++
 								graph.Edges[edgeID] = GraphEdge{
-									Source: devMAC, 
-									Target: clientMAC,      
+									Source: devMAC,
+									Target: clientMAC,
 									Type:   "wireless",
 								}
 							}

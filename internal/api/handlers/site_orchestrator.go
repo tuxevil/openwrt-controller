@@ -22,21 +22,21 @@ func GetSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		// No config yet — return defaults
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(services.SiteConfig{
-			SiteID:              siteID,
-			GlobalEncryption:    "psk2",
-			LanIPAddr:           "192.168.1.1",
-			LanNetmask:          "255.255.255.0",
-			DHCPStart:           100,
-			DHCPLimit:           150,
-			DHCPLeasetime:       "12h",
-			DNSPrimary:          "9.9.9.9",
-			DNSSecondary:        "1.1.1.1",
-			Timezone:            "UTC",
-			HostnamePrefix:      "nerve",
-			SecureTunnelEnabled: true,
-			FirewallSynFlood:    true,
-			FirewallDropInvalid: true,
-			DropbearPort:        22,
+			SiteID:               siteID,
+			GlobalEncryption:     "psk2",
+			LanIPAddr:            "192.168.1.1",
+			LanNetmask:           "255.255.255.0",
+			DHCPStart:            100,
+			DHCPLimit:            150,
+			DHCPLeasetime:        "12h",
+			DNSPrimary:           "9.9.9.9",
+			DNSSecondary:         "1.1.1.1",
+			Timezone:             "UTC",
+			HostnamePrefix:       "nerve",
+			SecureTunnelEnabled:  true,
+			FirewallSynFlood:     true,
+			FirewallDropInvalid:  true,
+			DropbearPort:         22,
 			DropbearPasswordAuth: true,
 		})
 		return
@@ -74,10 +74,10 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		DHCPReservations     json.RawMessage `json:"dhcp_reservations"`
 		PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
 		ThreatShieldEnabled  bool            `json:"threat_shield_enabled"`
-			SQMCakeEnabled       bool            `json:"sqm_cake_enabled"`
+		SQMCakeEnabled       bool            `json:"sqm_cake_enabled"`
 		SqmDownload          int             `json:"sqm_download"`
 		SqmUpload            int             `json:"sqm_upload"`
-			DPIEnabled           bool            `json:"dpi_enabled"`
+		DPIEnabled           bool            `json:"dpi_enabled"`
 		SecureTunnelEnabled  bool            `json:"secure_tunnel_enabled"`
 		TailscaleEnabled     bool            `json:"tailscale_enabled"`
 		TailscaleAuthKey     string          `json:"tailscale_auth_key"`
@@ -97,15 +97,15 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sc := services.SiteConfig{
-			SQMCakeEnabled:       dto.SQMCakeEnabled,
-			SqmDownload:          dto.SqmDownload,
-			SqmUpload:            dto.SqmUpload,
-			DPIEnabled:           dto.DPIEnabled,
-			SecureTunnelEnabled:  dto.SecureTunnelEnabled,
-			TailscaleEnabled:     dto.TailscaleEnabled,
-			TailscaleAuthKey:     dto.TailscaleAuthKey,
+		SQMCakeEnabled:       dto.SQMCakeEnabled,
+		SqmDownload:          dto.SqmDownload,
+		SqmUpload:            dto.SqmUpload,
+		DPIEnabled:           dto.DPIEnabled,
+		SecureTunnelEnabled:  dto.SecureTunnelEnabled,
+		TailscaleEnabled:     dto.TailscaleEnabled,
+		TailscaleAuthKey:     dto.TailscaleAuthKey,
 		SiteID:               siteID,
-			EnableGlobalSSID:     dto.EnableGlobalSSID,
+		EnableGlobalSSID:     dto.EnableGlobalSSID,
 		GlobalSSID:           dto.GlobalSSID,
 		GlobalWPAKey:         dto.GlobalWPAKey,
 		GlobalEncryption:     dto.GlobalEncryption,
@@ -140,7 +140,6 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 }
-
 
 // GetSiteDeviceRolesHandler returns devices with their assigned roles.
 func GetSiteDeviceRolesHandler(w http.ResponseWriter, r *http.Request) {
@@ -235,9 +234,9 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"site_id":  siteID,
-		"devices":  previews,
-		"total":    len(previews),
+		"site_id": siteID,
+		"devices": previews,
+		"total":   len(previews),
 	})
 }
 

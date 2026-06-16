@@ -26,7 +26,7 @@ func GetWebhooksHandler(w http.ResponseWriter, r *http.Request) {
 			webhooks = append(webhooks, wh)
 		}
 	}
-	
+
 	if webhooks == nil {
 		webhooks = make([]models.Webhook, 0)
 	}

@@ -54,18 +54,18 @@ type DeviceMetrics struct {
 }
 
 type WLAN struct {
-	ID        string    `json:"id"`
-	SiteID    string    `json:"site_id"`
-	SSID      string    `json:"ssid"`
-	Security  string    `json:"security"`
-	Password  string    `json:"password"`
-	Enabled   bool      `json:"enabled"`
+	ID          string    `json:"id"`
+	SiteID      string    `json:"site_id"`
+	SSID        string    `json:"ssid"`
+	Security    string    `json:"security"`
+	Password    string    `json:"password"`
+	Enabled     bool      `json:"enabled"`
 	Ieee80211w  string    `json:"ieee80211w"`
 	AuthServer  string    `json:"auth_server"`
 	AuthSecret  string    `json:"auth_secret"`
 	DynamicVlan string    `json:"dynamic_vlan"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type TopTalker struct {

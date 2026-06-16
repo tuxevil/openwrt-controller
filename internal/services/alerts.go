@@ -141,10 +141,10 @@ func OpenIncident(schema, incidentType, deviceID, siteID, severity string) {
 	notifyTelegram(msg)
 
 	go DispatchWebhook(schema, "incident_created", map[string]interface{}{
-		"device_id": deviceID,
-		"site_id": siteID,
+		"device_id":     deviceID,
+		"site_id":       siteID,
 		"incident_type": incidentType,
-		"severity": severity,
+		"severity":      severity,
 	})
 }
 
@@ -169,8 +169,8 @@ func notifyTelegram(message string) {
 
 	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
 	payload := map[string]interface{}{
-		"chat_id": chatID,
-		"text":    "🤖 *[MATRIX_CONTROLLER]*\n" + message,
+		"chat_id":    chatID,
+		"text":       "🤖 *[MATRIX_CONTROLLER]*\n" + message,
 		"parse_mode": "Markdown",
 	}
 	body, _ := json.Marshal(payload)

@@ -10,13 +10,13 @@ import (
 
 // NetworkInterface represents a single UCI network interface entry.
 type NetworkInterface struct {
-	Name    string `json:"name"`     // e.g. "lan", "wan", "vlan10"
-	VlanID  int    `json:"vlan_id"`  // 0 = not a VLAN
-	Proto   string `json:"proto"`    // "static" | "dhcp" | "dhcpv6" | "wireguard"
-	IPAddr  string `json:"ip_addr"`  // for static
-	Netmask string `json:"netmask"`  // for static
-	Gateway string `json:"gateway"`  // for static WAN
-	Device  string `json:"device"`   // underlying physical device / bridge
+	Name    string `json:"name"`    // e.g. "lan", "wan", "vlan10"
+	VlanID  int    `json:"vlan_id"` // 0 = not a VLAN
+	Proto   string `json:"proto"`   // "static" | "dhcp" | "dhcpv6" | "wireguard"
+	IPAddr  string `json:"ip_addr"` // for static
+	Netmask string `json:"netmask"` // for static
+	Gateway string `json:"gateway"` // for static WAN
+	Device  string `json:"device"`  // underlying physical device / bridge
 	Enabled bool   `json:"enabled"`
 }
 
@@ -29,21 +29,21 @@ type StaticLease struct {
 
 // DHCPInterface is the DHCP/DNS configuration for one interface.
 type DHCPInterface struct {
-	Interface  string        `json:"interface"`   // UCI interface name, e.g. "lan"
-	Enabled    bool          `json:"enabled"`     // DHCP ignore = false
-	Start      int           `json:"start"`       // .100
-	Limit      int           `json:"limit"`       // 150
-	LeaseTime  string        `json:"lease_time"`  // "12h"
-	UpstreamDNS []string     `json:"upstream_dns"` // e.g. ["192.168.1.53"]
+	Interface    string        `json:"interface"`    // UCI interface name, e.g. "lan"
+	Enabled      bool          `json:"enabled"`      // DHCP ignore = false
+	Start        int           `json:"start"`        // .100
+	Limit        int           `json:"limit"`        // 150
+	LeaseTime    string        `json:"lease_time"`   // "12h"
+	UpstreamDNS  []string      `json:"upstream_dns"` // e.g. ["192.168.1.53"]
 	StaticLeases []StaticLease `json:"static_leases"`
 }
 
 // PortForwardRule is a single DNAT rule in /etc/config/firewall.
 type PortForwardRule struct {
 	Name     string `json:"name"`
-	Proto    string `json:"proto"`    // "tcp" | "udp" | "tcp udp"
-	SrcPort  int    `json:"src_port"` // external / WAN port (0 = any)
-	DestIP   string `json:"dest_ip"`  // internal host IP
+	Proto    string `json:"proto"`     // "tcp" | "udp" | "tcp udp"
+	SrcPort  int    `json:"src_port"`  // external / WAN port (0 = any)
+	DestIP   string `json:"dest_ip"`   // internal host IP
 	DestPort int    `json:"dest_port"` // internal port
 	Enabled  bool   `json:"enabled"`
 }

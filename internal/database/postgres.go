@@ -5,12 +5,12 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
-	"time"
 	"fmt"
 	"log"
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"golang.org/x/crypto/bcrypt"

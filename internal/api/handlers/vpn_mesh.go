@@ -31,7 +31,7 @@ func CreateVPNMeshHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	
+
 	if mesh.Topology == "" {
 		mesh.Topology = "hub_and_spoke"
 	}

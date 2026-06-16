@@ -35,7 +35,7 @@ func ParseOmadaExport(data []byte) ([]StaticLease, []PortForwardRule, error) {
 	var dhcpList []StaticLease
 	var fwList []PortForwardRule
 
-	// We examine the blocks to determine what they are. Since a given export might theoretically 
+	// We examine the blocks to determine what they are. Since a given export might theoretically
 	// contain a mix (if combined), or just one type, we check each item.
 	for _, itemJSON := range parsed.Result.Data {
 		var detect map[string]interface{}
@@ -75,7 +75,7 @@ func ParseOmadaExport(data []byte) ([]StaticLease, []PortForwardRule, error) {
 				} else if f.Protocol == 2 {
 					protoStr = "udp"
 				}
-				
+
 				srcPort, _ := strconv.Atoi(f.ExternalPort)
 				destPort, _ := strconv.Atoi(f.ForwardPort)
 

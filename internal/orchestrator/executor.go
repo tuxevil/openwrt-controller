@@ -4,8 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"golang.org/x/crypto/ssh"
 	"openwrt-controller/internal/database"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // getSigner returns the controller's SSH signer from the process-wide

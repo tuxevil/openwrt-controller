@@ -4,7 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	
+
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
@@ -26,7 +26,7 @@ func main() {
 		var id, name string
 		var stateJSON []byte
 		rows.Scan(&id, &name, &stateJSON)
-		
+
 		fmt.Printf("\n====================\nDEVICE: %s (%s)\n", id, name)
 
 		var dev map[string]interface{}

@@ -1,8 +1,8 @@
 package database
 
 import (
-	"fmt"
 	"database/sql"
+	"fmt"
 	"openwrt-controller/internal/models"
 )
 

@@ -16,7 +16,7 @@ func AddWLANConfig(ctx context.Context, siteID, ssid, security, password string,
 		cmd += "&& uci set wireless.@wifi-iface[-1].ft_over_ds='0' "
 		cmd += "&& uci set wireless.@wifi-iface[-1].ft_psk_generate_local='1' "
 	}
-	
+
 	if ieee80211w != "" && ieee80211w != "0" {
 		cmd += fmt.Sprintf("&& uci set wireless.@wifi-iface[-1].ieee80211w='%s' ", ieee80211w)
 	}
@@ -30,7 +30,7 @@ func AddWLANConfig(ctx context.Context, siteID, ssid, security, password string,
 	if k {
 		cmd += "&& uci set wireless.@wifi-iface[-1].ieee80211k='1' "
 	}
-	
+
 	if v {
 		// 802.11v in OpenWrt is BSS Transition + WNM Sleep Mode
 		cmd += "&& uci set wireless.@wifi-iface[-1].bss_transition='1' "

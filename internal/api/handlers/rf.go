@@ -34,7 +34,7 @@ func RunRFFixHandler(w http.ResponseWriter, r *http.Request) {
 	// Dynamic orchestrator command to reset radio interfaces and re-scan for channels
 	// Actually hardcodes auto channel and restarts wireless
 	cmd := "uci set wireless.radio0.channel=auto && uci commit wireless && wifi"
-	
+
 	results := services.RunMassCommand(r.Context(), siteID, cmd)
 
 	w.Header().Set("Content-Type", "application/json")

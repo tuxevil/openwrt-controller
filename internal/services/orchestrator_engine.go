@@ -1,10 +1,10 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"context"
 
 	"openwrt-controller/internal/database"
 )
@@ -24,31 +24,31 @@ type WANInterface struct {
 
 // SiteConfig represents the desired state of a site.
 type SiteConfig struct {
-	ID                   string `json:"id"`
-	SiteID               string `json:"site_id"`
-	EnableGlobalSSID     bool   `json:"enable_global_ssid"`
-	GlobalSSID           string `json:"global_ssid"`
-	GlobalWPAKey         string `json:"global_wpa_key"`
-	GlobalEncryption     string `json:"global_encryption"`
-	LanIPAddr            string `json:"lan_ipaddr"`
-	LanNetmask           string `json:"lan_netmask"`
-	DHCPStart            int    `json:"dhcp_start"`
-	DHCPLimit            int    `json:"dhcp_limit"`
-	DHCPLeasetime        string `json:"dhcp_leasetime"`
-	DNSPrimary           string `json:"dns_primary"`
-	DNSSecondary         string `json:"dns_secondary"`
-	Timezone             string `json:"timezone"`
-	HostnamePrefix       string `json:"hostname_prefix"`
-	SQMCakeEnabled       bool   `json:"sqm_cake_enabled"`
-	SqmDownload          int    `json:"sqm_download"`
-	SqmUpload            int    `json:"sqm_upload"`
-	DPIEnabled           bool   `json:"dpi_enabled"`
-	SecureTunnelEnabled  bool   `json:"secure_tunnel_enabled"`
-	TailscaleEnabled     bool   `json:"tailscale_enabled"`
-	TailscaleAuthKey     string `json:"tailscale_auth_key"`
-	FirewallSynFlood     bool   `json:"firewall_syn_flood"`
-	FirewallDropInvalid  bool   `json:"firewall_drop_invalid"`
-	DropbearPort         int    `json:"dropbear_port"`
+	ID                   string          `json:"id"`
+	SiteID               string          `json:"site_id"`
+	EnableGlobalSSID     bool            `json:"enable_global_ssid"`
+	GlobalSSID           string          `json:"global_ssid"`
+	GlobalWPAKey         string          `json:"global_wpa_key"`
+	GlobalEncryption     string          `json:"global_encryption"`
+	LanIPAddr            string          `json:"lan_ipaddr"`
+	LanNetmask           string          `json:"lan_netmask"`
+	DHCPStart            int             `json:"dhcp_start"`
+	DHCPLimit            int             `json:"dhcp_limit"`
+	DHCPLeasetime        string          `json:"dhcp_leasetime"`
+	DNSPrimary           string          `json:"dns_primary"`
+	DNSSecondary         string          `json:"dns_secondary"`
+	Timezone             string          `json:"timezone"`
+	HostnamePrefix       string          `json:"hostname_prefix"`
+	SQMCakeEnabled       bool            `json:"sqm_cake_enabled"`
+	SqmDownload          int             `json:"sqm_download"`
+	SqmUpload            int             `json:"sqm_upload"`
+	DPIEnabled           bool            `json:"dpi_enabled"`
+	SecureTunnelEnabled  bool            `json:"secure_tunnel_enabled"`
+	TailscaleEnabled     bool            `json:"tailscale_enabled"`
+	TailscaleAuthKey     string          `json:"tailscale_auth_key"`
+	FirewallSynFlood     bool            `json:"firewall_syn_flood"`
+	FirewallDropInvalid  bool            `json:"firewall_drop_invalid"`
+	DropbearPort         int             `json:"dropbear_port"`
 	DropbearPasswordAuth bool            `json:"dropbear_password_auth"`
 	DHCPReservations     json.RawMessage `json:"dhcp_reservations"`
 	PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
@@ -144,7 +144,6 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "script", Value: "piece_of_cake.qos"},
 
 					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "linklayer", Value: "none"},
-
 				)
 
 			} else {
@@ -152,7 +151,6 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 				cmds = append(cmds,
 
 					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "enabled", Value: "0"},
-
 				)
 
 			}
@@ -168,7 +166,6 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "path", Value: "/etc/firewall.dpi"},
 
 					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "reload", Value: "1"},
-
 				)
 
 			}
@@ -248,7 +245,6 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 				}
 			}
 
-			
 			// ── SQM CAKE (Gateway only) ──────────────────────────────────
 			if cfg.SQMCakeEnabled {
 				cmds = append(cmds,

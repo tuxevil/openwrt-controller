@@ -137,7 +137,7 @@ func SyncVPNMesh(ctx context.Context, schema string, meshID string) error {
 		} else {
 			script = generateSpokeUCI(mesh, hubNode, n, hubEndpoint)
 		}
-		
+
 		err := ExecuteCommand(schema, n.DeviceID, script)
 		if err != nil {
 			fmt.Printf("Failed to sync device %s: %v\n", n.DeviceID, err)

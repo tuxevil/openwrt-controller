@@ -8,10 +8,10 @@ import (
 )
 
 type createSiteRequest struct {
-	Name         string `json:"name"`
-	ControllerID string `json:"controller_id,omitempty"`
-	Latitude *float64 `json:"latitude,omitempty"`
-	Longitude *float64 `json:"longitude,omitempty"`
+	Name         string   `json:"name"`
+	ControllerID string   `json:"controller_id,omitempty"`
+	Latitude     *float64 `json:"latitude,omitempty"`
+	Longitude    *float64 `json:"longitude,omitempty"`
 }
 
 func GetSitesHandler(w http.ResponseWriter, r *http.Request) {
@@ -140,23 +140,40 @@ func DeleteSiteHandler(w http.ResponseWriter, r *http.Request) {
 
 	schema := getTenantSchema(r)
 
-	// Clean up related data manually since ON DELETE CASCADE is not ubiquitous
-	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".guest_vouchers WHERE site_id = $1", siteID)
-	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".portal_settings WHERE site_id = $1", siteID)
-	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".client_hostnames WHERE site_id = $1", siteID)
-	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".incidents WHERE site_id = $1", siteID)
-	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".site_settings WHERE site_id = $1", siteID)
-	database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".wlans WHERE site_id = $1", siteID)
-	
-	// Clean up or orphan agent versions
-	database.Tx(r.Context()).Exec("UPDATE " + schema + ".agent_versions SET site_id = NULL WHERE site_id = $1", siteID)
-	
-	// Orphan the devices
-	database.Tx(r.Context()).Exec("UPDATE " + schema + ".devices SET site_id = NULL, status = 'Pending' WHERE site_id = $1", siteID)
+	// Clean up related data manually since ON DELETE CASCADE is not ubiquitous.
+	// Each Exec is checked so a failure aborts the cascade and surfaces a 500
+	// to the operator (rather than silently orphaning rows in the tenant
+	// schema).
+	cleanups := []string{
+		"DELETE FROM " + schema + ".guest_vouchers WHERE site_id = $1",
+		"DELETE FROM " + schema + ".portal_settings WHERE site_id = $1",
+		"DELETE FROM " + schema + ".client_hostnames WHERE site_id = $1",
+		"DELETE FROM " + schema + ".incidents WHERE site_id = $1",
+		"DELETE FROM " + schema + ".site_settings WHERE site_id = $1",
+		"DELETE FROM " + schema + ".wlans WHERE site_id = $1",
+	}
+	for _, q := range cleanups {
+		if _, err := database.Tx(r.Context()).Exec(q, siteID); err != nil {
+			RespondError(w, http.StatusInternalServerError, "failed to clean up site relations", err)
+			return
+		}
+	}
 
-	res, err := database.Tx(r.Context()).Exec("DELETE FROM " + schema + ".sites WHERE id = $1", siteID)
+	// Clean up or orphan agent versions
+	if _, err := database.Tx(r.Context()).Exec("UPDATE "+schema+".agent_versions SET site_id = NULL WHERE site_id = $1", siteID); err != nil {
+		RespondError(w, http.StatusInternalServerError, "failed to orphan agent versions", err)
+		return
+	}
+
+	// Orphan the devices
+	if _, err := database.Tx(r.Context()).Exec("UPDATE "+schema+".devices SET site_id = NULL, status = 'Pending' WHERE site_id = $1", siteID); err != nil {
+		RespondError(w, http.StatusInternalServerError, "failed to orphan devices", err)
+		return
+	}
+
+	res, err := database.Tx(r.Context()).Exec("DELETE FROM "+schema+".sites WHERE id = $1", siteID)
 	if err != nil {
-		http.Error(w, `{"error": "database error: ` + err.Error() + `"}`, http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "failed to delete site", err)
 		return
 	}
 

@@ -214,7 +214,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 				peerSectionType := "wireguard_" + ifaceName
 
 				for _, psec := range networkSecs {
-					isPeer := psec.Type == peerSectionType || 
+					isPeer := psec.Type == peerSectionType ||
 						(psec.Type == "wireguard_peer" && psec.Options["config"] == ifaceName)
 					if isPeer {
 						if pub, ok := psec.Options["public_key"].(string); ok {
@@ -516,18 +516,18 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Prepare complete report
 	report := map[string]interface{}{
-		"wlans":                importedWLANs,
-		"vpns":                 importedVPNs,
-		"lan_ip":               lanIPAddr,
-		"lan_netmask":          lanNetmask,
-		"dhcp_start":           dhcpStart,
-		"dhcp_limit":           dhcpLimit,
-		"dhcp_leasetime":       dhcpLeasetime,
-		"dhcp_leases_count":    len(dhcpReservations),
-		"port_forwards_count":  len(portForwardingRules),
-		"timezone":             timezone,
-		"hostname_prefix":      hostnamePrefix,
-		"dropbear_port":        dropbearPort,
+		"wlans":               importedWLANs,
+		"vpns":                importedVPNs,
+		"lan_ip":              lanIPAddr,
+		"lan_netmask":         lanNetmask,
+		"dhcp_start":          dhcpStart,
+		"dhcp_limit":          dhcpLimit,
+		"dhcp_leasetime":      dhcpLeasetime,
+		"dhcp_leases_count":   len(dhcpReservations),
+		"port_forwards_count": len(portForwardingRules),
+		"timezone":            timezone,
+		"hostname_prefix":     hostnamePrefix,
+		"dropbear_port":       dropbearPort,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

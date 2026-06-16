@@ -229,7 +229,7 @@ func GetProtocolDistribution(ctx context.Context, siteID, timeRange string) ([]P
 		if !ok {
 			continue
 		}
-		
+
 		port := 0
 		fmt.Sscanf(portStr, "%d", &port)
 

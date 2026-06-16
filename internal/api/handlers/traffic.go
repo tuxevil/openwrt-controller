@@ -1,10 +1,10 @@
 package handlers
 
 import (
-	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"openwrt-controller/internal/api/middleware"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
@@ -48,7 +48,7 @@ type SniperRequest struct {
 	DeviceID string `json:"device_id"`
 	MAC      string `json:"mac"`
 	Rate     int    `json:"rate_mbytes"`
-	Duration int    `json:"duration_minutes"` 
+	Duration int    `json:"duration_minutes"`
 	Clear    bool   `json:"clear,omitempty"`
 }
 
@@ -106,7 +106,7 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 	var result []map[string]interface{}
 	for rows.Next() {
 		var id string
-		var name *string  // use pointer to handle NULL
+		var name *string // use pointer to handle NULL
 		var stateJSON []byte
 		if err := rows.Scan(&id, &name, &stateJSON); err != nil {
 			continue
@@ -184,7 +184,7 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"data": result,
+		"data":        result,
 		"shaped_macs": shapedMacs,
 	})
 }

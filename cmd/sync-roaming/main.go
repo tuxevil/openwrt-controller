@@ -25,7 +25,7 @@ func main() {
 		if err := rows.Scan(&schema); err != nil {
 			continue
 		}
-		
+
 		// For each schema, get sites
 		siteRows, err := database.DB.Query(fmt.Sprintf("SELECT id FROM %s.sites", schema))
 		if err != nil {
@@ -74,7 +74,7 @@ func main() {
 			}
 
 			lines := strings.Split(out, "\n")
-			
+
 			// We need to map interface name to ssid first
 			cmdSsid := "uci show wireless | grep ssid"
 			outSsid, _ := orchestrator.ExecuteCommandWithOutput(schema, devID, cmdSsid)

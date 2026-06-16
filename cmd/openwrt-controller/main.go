@@ -20,7 +20,7 @@ func main() {
   --- CENTRAL CONTROLLER ONLINE ---
 `
 	log.Println(banner)
-	
+
 	// Initialize PostgreSQL
 	if err := database.InitPostgres(); err != nil {
 		log.Printf("Warning: Postgres init failed: %v\n", err)

@@ -44,7 +44,7 @@ func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 
 	if triggerSniper && targetIP != "" {
 		log.Printf("[SENTINEL_AI] Local Brute Force detected from %s. Deploying Preventive Sniper.", targetIP)
-		
+
 		// Attempt to resolve MAC from ARP table
 		var stateJSON []byte
 		err := database.DB.QueryRow(fmt.Sprintf("SELECT state_json FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&stateJSON)
@@ -63,7 +63,7 @@ func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 							}
 						}
 					}
-					
+
 					if targetMac != "" {
 						err := ApplySniperShaping(schema, deviceID, targetMac, 64, 5) // Hard limit 64 KB/s for 5 mins
 						if err == nil {

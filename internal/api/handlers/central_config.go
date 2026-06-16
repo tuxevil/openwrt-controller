@@ -21,7 +21,8 @@ import (
 // structured key=value pairs parseable by the frontend.
 //
 // Also supports optional `?path=` query for scoped reads, e.g.:
-//   GET /api/devices/{device_id}/central-config?config=wireless&path=wireless.radio0.channel
+//
+//	GET /api/devices/{device_id}/central-config?config=wireless&path=wireless.radio0.channel
 func GetCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
 	config := r.URL.Query().Get("config")

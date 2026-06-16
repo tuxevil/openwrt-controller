@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"log"
 
-	"golang.org/x/crypto/ssh"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/orchestrator"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // LimitBandwidth sends limit configuration over SSH
@@ -37,10 +38,10 @@ func LimitBandwidth(deviceID, mac string, download, upload int) error {
 	// In the prompt we were told:
 	// "uci set sqm.eth0.download='5000' ... uci commit sqm && /etc/init.d/sqm restart"
 	// It appears the test/prompt assumes limiting the main interface. So we will just do SQM eth0 here.
-	
+
 	// If MAC is not "eth0" or "all", perhaps we use an nftables wrapper or simple tc.
 	// We'll proceed with SQM eth0 as instructed.
-	
+
 	cmd := fmt.Sprintf(`
 		uci set sqm.brlan=queue 
 		uci set sqm.brlan.interface='br-lan'
@@ -52,7 +53,7 @@ func LimitBandwidth(deviceID, mac string, download, upload int) error {
 		uci commit sqm
 		/etc/init.d/sqm restart >/dev/null 2>&1
 	`, download, upload)
-	
+
 	log.Printf("[BANDWIDTH SENTINEL] Executing Traffic Limit %v %v/%v", deviceID, download, upload)
 
 	sshConn, err := ssh.Dial("tcp", targetIP.String+":22", config)

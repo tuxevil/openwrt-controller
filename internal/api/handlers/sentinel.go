@@ -1,11 +1,11 @@
 package handlers
 
 import (
-	"openwrt-controller/internal/api/middleware"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"openwrt-controller/internal/api/middleware"
 	"time"
 
 	"openwrt-controller/internal/database"

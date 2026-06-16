@@ -140,7 +140,7 @@ exit 0
 
 	// Execute via SSH Script
 	out, err := runSSHScript(deviceID, script)
-	
+
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
