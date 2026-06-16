@@ -14,7 +14,8 @@ CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 # Instalar dependencias si faltan (opcional)
 if ! command -v tcpdump >/dev/null 2>&1; then
     logger -t agent "Installing missing tcpdump..."
-    opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi; opkg install tcpdump iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale || apk update && apk add tcpdump iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale
+    opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi; opkg install tcpdump iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale || \
+    (apk update && apk add tcpdump iperf3 sqm-scripts kmod-sched-cake tailscale)
 fi
 # apk update && apk add iwinfo curl
 
@@ -336,6 +337,7 @@ EOF
         OLD_WIFI_HASH=$(cat /tmp/wifi_config.hash 2>/dev/null)
         
         if [ -n "$NEW_WIFI_HASH" ] && [ "$NEW_WIFI_HASH" != "$OLD_WIFI_HASH" ]; then
+            logger -t agent "DEBUG: NEW=$NEW_WIFI_HASH OLD=$OLD_WIFI_HASH URL=$CONFIG_URL RES_LEN=${#CONFIG_RESPONSE}"
             logger -t agent "WLAN config changed. Re-provisioning radios..."
             
             WLAN_COUNT=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireless.wlans[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
