@@ -14,8 +14,20 @@ CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 # Instalar dependencias si faltan (opcional)
 if ! command -v tcpdump >/dev/null 2>&1; then
     logger -t agent "Installing missing tcpdump..."
-    opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi; opkg install tcpdump iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale || \
-    (apk update && apk add tcpdump iperf3 sqm-scripts kmod-sched-cake tailscale)
+    if command -v apk >/dev/null 2>&1; then
+        apk update
+        apk add tcpdump iperf3 sqm-scripts kmod-sched-cake tailscale
+        apk search -e libndpi | grep -q libndpi && apk add libndpi || true
+        if apk info -e wpad-basic-wolfssl >/dev/null 2>&1 || apk info -e wpad-basic-mbedtls >/dev/null 2>&1; then
+            apk del wpad-basic-wolfssl wpad-basic-mbedtls 2>/dev/null || true
+            apk add wpad-mesh-wolfssl || true
+        fi
+    elif command -v opkg >/dev/null 2>&1; then
+        opkg update
+        if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi
+        opkg install tcpdump iperf3 sqm-scripts kmod-sched-cake tailscale
+        opkg list libndpi | grep -q libndpi && opkg install libndpi || true
+    fi
 fi
 # apk update && apk add iwinfo curl
 
