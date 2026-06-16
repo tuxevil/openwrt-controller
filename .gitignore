@@ -86,3 +86,7 @@ skills/
 
 # ── Misc ─────────────────────────────────────────────────────────────────────
 get-docker.sh
+.git.dirty-backup/
+clean-repo.sh
+docs/
+openwrt-controller.old
