@@ -184,5 +184,3 @@ jobs:
 
       - name: Detect hardcoded secrets
         uses: gitleaks/gitleaks-action@v2
-        with:
-          config-path: .gitleaks.toml

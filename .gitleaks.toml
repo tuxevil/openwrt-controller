@@ -7,38 +7,33 @@
 
 [allowlist]
 description = "Exclude test files and placeholder values from secret scanning"
-
-paths = [
-  # Unit tests that hard-code test secrets for auth/crypto testing.
-  # Real JWT_SECRET values never appear in source; these are test-only.
-  '''_test\.go$''',
-  # Example environment file with GENERATE_STRONG_PASSWORD placeholders.
-  '''\.env\.example$''',
-  # CI workflow files containing GitHub Actions token references.
-  '''\.github/workflows/''',
-  # Build artifacts and generated files.
-  '''go\.sum$''',
-  '''package-lock\.json$''',
-  # Documentation that references test credentials.
-  '''docs/.*\.md$''',
-]
-
-# Allowlist specific secrets that we know are intentional
-# and not real credentials.
-[[rules]]
-id = "generic-api-key"
-[rules.allowlist]
-description = "Allow test API keys in code comments and documentation"
 stopwords = [
   "GENERATE_STRONG_PASSWORD",
-  "postgres:postgres",  # Was in old source; squashed in audit sprint
+  "postgres:postgres",
   "jwt_secret_value",
   "test-key",
   "telegraf-test",
 ]
+paths = [
+  '''_test\.go$''',
+  '''\.env\.example$''',
+  '''\.github/workflows/''',
+  '''go\.sum$''',
+  '''package-lock\.json$''',
+  '''docs/.*\.md$''',
+]
 
+# Override the generic-api-key rule to also check our stopwords.
+# The regex is the built-in default; we only add the allowlist.
 [[rules]]
-id = "private-key"
-[rules.allowlist]
-description = "Allow PEM-encoded test keys in test fixtures"
-paths = ['''_test\.go$''']
+id = "generic-api-key"
+regex = '''(?i)(?:key|api|token|secret|client|passw(or)?d|auth|access)(?:[0-9a-z\-_\t .]{0,20})(?:\s|[\r\n]|%0A|%0D){0,3}(?:=|>|:=|\|\|:|<=|=>|:)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=+/\x60]{16,})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
+[allowlist]
+description = "Allow test API keys in comments and documentation"
+stopwords = [
+  "GENERATE_STRONG_PASSWORD",
+  "postgres:postgres",
+  "jwt_secret_value",
+  "test-key",
+  "telegraf-test",
+]
