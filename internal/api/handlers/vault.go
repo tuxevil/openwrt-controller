@@ -17,11 +17,15 @@ import (
 )
 
 // sanitiseFirmwareFilename returns a safe filename for storage. It strips
-// any directory component, rejects control characters, and caps the length
-// to 255 bytes (the practical limit for ext4/NTFS). Returns "" if the
-// input is empty or reduces to nothing after sanitisation.
+// any directory component (handling both POSIX and Windows separators),
+// rejects control characters, and caps the length to 255 bytes (the
+// practical limit for ext4/NTFS). Returns "" if the input is empty or
+// reduces to nothing after sanitisation.
 func sanitiseFirmwareFilename(name string) string {
-	name = filepath.Base(strings.TrimSpace(name))
+	name = strings.TrimSpace(name)
+	// Normalise Windows backslashes so filepath.Base can strip them.
+	name = strings.ReplaceAll(name, "\\", "/")
+	name = filepath.Base(name)
 	if name == "" || name == "." || name == "/" {
 		return ""
 	}

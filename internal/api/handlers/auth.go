@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -13,7 +14,26 @@ import (
 	"openwrt-controller/internal/secrets"
 )
 
-var jwtSecret = secrets.JWTSecret()
+// jwtSecret is loaded lazily on first use so that test binaries can set
+// JWT_SECRET before the secret is materialised. secrets.JWTSecret() calls
+// log.Fatal on misconfiguration, which would otherwise abort the test
+// process during package init().
+var (
+	jwtSecretOnce sync.Once
+	jwtSecret     []byte
+)
+
+func getJWTSecret() []byte {
+	jwtSecretOnce.Do(func() { jwtSecret = secrets.JWTSecret() })
+	return jwtSecret
+}
+
+// JWTSecret exposes the secret for use in middleware. It is the same
+// bytes returned by getJWTSecret() but as a value (not a function) so
+// the existing call sites that hold a []byte don't need to change.
+//
+// Note: this name is also used as the package-level `var jwtSecret` for
+// internal call sites; both are kept for backward compatibility.
 
 type loginRequest struct {
 	Username string `json:"username"`
@@ -77,7 +97,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString(jwtSecret)
+	signed, err := token.SignedString(getJWTSecret())
 	if err != nil {
 		http.Error(w, `{"error":"token generation failed"}`, http.StatusInternalServerError)
 		return
@@ -111,7 +131,7 @@ func GetUsernameFromReq(r *http.Request) string {
 		return "system"
 	}
 	token, _ := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-		return jwtSecret, nil
+		return getJWTSecret(), nil
 	})
 	if token != nil {
 		if claims, ok := token.Claims.(jwt.MapClaims); ok {
