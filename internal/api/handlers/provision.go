@@ -1,14 +1,26 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
+
+// allowLegacyProvision enables the historical behaviour where a device
+// could pull config with only an X-Site-Key (no per-device token). It is
+// kept behind a feature flag so that greenfield deployments can refuse to
+// start, while existing single-tenant installations can opt in via
+// ALLOW_LEGACY_PROVISION=true.
+func allowLegacyProvision() bool {
+	return os.Getenv("ALLOW_LEGACY_PROVISION") == "true"
+}
 
 // deepMerge merges src into dst. dst values have priority.
 func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
@@ -50,10 +62,21 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- Módulo 3: Hardening - Validar X-Device-Token ---
+	// Validate the schema name we are about to interpolate. GetTenantSchemaForSiteKey
+	// already filters via tenants.schema_alias, but defence-in-depth.
+	if _, sErr := database.SafeSchemaIdent(tenantSchema); sErr != nil {
+		log.Printf("[provision] rejected suspicious schema %q for device %s", tenantSchema, deviceID)
+		http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
+		return
+	}
+
+	// --- Hardening: X-Device-Token is mandatory unless legacy mode is enabled ---
 	token := r.Header.Get("X-Device-Token")
+	if token == "" && !allowLegacyProvision() {
+		http.Error(w, `{"error": "X-Device-Token header is required"}`, http.StatusUnauthorized)
+		return
+	}
 	if token != "" {
-		// Solo valida si se envía un token; sin token = acceso sin auth (modo legado)
 		var storedToken sql.NullString
 		err := database.Tx(r.Context()).QueryRow("SELECT device_token FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&storedToken)
 		if err == nil && storedToken.Valid && storedToken.String != "" && storedToken.String != token {
@@ -79,7 +102,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if siteKey != nil && *siteKey != "" {
-		if providedKey != *siteKey {
+		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
 			return
 		}

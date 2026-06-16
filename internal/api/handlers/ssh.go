@@ -5,6 +5,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
@@ -13,36 +16,77 @@ import (
 	"openwrt-controller/internal/orchestrator"
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for the prototype
-	},
-}
-
-var (
-	PrivateKey ssh.Signer
-	PublicKey  string
-)
+// allowedWSOrigins is the explicit allowlist of Origin header values that
+// may upgrade a WebSocket connection. Configured via the WS_ALLOWED_ORIGINS
+// environment variable (comma-separated). An empty / missing value means
+// "no origins allowed" (fail-closed) unless WS_ALLOW_ALL_ORIGINS=true is
+// explicitly set (intended only for local dev).
+var allowedWSOrigins map[string]struct{}
 
 func init() {
-	keyBytes, err := os.ReadFile("certs/id_controller")
-	if err != nil {
-		log.Println("[CRITICAL] Private key ./certs/id_controller not found. SSH Matrix will be disabled.")
-		return
+	raw := os.Getenv("WS_ALLOWED_ORIGINS")
+	if raw != "" {
+		allowedWSOrigins = make(map[string]struct{})
+		for _, o := range strings.Split(raw, ",") {
+			o = strings.TrimSpace(o)
+			if o != "" {
+				allowedWSOrigins[o] = struct{}{}
+			}
+		}
 	}
-	signer, err := ssh.ParsePrivateKey(keyBytes)
-	if err != nil {
-		log.Printf("[CRITICAL] Failed to parse private key: %v", err)
-		return
-	}
-	PrivateKey = signer
+}
 
-	pubBytes, err := os.ReadFile("certs/id_controller.pub")
-	if err != nil {
-		log.Println("[WARNING] Public key ./certs/id_controller.pub not found.")
-		return
+var upgrader = websocket.Upgrader{
+	CheckOrigin: checkWSOrigin,
+}
+
+func checkWSOrigin(r *http.Request) bool {
+	if os.Getenv("WS_ALLOW_ALL_ORIGINS") == "true" {
+		return true
 	}
-	PublicKey = string(pubBytes)
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		// Non-browser clients (curl, native apps) do not send Origin; allow
+		// them only when no allowlist is configured.
+		return allowedWSOrigins == nil
+	}
+	if allowedWSOrigins == nil {
+		return false
+	}
+	_, ok := allowedWSOrigins[origin]
+	return ok
+}
+
+// PrivateKey and PublicKey are kept for backwards compatibility with the
+// many call sites that still reference them. The canonical store is
+// orchestrator.GetKeyStore(); the package-level aliases are populated by
+// RefreshSSHKeys() which is called from main on startup.
+var (
+	PrivateKey        ssh.Signer
+	PublicKey         string
+	refreshSSHKeysOnce sync.Once
+)
+
+// RefreshSSHKeys is called from main to mirror the process-wide KeyStore
+// into the package-level aliases (PublicKey, PrivateKey) that older code
+// still reads. New code should call orchestrator.GetKeyStore().Get()
+// directly.
+func RefreshSSHKeys() {
+	refreshSSHKeysOnce.Do(func() {
+		ks := orchestrator.GetKeyStore()
+		if ks == nil {
+			log.Println("[ssh] no KeyStore available; SSH endpoints will be disabled")
+			return
+		}
+		signer, err := ks.Get()
+		if err == nil {
+			PrivateKey = signer
+		}
+		pub, perr := orchestrator.LoadPublicKey()
+		if perr == nil {
+			PublicKey = strings.TrimSpace(pub)
+		}
+	})
 }
 
 func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
@@ -67,7 +111,8 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer ws.Close()
 
-	if PrivateKey == nil {
+	signer, err := orchestrator.GetKeyStore().Get()
+	if err != nil {
 		ws.WriteMessage(websocket.TextMessage, []byte("\r\n[!] ERROR: Controller SSH private key not configured\r\n"))
 		return
 	}
@@ -75,7 +120,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	config := &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(PrivateKey),
+			ssh.PublicKeys(signer),
 		},
 		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 	}
@@ -83,7 +128,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	// d) Abre una conexión SSH hacia la IP del router
 	sshConn, err := ssh.Dial("tcp", targetAddr, config)
 	if err != nil {
-		ws.WriteMessage(websocket.TextMessage, []byte("\r\n[!] SSH Connection Failed: "+err.Error()+"\r\n"))
+		ws.WriteMessage(websocket.TextMessage, []byte("\r\n[!] SSH Connection Failed\r\n"))
 		return
 	}
 	defer sshConn.Close()
@@ -127,20 +172,36 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// f) Inicia un pipe bidireccional
-	// ws -> ssh
-	var inputBuffer []byte
+	// The previous version appended every WS read into a single []byte
+	// shared across three goroutines without synchronisation; that raced
+	// under -race. The fixed version accumulates into a *sync.Mutex-guarded
+	// buffer.
 	username := GetUsernameFromReq(r)
 	clientIP := r.RemoteAddr
 
+	const maxBufferedInput = 1 << 20 // 1 MiB; anything larger is truncated.
+	var (
+		inputMu      sync.Mutex
+		inputBuffer  []byte
+		writeInputMu sync.Mutex
+	)
+
 	go func() {
 		for {
+			ws.SetReadDeadline(time.Now().Add(60 * time.Second))
 			_, msg, err := ws.ReadMessage()
 			if err != nil {
 				sshConn.Close()
 				break
 			}
-			inputBuffer = append(inputBuffer, msg...)
-			sshIn.Write(msg)
+			inputMu.Lock()
+			if len(inputBuffer) < maxBufferedInput {
+				inputBuffer = append(inputBuffer, msg...)
+			}
+			inputMu.Unlock()
+			writeInputMu.Lock()
+			_, _ = sshIn.Write(msg)
+			writeInputMu.Unlock()
 		}
 	}()
 
@@ -172,7 +233,12 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	// Wait for the session to finish
 	session.Wait()
 
-	if username != "system" && len(inputBuffer) > 0 {
-		database.InsertAuditLog(username, "MATRIX_SHELL_SESSION", "DEVICE", deviceID, string(inputBuffer), clientIP)
+	if username != "system" {
+		inputMu.Lock()
+		buf := append([]byte(nil), inputBuffer...)
+		inputMu.Unlock()
+		if len(buf) > 0 {
+			database.InsertAuditLog(username, "MATRIX_SHELL_SESSION", "DEVICE", deviceID, string(buf), clientIP)
+		}
 	}
 }

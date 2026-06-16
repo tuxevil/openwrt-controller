@@ -7,18 +7,30 @@ import (
 	"strings"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/services"
 )
 
-// UciRestartMap maps uci config namespace to the specific init.d service that should be restarted
-var UciRestartMap = map[string]string{
-	"network":  "/etc/init.d/network restart",
-	"wireless": "wifi",
-	"dhcp":     "/etc/init.d/dnsmasq restart",
-	"firewall": "/etc/init.d/firewall restart",
-	"system":   "/etc/init.d/system restart",
-	"dropbear": "/etc/init.d/dropbear restart",
-	"uhttpd":   "/etc/init.d/uhttpd restart",
-	"openvpn":  "/etc/init.d/openvpn restart",
+// UciRestartMap is an alias for services.ServiceRestartMap. The single
+// source of truth lives in internal/services/uci_restart_map.go; this
+// local reference avoids a wide rename of all callers.
+var UciRestartMap = services.ServiceRestartMap
+
+// allowedUciConfigs enumerates the UCI namespaces that the raw UCI editor is
+// allowed to touch. Anything else must be handled by a dedicated handler.
+var allowedUciConfigs = map[string]struct{}{
+	"network":  {},
+	"wireless": {},
+	"dhcp":     {},
+	"firewall": {},
+	"system":   {},
+	"dropbear": {},
+	"uhttpd":   {},
+	"openvpn":  {},
+}
+
+func isAllowedUciConfig(s string) bool {
+	_, ok := allowedUciConfigs[s]
+	return ok
 }
 
 // GetUciHandler retrieves the current configuration using `ubus call uci get`
@@ -31,8 +43,12 @@ func GetUciHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "missing config parameter"}`, http.StatusBadRequest)
 		return
 	}
+	if !isAllowedUciConfig(config) {
+		http.Error(w, `{"error": "config namespace not allowed"}`, http.StatusBadRequest)
+		return
+	}
 
-	// Fetch via ubus
+	// Fetch via ubus — config is now constrained to the allowlist.
 	cmd := fmt.Sprintf("ubus call uci get '{\"config\": \"%s\"}'", config)
 	out, err := runSSHCommand(deviceID, cmd)
 	if err != nil {
@@ -58,6 +74,10 @@ func PutUciHandler(w http.ResponseWriter, r *http.Request) {
 
 	if config == "" {
 		http.Error(w, `{"error": "missing config parameter"}`, http.StatusBadRequest)
+		return
+	}
+	if !isAllowedUciConfig(config) {
+		http.Error(w, `{"error": "config namespace not allowed"}`, http.StatusBadRequest)
 		return
 	}
 

@@ -129,7 +129,7 @@ func SyncVPNMeshHandler(w http.ResponseWriter, r *http.Request) {
 	// The problem is orchestrator uses database, and database is in internal/database.
 	// I'll leave the sync logic to a service.
 	// But let's just pretend we call a simple func. Let's create an HTTP endpoint for it.
-	if err := orchestrator.SyncVPNMesh(schema, meshID); err != nil {
+	if err := orchestrator.SyncVPNMesh(r.Context(), schema, meshID); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

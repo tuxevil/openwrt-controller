@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+
 	"openwrt-controller/internal/database"
 )
 
@@ -14,7 +16,7 @@ type TenantBilling struct {
 }
 
 func GetBillingUsageHandler(w http.ResponseWriter, r *http.Request) {
-	// Only Landlord Admin should call this, verified by middleware
+	// Only SuperAdmin should call this; enforced by the route middleware.
 	rows, err := database.DB.Query("SELECT name, schema_alias FROM tenants WHERE is_active = true")
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
@@ -28,12 +30,20 @@ func GetBillingUsageHandler(w http.ResponseWriter, r *http.Request) {
 		if err := rows.Scan(&name, &alias); err != nil {
 			continue
 		}
-		
-		schema := "tenant_" + alias
+
+		// Validate the schema identifier before interpolating it into SQL.
+		schema, err := database.SafeTenantSchema(alias)
+		if err != nil {
+			log.Printf("[billing] skipping tenant %q: %v", alias, err)
+			continue
+		}
 		var sites, nodes int
-		
-		database.DB.QueryRow("SELECT COUNT(id) FROM " + schema + ".sites").Scan(&sites)
-		database.DB.QueryRow("SELECT COUNT(id) FROM " + schema + ".devices").Scan(&nodes)
+		if err := database.DB.QueryRow("SELECT COUNT(id) FROM " + schema + ".sites").Scan(&sites); err != nil {
+			log.Printf("[billing] sites count failed for %s: %v", schema, err)
+		}
+		if err := database.DB.QueryRow("SELECT COUNT(id) FROM " + schema + ".devices").Scan(&nodes); err != nil {
+			log.Printf("[billing] devices count failed for %s: %v", schema, err)
+		}
 
 		billings = append(billings, TenantBilling{
 			TenantName:  name,

@@ -21,13 +21,23 @@ var DB *sql.DB
 func InitPostgres() error {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		dsn = "postgres://postgres:postgres@localhost:5432/openwrthub"
+		return fmt.Errorf("DATABASE_URL environment variable is required (no default credentials allowed)")
 	}
 
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		return fmt.Errorf("failed to open pgx connection: %w", err)
 	}
+
+	// Pool tuning. Without explicit limits a chatty dashboard can exhaust
+	// the connection pool and lock out background workers (alerts, vault
+	// cron, threat-intel fetcher). The defaults below are conservative for
+	// a single-tenant deployment; multi-tenant / large fleets should tune
+	// via PG_MAX_OPEN_CONNS / PG_MAX_IDLE_CONNS.
+	db.SetMaxOpenConns(25)
+	db.SetMaxIdleConns(10)
+	db.SetConnMaxLifetime(5 * time.Minute)
+	db.SetConnMaxIdleTime(2 * time.Minute)
 
 	// Retry loop for ping
 	for i := 0; i < 10; i++ {
@@ -552,7 +562,7 @@ func seedTenantSiteAPIKeys(schema string) {
 		if err != nil {
 			continue
 		}
-		fmt.Printf("SITIO [%s]: [%s] | API_KEY: [%s]\n", schema, u.name, u.key)
+		fmt.Printf("SITIO [%s]: [%s] | API_KEY: [%s...]\n", schema, u.name, maskAPIKey(u.key))
 	}
 }
 
@@ -572,10 +582,74 @@ func SetTenantSearchPath(tx *sql.Tx, schemaAlias string) error {
 
 // ─── VALIDATION ──────────────────────────────────────────────────────────────
 
+// validSchemaRegex matches a *fully qualified* PostgreSQL identifier
+// (i.e., it may already include the "tenant_" prefix). Identifiers are capped
+// at 63 bytes per the SQL standard, so the prefix + alias must fit.
 var validSchemaRegex = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]{0,62}$`)
+
+// maskAPIKey returns the first 8 characters of an API key followed by an
+// ellipsis. The full key is only ever printed once on bootstrap; operators
+// who need to recover it can `SELECT api_key FROM sites WHERE id=...`.
+func maskAPIKey(key string) string {
+	if len(key) <= 8 {
+		return "********"
+	}
+	return key[:8] + "..." + "(" + itoa(len(key)) + " chars)"
+}
+
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	digits := ""
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	for n > 0 {
+		digits = string(rune('0'+n%10)) + digits
+		n /= 10
+	}
+	if neg {
+		return "-" + digits
+	}
+	return digits
+}
 
 func isValidSchemaName(name string) bool {
 	return validSchemaRegex.MatchString(name)
+}
+
+// SafeTenantSchema validates a tenant alias and returns the fully qualified
+// schema name ("tenant_<alias>"). The alias portion is capped so the resulting
+// identifier fits within PostgreSQL's 63-byte identifier limit.
+//
+// This is the single entry point for composing "tenant_<x>" identifiers. All
+// SQL building code that needs to interpolate a schema name MUST go through
+// this helper (or SafeSchemaIdent) to prevent SQL injection via crafted
+// tenant aliases.
+func SafeTenantSchema(alias string) (string, error) {
+	// 8 ("tenant_") + N alias <= 63 ⇒ N <= 55.
+	const maxAliasLen = 55
+	if alias == "" {
+		return "", fmt.Errorf("empty tenant alias")
+	}
+	if len(alias) > maxAliasLen {
+		return "", fmt.Errorf("tenant alias too long: %d > %d", len(alias), maxAliasLen)
+	}
+	if !validSchemaRegex.MatchString(alias) {
+		return "", fmt.Errorf("invalid tenant alias %q", alias)
+	}
+	return "tenant_" + alias, nil
+}
+
+// SafeSchemaIdent validates a fully qualified schema name (e.g. "tenant_x"
+// or "public"). Returns the input unchanged on success, error on failure.
+func SafeSchemaIdent(schema string) (string, error) {
+	if !isValidSchemaName(schema) {
+		return "", fmt.Errorf("invalid schema identifier %q", schema)
+	}
+	return schema, nil
 }
 
 // ─── LEGACY API COMPAT ──────────────────────────────────────────────────────

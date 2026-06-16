@@ -4,6 +4,16 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: openwrt_controller
+    # SECURITY: never run as root in production; require TLS; read-only fs.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/global/health", "||", "exit", "1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     ports:
       - "3000:3000"
     environment:
@@ -25,8 +35,11 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
       POSTGRES_DB: openwrthub
+    # Bind to loopback only by default. Production deployments that need
+    # remote access should set PG_BIND_ADDR to a private network interface
+    # (e.g. 10.0.0.1) and adjust firewall rules accordingly.
     ports:
-      - "5432:5432"
+      - "${PG_BIND_ADDR:-127.0.0.1}:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     restart: unless-stopped
@@ -34,8 +47,9 @@ services:
   influxdb:
     image: influxdb:2.7-alpine
     container_name: openwrt_influx
+    # Same loopback-by-default policy as Postgres.
     ports:
-      - "8086:8086"
+      - "${INFLUX_BIND_ADDR:-127.0.0.1}:8086:8086"
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin

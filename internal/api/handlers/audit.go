@@ -11,10 +11,7 @@ import (
 )
 
 func GetAuditLogsHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
-		return
-	}
+	// Method check removed: routes.go already filters via the mux.
 
 	limitStr := r.URL.Query().Get("limit")
 	offsetStr := r.URL.Query().Get("offset")
@@ -31,7 +28,7 @@ func GetAuditLogsHandler(w http.ResponseWriter, r *http.Request) {
 
 	logs, err := database.GetAuditLogs(limit, offset)
 	if err != nil {
-		http.Error(w, `{"error":"`+err.Error()+`"}`, http.StatusInternalServerError)
+		RespondError(w, http.StatusInternalServerError, "failed to load audit logs", err)
 		return
 	}
 

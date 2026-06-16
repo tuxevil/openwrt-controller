@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"io"
 	"log"
@@ -16,10 +17,8 @@ import (
 )
 
 func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+	// Method check is redundant — routes.go registers POST only.
+	// Kept for explicitness; remove if a future refactor relies solely on the mux.
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -60,7 +59,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		JOIN `+tenantSchema+`.devices d ON d.site_id = s.id 
 		WHERE d.id = $1`, deviceID).Scan(&siteKey)
 	if err == nil && siteKey != nil && *siteKey != "" {
-		if providedKey != *siteKey {
+		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
 			return
 		}

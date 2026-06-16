@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"openwrt-controller/internal/api/handlers"
 	"openwrt-controller/internal/api/middleware"
@@ -50,6 +51,7 @@ func SetupRoutes() *http.ServeMux {
 
 	mux.HandleFunc("POST /api/sites/{site_id}/wlans", middleware.WithAuth(handlers.CreateWLANHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/wlans", middleware.WithAuth(handlers.GetWLANsHandler))
+	mux.HandleFunc("PUT /api/sites/{site_id}/wlans/{wlan_id}", middleware.WithAuth(handlers.UpdateWLANHandler))
 	mux.HandleFunc("DELETE /api/wlans/{wlan_id}", middleware.WithAuth(handlers.DeleteWLANHandler))
 	mux.HandleFunc("GET /api/devices/{device_id}/metrics", middleware.WithAuth(handlers.GetDeviceMetricsHandler))
 	mux.HandleFunc("GET /api/devices/{device_id}/ssh", middleware.WithAuth(handlers.DeviceSSHHandler))
@@ -97,7 +99,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/profiles", middleware.WithAuth(handlers.ListProfilesHandler))
 	mux.HandleFunc("POST /api/profiles", middleware.WithAuth(handlers.CreateProfileHandler))
 	mux.HandleFunc("DELETE /api/profiles/{profile_id}", middleware.WithAuth(handlers.DeleteProfileHandler))
-	mux.HandleFunc("POST /api/orchestrator/command", middleware.WithAuth(handlers.MassCommandHandler))
+	mux.HandleFunc("POST /api/orchestrator/command", middleware.WithAuth(middleware.RequireAdmin(handlers.MassCommandHandler)))
 
 	// ── Traffic Management ───────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/bandwidth/limit", middleware.WithAuth(handlers.LimitBandwidthHandler))
@@ -167,6 +169,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/landlord/tenants", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetTenantsHandler)))
 	mux.HandleFunc("POST /api/landlord/tenants", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.CreateTenantHandler)))
 	mux.HandleFunc("PUT /api/landlord/tenants/{id}/toggle", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.ToggleTenantHandler)))
+	mux.HandleFunc("GET /api/billing/usage", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetBillingUsageHandler)))
 	mux.HandleFunc("GET /api/landlord/tenants/{id}/stats", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetTenantStatsHandler)))
 
 	// ── Agent Management ─────────────────────────────────────────────────────
@@ -180,16 +183,29 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── SPA Static files ─────────────────────────────────────────────────────
 	fs := http.FileServer(http.Dir("./web/dist"))
+	spaIndex, _ := os.ReadFile("./web/dist/index.html")
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		// Asset files get long-term cache; everything else (including
+		// index.html) gets a no-cache header so users always see the
+		// latest dashboard after a release.
 		if r.URL.Path == "/" || r.URL.Path == "" || !isAsset(r.URL.Path) {
 			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 			w.Header().Set("Pragma", "no-cache")
 		} else {
 			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 		}
-		_, err := http.Dir("./web/dist").Open(r.URL.Path)
-		if err != nil {
-			r.URL.Path = "/"
+		// SPA history-mode fallback: if the requested path doesn't map to
+		// a real file under ./web/dist, serve index.html so vue-router can
+		// take over. The previous implementation redirected to "/", which
+		// produced 403s on routes that depended on the trailing path.
+		if _, err := http.Dir("./web/dist").Open(r.URL.Path); err != nil {
+			if len(spaIndex) == 0 {
+				http.Error(w, "frontend not built (web/dist missing)", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(spaIndex)
+			return
 		}
 		fs.ServeHTTP(w, r)
 	})

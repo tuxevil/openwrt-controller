@@ -1,31 +1,19 @@
 package handlers
 
 import (
-	"log"
 	"database/sql"
 	"encoding/json"
 	"net/http"
-	"os"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/secrets"
 )
 
-var jwtSecret = []byte(getJWTSecret())
-
-func getJWTSecret() string {
-	s := os.Getenv("JWT_SECRET")
-	if s == "" {
-		log.Fatal("JWT_SECRET environment variable is required and must not be empty")
-	}
-	if len(s) < 32 {
-		log.Fatal("JWT_SECRET must be at least 32 characters")
-	}
-	return s
-}
+var jwtSecret = secrets.JWTSecret()
 
 type loginRequest struct {
 	Username string `json:"username"`

@@ -1,16 +1,18 @@
 package middleware
 
 import (
-	"log"
 	"context"
+	"database/sql"
 	"fmt"
-	"os"
+	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/secrets"
 )
 
 type contextKey string
@@ -23,12 +25,15 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var tokenStr string
 
-		// 1. Try Authorization header
+		// 1. Try Authorization header (preferred path).
 		authHeader := r.Header.Get("Authorization")
 		if strings.HasPrefix(authHeader, "Bearer ") {
 			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
-		} else {
-			// 2. Try query parameter (for WebSockets)
+		} else if os.Getenv("WS_ALLOW_QUERY_TOKEN") == "true" {
+			// 2. Query parameter fallback for WebSockets. Disabled by
+			//    default to avoid leaking JWTs into access logs / Referer
+			//    headers. Opt in only when running behind a trusted proxy
+			//    that strips the query string from logs.
 			tokenStr = r.URL.Query().Get("token")
 		}
 
@@ -43,7 +48,7 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
 			}
-			return []byte(getJWTSecret()), nil
+			return secrets.JWTSecret(), nil
 		})
 
 		if err != nil || !token.Valid {
@@ -102,18 +107,34 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			).Scan(&count)
 			if err == nil && count > 0 {
 				fullSchema := "tenant_" + tenantSchema
-				// Set LOCAL search_path for this request's transaction queries
-				tx.Exec(fmt.Sprintf("SET LOCAL search_path TO %s, public", fullSchema))
+				// Set LOCAL search_path for this request's transaction queries.
+				// We check the error here so a SET failure surfaces as a 500
+				// rather than silently targeting the public schema (which
+				// would leak data across tenants).
+				if _, spErr := tx.Exec(fmt.Sprintf("SET LOCAL search_path TO %s, public", fullSchema)); spErr != nil {
+					log.Printf("[auth] SET LOCAL search_path failed for %q: %v", fullSchema, spErr)
+					w.WriteHeader(http.StatusInternalServerError)
+					return
+				}
 				ctx = context.WithValue(ctx, tenantSchemaKey, fullSchema)
 			}
 		} else {
-			tx.Exec("SET LOCAL search_path TO public")
+			if _, spErr := tx.Exec("SET LOCAL search_path TO public"); spErr != nil {
+				log.Printf("[auth] SET LOCAL search_path public failed: %v", spErr)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
 		}
 
 		ctx = context.WithValue(ctx, database.TxKey, tx)
 
 		next(w, r.WithContext(ctx))
-		tx.Commit()
+		// Check Commit error so callers learn about constraint violations
+		// / deadlocks even though we've already written the response body.
+		// The defer Rollback() above is a no-op once Commit succeeds.
+		if cerr := tx.Commit(); cerr != nil && cerr != sql.ErrTxDone {
+			log.Printf("[auth] tx.Commit failed: %v", cerr)
+		}
 	}
 }
 
@@ -178,15 +199,4 @@ func GetTenantSchema(r *http.Request) string {
 		return schema
 	}
 	return ""
-}
-
-func getJWTSecret() string {
-	s := os.Getenv("JWT_SECRET")
-	if s == "" {
-		log.Fatal("JWT_SECRET environment variable is required and must not be empty")
-	}
-	if len(s) < 32 {
-		log.Fatal("JWT_SECRET must be at least 32 characters")
-	}
-	return s
 }

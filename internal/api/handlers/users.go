@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +12,20 @@ import (
 
 	"openwrt-controller/internal/database"
 )
+
+// bcryptCost is the work factor for password hashing. Production uses
+// bcrypt.DefaultCost (10). Tests can lower it via BCRYPT_COST env to
+// keep the suite fast without sacrificing the actual algorithm.
+var bcryptCost = bcryptCostFromEnv()
+
+func bcryptCostFromEnv() int {
+	if raw := os.Getenv("BCRYPT_COST"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 4 && n <= 31 {
+			return n
+		}
+	}
+	return bcrypt.DefaultCost
+}
 
 type User struct {
 	ID        string    `json:"id"`
@@ -63,7 +79,7 @@ func CreateUserHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		http.Error(w, `{"error":"failed to secure password"}`, http.StatusInternalServerError)
 		return
@@ -158,7 +174,7 @@ func UpdateUserPasswordHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		http.Error(w, `{"error":"failed to secure password"}`, http.StatusInternalServerError)
 		return
