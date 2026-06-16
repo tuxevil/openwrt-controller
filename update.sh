@@ -8,12 +8,12 @@ fuser -k 3000/tcp 2>/dev/null || true
 sleep 1
 
 echo "[*] Reconstruyendo frontend (Vue/Vite)..."
-cd /root/openwrt-controller/web
+cd ${OPENWRT_CONTROLLER_DIR:-/opt/openwrt-controller}/web
 npm install
 npm run build
 
 echo "[*] Reconstruyendo backend (Go)..."
-cd /root/openwrt-controller
+cd ${OPENWRT_CONTROLLER_DIR:-/opt/openwrt-controller}
 go build -o openwrt-controller ./cmd/openwrt-controller/main.go
 
 echo "[*] Reiniciando el servicio openwrt-controller..."

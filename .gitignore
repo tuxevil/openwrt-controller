@@ -1,13 +1,88 @@
+# ── Build artifacts / binaries (NUNCA committear) ────────────────────────────
+main
+openwrt-controller
+scratch-deploy
+test_bin
+tmp_test
+*.exe
+*.bin
+*.so
+*.dylib
+*.o
+*.a
+
+# ── Node ─────────────────────────────────────────────────────────────────────
+node_modules/
+**/node_modules/
+web/dist/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Go ───────────────────────────────────────────────────────────────────────
+vendor/
+*.test
+*.prof
+
+# ── Logs y estado de runtime ─────────────────────────────────────────────────
+*.log
+backend.log
+state.json
+debug_topo.out
+dump_*.json
+
+# ── Secretos y certificados ──────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
 certs/
-skills/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_controller*
+known_hosts
+
+# ── Documentación interna / contexto privado ─────────────────────────────────
 AGENTS.md
-docs/
-.ai-rules.md
 NEURAL_CONTEXT.md
 NEXT_STAGE.md
-.env
+.ai-rules.md
+docs/internal/
 
-# Beads / Dolt files (added by bd init)
+# ── Scripts de debug temporales ──────────────────────────────────────────────
+adopt.go
+check.go
+check2.go
+check_status.go
+get_site.go
+debug_topo.go
+inspect_*.go
+scratch_debug/
+fix_*.py
+test_fetch.sh
+
+# ── Editores / IDE ───────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*~
+
+# ── Skills (privados) ────────────────────────────────────────────────────────
+skills/
+
+# ── Beads / Dolt ─────────────────────────────────────────────────────────────
 .dolt/
 *.db
 .beads-credential-key
+.beads/issues.jsonl
+.beads/events.jsonl
+
+# ── Misc ─────────────────────────────────────────────────────────────────────
+get-docker.sh

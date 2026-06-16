@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log"
 	"context"
 	"fmt"
 	"os"
@@ -180,8 +181,12 @@ func GetTenantSchema(r *http.Request) string {
 }
 
 func getJWTSecret() string {
-	if s := os.Getenv("JWT_SECRET"); s != "" {
-		return s
+	s := os.Getenv("JWT_SECRET")
+	if s == "" {
+		log.Fatal("JWT_SECRET environment variable is required and must not be empty")
 	}
-	return "REPLACE_WITH_JWT_SECRET"
+	if len(s) < 32 {
+		log.Fatal("JWT_SECRET must be at least 32 characters")
+	}
+	return s
 }

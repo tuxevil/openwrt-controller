@@ -3,7 +3,7 @@
 # === CONFIGURACIÓN ===
 # LLAVE DE SITIO (Obtenida del Dashboard -> Settings)
 SITE_KEY="TU_API_KEY_AQUI"
-CONTROLLER_IP="10.0.0.6"
+CONTROLLER_IP="REPLACE_WITH_CONTROLLER_IP"
 PORT="3000"
 BASE_URL="http://$CONTROLLER_IP:$PORT/api"
 TELEMETRY_URL="$BASE_URL/telemetry"
@@ -37,7 +37,7 @@ while true; do
     # 0. CHECK AUTO-UPDATE
     # Reconstruct default config before hashing to match the raw database version_hash
     AGENT_VERSION=$(sed -e 's|^SITE_KEY=.*|SITE_KEY="TU_API_KEY_AQUI"|' \
-                        -e 's|^CONTROLLER_IP=.*|CONTROLLER_IP="10.0.0.6"|' \
+                        -e 's|^CONTROLLER_IP=.*|CONTROLLER_IP="REPLACE_WITH_CONTROLLER_IP"|' \
                         -e 's|^PORT=.*|PORT="3000"|' "$0" | sha256sum | awk '{print $1}')
     LATEST_JSON=$(curl -m 5 -s -X GET -H "X-Site-Key: $SITE_KEY" "$BASE_URL/agent/latest")
     

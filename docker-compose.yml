@@ -7,12 +7,12 @@ services:
     ports:
       - "3000:3000"
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@172.18.0.3:5432/openwrthub
+      - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/openwrthub
       - INFLUX_URL=http://172.18.0.2:8086
       - INFLUX_ORG=openwrthub
       - INFLUX_BUCKET=telemetry
-      - INFLUX_TOKEN=REPLACE_WITH_INFLUX_TOKEN
-      - JWT_SECRET=REPLACE_WITH_JWT_SECRET
+      - INFLUX_TOKEN=${INFLUX_TOKEN:?INFLUX_TOKEN required}
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET required, min 32 chars}
     depends_on:
       - postgres
       - influxdb
@@ -23,7 +23,7 @@ services:
     container_name: openwrt_postgres
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
       POSTGRES_DB: openwrthub
     ports:
       - "5432:5432"
@@ -39,10 +39,10 @@ services:
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
-      DOCKER_INFLUXDB_INIT_PASSWORD: REPLACE_WITH_INFLUX_PASSWORD
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:?INFLUXDB_PASSWORD required}
       DOCKER_INFLUXDB_INIT_ORG: openwrthub
       DOCKER_INFLUXDB_INIT_BUCKET: telemetry
-      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: REPLACE_WITH_INFLUX_TOKEN
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:?INFLUX_TOKEN required}
     volumes:
       - influxdata:/var/lib/influxdb2
     restart: unless-stopped
