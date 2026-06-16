@@ -63,7 +63,15 @@ while true; do
                     cp "$0" "$0.old"
                     mv "$0.tmp" "$0"
                     chmod +x "$0"
-                    exit 0
+                    logger -t agent "Agent updated. Reloading in-process to preserve procd respawn budget."
+                    # Use exec to re-exec the new script in the same PID.
+                    # procd never sees a process exit, so the crash counter is preserved
+                    # across self-updates (5 clean exits within 1h would otherwise mark
+                    # the instance as crashed and procd would stop respawning it).
+                    exec /bin/sh "$0" || {
+                        logger -t agent "exec failed; falling back to exit for procd restart"
+                        exit 0
+                    }
                 else
                     logger -t agent "Hash mismatch on new agent. Aborting update."
                     rm -f "$0.tmp"
@@ -311,13 +319,15 @@ EOF
     else
         T_FAILS=$((T_FAILS+1))
         logger -t agent "Telemetry failed ($HTTP_CODE). Fail count: $T_FAILS"
-        
+
         if [ $T_FAILS -ge 3 ]; then
             logger -t agent "Telemetry failed 3 times. Initiating rollback."
             if [ -f "$0.old" ]; then
                 mv "$0.old" "$0"
-                # Exiting triggers procd automatic restart
-                exit 1
+                # Re-exec the rolled-back script in-place so procd does not count
+                # this as a crash. Belt-and-suspenders: the init.d/agent script
+                # uses generous respawn thresholds too.
+                exec /bin/sh "$0" || exit 1
             fi
         fi
     fi
