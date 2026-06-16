@@ -46,11 +46,23 @@ Before exposing this controller to the public internet:
 
 - [ ] Generate a strong `JWT_SECRET` (≥ 32 chars, `openssl rand -base64 48`)
 - [ ] Change every default password in `.env` (Postgres, InfluxDB, Telegram)
+- [ ] Encrypt the Telegram bot token: set `TELEGRAM_ENCRYPTION_KEY` (any passphrase; used to derive AES-256-GCM key for at-rest encryption of the token in `platform_settings`)
 - [ ] Bind PostgreSQL and InfluxDB to `127.0.0.1` instead of `0.0.0.0` in
       `docker-compose.yml` if you do not need remote access
+- [ ] Set `REQUIRE_TLS=true` and provide `--tls-cert`/`--tls-key` so the
+      controller refuses to start on plain HTTP
 - [ ] Put the controller behind TLS (Traefik / Caddy / nginx reverse proxy)
+- [ ] Set `WS_ALLOWED_ORIGINS=<your-domain>` to restrict WebSocket origin
+      (default: reject all). WebSockets now use single-use ticket auth
+      (`POST /api/ws-ticket` → `?ticket=<id>`) — JWTs no longer appear
+      in URLs or access logs.
+- [ ] Set `ALLOW_LEGACY_PROVISION=false` once all OpenWrt agents have been
+      updated to send the `X-Device-Token` header (prevents config leaks)
 - [ ] Rotate `api_key` of every site after first boot (UI → Site Settings →
       Rotate Key, or `POST /api/sites/{id}/rotate-key`)
+- [ ] Verify the controller SSH private key (`certs/id_controller`) has
+      mode `0600` — the new KeyStore refuses to load wider permissions
+      unless `CONTROLLER_SSH_ALLOW_GROUP_READ=1` is set
 - [ ] Regenerate `certs/id_controller` (Ed25519) and push the new public key
       to every adopted OpenWrt device
 - [ ] Enable a firewall on the host (`ufw`, `nftables`) and only expose

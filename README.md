@@ -5,8 +5,9 @@
 [![Go Version](https://img.shields.io/badge/go-1.25-00ADD8.svg?logo=go&logoColor=white)](go.mod)
 [![Vue 3](https://img.shields.io/badge/vue-3.5-35495e.svg?logo=vuedotjs&logoColor=%234FC08D)](web/package.json)
 [![OpenWrt](https://img.shields.io/badge/OpenWrt-25.x-1B828C.svg?logo=openwrt&logoColor=white)](https://openwrt.org/)
+[![Audit](https://img.shields.io/badge/audit-2026--06:57_issues_resolved-00ff41.svg)](https://github.com/tuxevil/openwrt-controller/security)
 
-An industrial-grade, open-source fleet controller for OpenWrt devices — a libre alternative to TP-Link Omada, Ubiquiti UniFi, and Cisco Meraki.
+**V3.0 — Iron Fortress** (post-audit). An industrial-grade, open-source fleet controller for OpenWrt devices — a libre alternative to TP-Link Omada, Ubiquiti UniFi, and Cisco Meraki.
 
 A single Go binary + Vue dashboard orchestrates dozens or hundreds of OpenWrt routers/APs over SSH, WireGuard, and signed HTTPS, with multi-tenant isolation, zero-touch provisioning, automated VPN mesh, FreeRADIUS sidecar, and AI-driven anomaly detection.
 
