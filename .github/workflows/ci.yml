@@ -6,10 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+# Minimal default permissions; jobs that need more (e.g. to publish
+# coverage or push images) opt back in.
 permissions:
   contents: read
 
+# Cancel in-progress runs of the same branch when a new commit lands.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # ────────────────────────────────────────────────────────────────────
+  # Go backend: build, test (with race), vet, coverage, golangci-lint.
+  # ────────────────────────────────────────────────────────────────────
   backend:
     name: Go Backend
     runs-on: ubuntu-latest
@@ -24,15 +34,62 @@ jobs:
       - name: Verify modules
         run: go mod verify
 
-      - name: Vet
-        run: go vet ./cmd/openwrt-controller/... ./internal/...
+      # Static analysis. Catches the "go vet was disabled" issue from
+      # the audit (cmd/test_echo/main.go:16 was broken for a while).
+      - name: go vet (all packages)
+        run: go vet ./...
 
       - name: Build
-        run: go build -ldflags="-w -s" -o /tmp/openwrt-controller ./cmd/openwrt-controller
+        run: |
+          go build -ldflags="-w -s" -o /tmp/openwrt-controller ./cmd/openwrt-controller
+          # All other cmd/* must also compile (test_echo, scratch, etc.).
+          for pkg in $(go list ./cmd/...); do
+            go build -o /dev/null "$pkg"
+          done
 
-      - name: Test
-        run: go test -race -count=1 ./internal/... || true
+      # Real test step. The previous CI used `|| true` which silently
+      # swallowed test failures — fixed in this commit.
+      - name: Test (with -race)
+        run: go test -race -count=1 -timeout=60s ./...
 
+      - name: Coverage
+        run: |
+          go test -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out | tail -1
+          # Fail the build if coverage dropped below the historical floor.
+          # Threshold: 5% (current state). Bump as coverage grows.
+          COV=$(go tool cover -func=coverage.out | awk '/total:/ {print substr($3, 1, length($3)-1)}')
+          echo "Total coverage: ${COV}%"
+          awk -v c="$COV" 'BEGIN { exit !(c+0 >= 5.0) }' \
+            || (echo "::error::Coverage ${COV}% below 5% floor"; exit 1)
+
+      - name: Upload coverage artifact
+        if: matrix.coverage || github.event_name == 'push'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.out
+          retention-days: 7
+
+      # golangci-lint — runs the curated linter set we configured in
+      # .golangci.yml (errcheck, gosec, staticcheck, etc.).
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61.0
+          args: --timeout=5m
+
+      # govulncheck: scan for known CVEs in the Go module graph.
+      # We use the official Go tool — no third-party DB.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  # ────────────────────────────────────────────────────────────────────
+  # Vue frontend: install, lint, build. Lint is opt-in until we wire
+  # an eslint config; for now we run the Vite build as a smoke test.
+  # ────────────────────────────────────────────────────────────────────
   frontend:
     name: Vue Frontend
     runs-on: ubuntu-latest
@@ -51,9 +108,33 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Type-check Vue SFCs and JS. vue-tsc is the canonical way; the
+      # project is currently JS-only so this is a no-op until a tsconfig
+      # lands.
+      - name: Type-check
+        run: |
+          if [ -f tsconfig.json ]; then
+            npx vue-tsc --noEmit
+          else
+            echo "No tsconfig.json; skipping type-check"
+          fi
+        continue-on-error: true
+
       - name: Build
         run: npm run build
 
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 7
+          if-no-files-found: ignore
+
+  # ────────────────────────────────────────────────────────────────────
+  # Docker image build (no push by default; tag-and-push lives in the
+  # release workflow).
+  # ────────────────────────────────────────────────────────────────────
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
@@ -71,3 +152,20 @@ jobs:
           tags: nerve-center:ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ────────────────────────────────────────────────────────────────────
+  # Secret scanner. Runs gitleaks against the full git history. Cheap
+  # insurance against accidentally committed API keys / JWT secrets.
+  # ────────────────────────────────────────────────────────────────────
+  gitleaks:
+    name: Secret Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect hardcoded secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
