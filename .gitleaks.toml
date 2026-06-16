@@ -1,12 +1,8 @@
 # Gitleaks configuration for openwrt-controller.
-# The full git history is scanned on every push; this config
-# excludes known false positives (test secrets in _test.go files,
-# placeholder env vars in .env.example, demo/test comments).
-#
-# See https://github.com/gitleaks/gitleaks for reference.
+# Auto-detected by gitleaks-action@v2 from the repo root.
 
 [allowlist]
-description = "Exclude test files and placeholder values from secret scanning"
+description = "Exclude test files, generated files, and known false positives"
 stopwords = [
   "GENERATE_STRONG_PASSWORD",
   "postgres:postgres",
@@ -20,20 +16,7 @@ paths = [
   '''\.github/workflows/''',
   '''go\.sum$''',
   '''package-lock\.json$''',
-  '''docs/.*\.md$''',
 ]
 
-# Override the generic-api-key rule to also check our stopwords.
-# The regex is the built-in default; we only add the allowlist.
-[[rules]]
-id = "generic-api-key"
-regex = '''(?i)(?:key|api|token|secret|client|passw(or)?d|auth|access)(?:[0-9a-z\-_\t .]{0,20})(?:\s|[\r\n]|%0A|%0D){0,3}(?:=|>|:=|\|\|:|<=|=>|:)(?:'|\"|\s|=|\x60){0,5}([0-9a-z\-_.=+/\x60]{16,})(?:['|\"|\n|\r|\s|\x60|;]|$)'''
-[allowlist]
-description = "Allow test API keys in comments and documentation"
-stopwords = [
-  "GENERATE_STRONG_PASSWORD",
-  "postgres:postgres",
-  "jwt_secret_value",
-  "test-key",
-  "telegraf-test",
-]
+# The built-in generic-api-key rule is kept; stopwords above apply
+# to it automatically. No rule override needed.
