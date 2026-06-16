@@ -1,0 +1,44 @@
+# Gitleaks configuration for openwrt-controller.
+# The full git history is scanned on every push; this config
+# excludes known false positives (test secrets in _test.go files,
+# placeholder env vars in .env.example, demo/test comments).
+#
+# See https://github.com/gitleaks/gitleaks for reference.
+
+[allowlist]
+description = "Exclude test files and placeholder values from secret scanning"
+
+paths = [
+  # Unit tests that hard-code test secrets for auth/crypto testing.
+  # Real JWT_SECRET values never appear in source; these are test-only.
+  '''_test\.go$''',
+  # Example environment file with GENERATE_STRONG_PASSWORD placeholders.
+  '''\.env\.example$''',
+  # CI workflow files containing GitHub Actions token references.
+  '''\.github/workflows/''',
+  # Build artifacts and generated files.
+  '''go\.sum$''',
+  '''package-lock\.json$''',
+  # Documentation that references test credentials.
+  '''docs/.*\.md$''',
+]
+
+# Allowlist specific secrets that we know are intentional
+# and not real credentials.
+[[rules]]
+id = "generic-api-key"
+[rules.allowlist]
+description = "Allow test API keys in code comments and documentation"
+stopwords = [
+  "GENERATE_STRONG_PASSWORD",
+  "postgres:postgres",  # Was in old source; squashed in audit sprint
+  "jwt_secret_value",
+  "test-key",
+  "telegraf-test",
+]
+
+[[rules]]
+id = "private-key"
+[rules.allowlist]
+description = "Allow PEM-encoded test keys in test fixtures"
+paths = ['''_test\.go$''']

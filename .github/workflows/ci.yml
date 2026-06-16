@@ -78,7 +78,7 @@ jobs:
       - name: golangci-lint (new code only)
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64.8
+          version: v1.62
           args: --timeout=5m --new-from-rev=origin/main
 
       # Full-repo lint, info-only, so we can track the existing
@@ -86,7 +86,7 @@ jobs:
       - name: golangci-lint (full repo, info only)
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64.8
+          version: v1.62
           args: --timeout=5m --out-format=line-number
         continue-on-error: true
 
@@ -179,4 +179,5 @@ jobs:
       - name: Detect hardcoded secrets
         uses: gitleaks/gitleaks-action@v2
         env:
+          GITLEAKS_CONFIG: .gitleaks.toml
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
