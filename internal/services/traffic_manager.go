@@ -4,24 +4,11 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
-	"os"
 
 	"golang.org/x/crypto/ssh"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/orchestrator"
 )
-
-var privateKey ssh.Signer
-
-func init() {
-	keyBytes, err := os.ReadFile("certs/id_controller")
-	if err == nil {
-		signer, err := ssh.ParsePrivateKey(keyBytes)
-		if err == nil {
-			privateKey = signer
-		}
-	}
-}
 
 // LimitBandwidth sends limit configuration over SSH
 func LimitBandwidth(deviceID, mac string, download, upload int) error {
@@ -31,14 +18,15 @@ func LimitBandwidth(deviceID, mac string, download, upload int) error {
 		return fmt.Errorf("device ip not found")
 	}
 
-	if privateKey == nil {
-		return fmt.Errorf("ssh private key not loaded")
+	signer, err := orchestrator.GetKeyStore().Get()
+	if err != nil {
+		return err
 	}
 
 	config := &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(privateKey),
+			ssh.PublicKeys(signer),
 		},
 		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 	}

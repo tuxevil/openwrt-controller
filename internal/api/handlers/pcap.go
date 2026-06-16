@@ -4,11 +4,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"openwrt-controller/internal/orchestrator"
 )
+
+// interfaceNameRegex constrains tcpdump's -i argument to a sane Linux
+// network-interface name. The previous code interpolated user input
+// directly into the SSH command, which permitted trivial shell injection.
+var interfaceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,15}$`)
 
 func CapturePacketHandler(w http.ResponseWriter, r *http.Request) {
 	schema := r.Context().Value("schema").(string)
@@ -19,12 +26,16 @@ func CapturePacketHandler(w http.ResponseWriter, r *http.Request) {
 		PacketCount int    `json:"packet_count"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if req.Interface == "" {
 		req.Interface = "br-lan"
+	}
+	if !interfaceNameRegex.MatchString(req.Interface) {
+		http.Error(w, "invalid interface name", http.StatusBadRequest)
+		return
 	}
 	if req.PacketCount <= 0 || req.PacketCount > 20000 {
 		req.PacketCount = 5000 // default safe limit
@@ -65,12 +76,18 @@ func RunIperfHandler(w http.ResponseWriter, r *http.Request) {
 		TimeSecs int    `json:"time_secs"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		http.Error(w, "invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	if req.TargetIP == "" {
 		http.Error(w, "target_ip is required", http.StatusBadRequest)
+		return
+	}
+	// iperf3 is invoked with -c <ip>; we refuse anything that isn't a
+	// literal IPv4/IPv6 address to prevent shell injection via the body.
+	if ip := net.ParseIP(req.TargetIP); ip == nil {
+		http.Error(w, "target_ip must be a valid IP address", http.StatusBadRequest)
 		return
 	}
 	if req.TimeSecs <= 0 || req.TimeSecs > 60 {

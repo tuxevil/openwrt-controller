@@ -65,22 +65,22 @@ func BuildNetworkUCI(ifaces []NetworkInterface) string {
 	for _, i := range ifaces {
 		n := i.Name
 		sb.WriteString(fmt.Sprintf("uci set network.%s=interface\n", n))
-		sb.WriteString(fmt.Sprintf("uci set network.%s.proto='%s'\n", n, i.Proto))
+		sb.WriteString(fmt.Sprintf("uci set network.%s.proto='%s'\n", n, escapeVal(i.Proto)))
 		if i.Device != "" {
-			sb.WriteString(fmt.Sprintf("uci set network.%s.device='%s'\n", n, i.Device))
+			sb.WriteString(fmt.Sprintf("uci set network.%s.device='%s'\n", n, escapeVal(i.Device)))
 		}
 		if i.VlanID > 0 {
 			sb.WriteString(fmt.Sprintf("uci set network.%s.vid='%d'\n", n, i.VlanID))
 		}
 		if i.Proto == "static" {
 			if i.IPAddr != "" {
-				sb.WriteString(fmt.Sprintf("uci set network.%s.ipaddr='%s'\n", n, i.IPAddr))
+				sb.WriteString(fmt.Sprintf("uci set network.%s.ipaddr='%s'\n", n, escapeVal(i.IPAddr)))
 			}
 			if i.Netmask != "" {
-				sb.WriteString(fmt.Sprintf("uci set network.%s.netmask='%s'\n", n, i.Netmask))
+				sb.WriteString(fmt.Sprintf("uci set network.%s.netmask='%s'\n", n, escapeVal(i.Netmask)))
 			}
 			if i.Gateway != "" {
-				sb.WriteString(fmt.Sprintf("uci set network.%s.gateway='%s'\n", n, i.Gateway))
+				sb.WriteString(fmt.Sprintf("uci set network.%s.gateway='%s'\n", n, escapeVal(i.Gateway)))
 			}
 		}
 	}
@@ -94,7 +94,7 @@ func BuildDHCPUCI(dhcpList []DHCPInterface) string {
 	for _, d := range dhcpList {
 		n := d.Interface
 		sb.WriteString(fmt.Sprintf("uci set dhcp.%s=dhcp\n", n))
-		sb.WriteString(fmt.Sprintf("uci set dhcp.%s.interface='%s'\n", n, n))
+		sb.WriteString(fmt.Sprintf("uci set dhcp.%s.interface='%s'\n", n, escapeVal(n)))
 		if !d.Enabled {
 			sb.WriteString(fmt.Sprintf("uci set dhcp.%s.ignore='1'\n", n))
 		} else {
@@ -102,22 +102,22 @@ func BuildDHCPUCI(dhcpList []DHCPInterface) string {
 			sb.WriteString(fmt.Sprintf("uci set dhcp.%s.start='%d'\n", n, d.Start))
 			sb.WriteString(fmt.Sprintf("uci set dhcp.%s.limit='%d'\n", n, d.Limit))
 			if d.LeaseTime != "" {
-				sb.WriteString(fmt.Sprintf("uci set dhcp.%s.leasetime='%s'\n", n, d.LeaseTime))
+				sb.WriteString(fmt.Sprintf("uci set dhcp.%s.leasetime='%s'\n", n, escapeVal(d.LeaseTime)))
 			}
 		}
 		// Upstream DNS (dnsmasq server list)
 		if len(d.UpstreamDNS) > 0 {
 			sb.WriteString("uci -q delete dhcp.@dnsmasq[0].server\n")
 			for _, dns := range d.UpstreamDNS {
-				sb.WriteString(fmt.Sprintf("uci add_list dhcp.@dnsmasq[0].server='%s'\n", dns))
+				sb.WriteString(fmt.Sprintf("uci add_list dhcp.@dnsmasq[0].server='%s'\n", escapeVal(dns)))
 			}
 		}
 		// Static leases
 		for _, sl := range d.StaticLeases {
 			sb.WriteString("uci add dhcp host\n")
-			sb.WriteString(fmt.Sprintf("uci set dhcp.@host[-1].name='%s'\n", sl.Name))
-			sb.WriteString(fmt.Sprintf("uci set dhcp.@host[-1].mac='%s'\n", sl.MAC))
-			sb.WriteString(fmt.Sprintf("uci set dhcp.@host[-1].ip='%s'\n", sl.IP))
+			sb.WriteString(fmt.Sprintf("uci set dhcp.@host[-1].name='%s'\n", escapeVal(sl.Name)))
+			sb.WriteString(fmt.Sprintf("uci set dhcp.@host[-1].mac='%s'\n", escapeVal(sl.MAC)))
+			sb.WriteString(fmt.Sprintf("uci set dhcp.@host[-1].ip='%s'\n", escapeVal(sl.IP)))
 		}
 	}
 	sb.WriteString("uci commit dhcp\n")
@@ -129,12 +129,12 @@ func BuildFirewallUCI(rules []PortForwardRule) string {
 	var sb strings.Builder
 	for _, r := range rules {
 		sb.WriteString("uci add firewall redirect\n")
-		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].name='%s'\n", r.Name))
+		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].name='%s'\n", escapeVal(r.Name)))
 		sb.WriteString("uci set firewall.@redirect[-1].target='DNAT'\n")
 		sb.WriteString("uci set firewall.@redirect[-1].src='wan'\n")
 		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].src_dport='%d'\n", r.SrcPort))
-		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].proto='%s'\n", r.Proto))
-		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].dest_ip='%s'\n", r.DestIP))
+		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].proto='%s'\n", escapeVal(r.Proto)))
+		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].dest_ip='%s'\n", escapeVal(r.DestIP)))
 		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].dest_port='%d'\n", r.DestPort))
 		if !r.Enabled {
 			sb.WriteString("uci set firewall.@redirect[-1].enabled='0'\n")

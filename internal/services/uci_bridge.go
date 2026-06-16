@@ -19,19 +19,8 @@ type UciCommand struct {
 	Value   string `json:"value"`   // value to set (empty for delete)
 }
 
-// ServiceRestartMap maps UCI config namespaces to their init.d restart commands.
-// Ref: docs/uci/uci.txt — "uci commit" then "/etc/init.d/<service> restart"
-var ServiceRestartMap = map[string]string{
-	"network":   "/etc/init.d/network restart",
-	"wireless":  "wifi",
-	"dhcp":      "/etc/init.d/dnsmasq restart",
-	"firewall":  "/etc/init.d/firewall restart",
-	"system":    "/etc/init.d/system restart",
-	"dropbear":  "/etc/init.d/dropbear restart",
-	"uhttpd":    "/etc/init.d/uhttpd restart",
-	"openvpn":   "/etc/init.d/openvpn restart",
-	"hostblock": "/etc/init.d/hostblock restart",
-}
+// ServiceRestartMap is defined in uci_restart_map.go to keep a single
+// source of truth shared with api/handlers/uci_ops.go.
 
 // SetOption generates: uci set <config>.<section>.<option>='<value>'
 // If option is empty, creates/types a section: uci set <config>.<section>=<value>

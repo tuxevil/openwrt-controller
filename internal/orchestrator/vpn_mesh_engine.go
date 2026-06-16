@@ -1,7 +1,9 @@
 package orchestrator
 
 import (
+	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"openwrt-controller/internal/database"
@@ -88,7 +90,7 @@ func generateSpokeUCI(mesh models.VPNMesh, hub models.VPNMeshNode, me models.VPN
 	return sb.String()
 }
 
-func SyncVPNMesh(schema string, meshID string) error {
+func SyncVPNMesh(ctx context.Context, schema string, meshID string) error {
 	meshes, err := database.GetVPNMeshes(schema)
 	if err != nil {
 		return err
@@ -123,10 +125,10 @@ func SyncVPNMesh(schema string, meshID string) error {
 		return fmt.Errorf("hub node not found in mesh")
 	}
 
-	// We need the Hub's public IP. We assume it's stored or we can query it.
-	// For simplicity, we assume we fetch it via ExecuteCommand "curl ifconfig.me" or it's in DB.
-	// Placeholder for hubEndpoint
-	hubEndpoint := "TODO_HUB_PUBLIC_IP" 
+	hubEndpoint, err := resolveHubPublicEndpoint(ctx, schema, hubNode)
+	if err != nil {
+		return fmt.Errorf("failed to resolve hub public endpoint: %w", err)
+	}
 
 	for _, n := range nodes {
 		var script string
@@ -143,4 +145,31 @@ func SyncVPNMesh(schema string, meshID string) error {
 	}
 
 	return nil
+}
+
+// endpointRegexp matches an IPv4 literal optionally followed by ":port".
+// It rejects hostnames, multi-octet groups, port 0, and ports >= 65536.
+// The groups are deliberately restrictive so user-controlled input can't
+// smuggle shell metacharacters into downstream SSH / UCI scripts.
+var endpointRegexp = regexp.MustCompile(`^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(:([1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$`)
+
+func resolveHubPublicEndpoint(ctx context.Context, schema string, hub models.VPNMeshNode) (string, error) {
+	if hub.PublicEndpoint != "" {
+		if !endpointRegexp.MatchString(hub.PublicEndpoint) {
+			return "", fmt.Errorf("hub public_endpoint %q is not a valid IPv4[:port]", hub.PublicEndpoint)
+		}
+		return hub.PublicEndpoint, nil
+	}
+
+	_ = ctx
+
+	out, err := ExecuteCommandWithOutput(schema, hub.DeviceID, "curl -s --max-time 5 https://ifconfig.me")
+	if err != nil {
+		return "", fmt.Errorf("ssh to hub failed while resolving public IP: %w", err)
+	}
+	candidate := strings.TrimSpace(out)
+	if !endpointRegexp.MatchString(candidate) {
+		return "", fmt.Errorf("hub device returned non-IP output for public endpoint: %q", candidate)
+	}
+	return candidate, nil
 }

@@ -5,16 +5,15 @@ import (
 	"bytes"
 	"fmt"
 	"log"
-		"os"
 	"strings"
 	"sync"
 	"time"
 
 	"openwrt-controller/internal/database"
+	"openwrt-controller/internal/orchestrator"
 
 	"golang.org/x/crypto/ssh"
-	"openwrt-controller/internal/orchestrator"
-	)
+)
 
 type DeviceResult struct {
 	DeviceID string `json:"device_id"`
@@ -23,24 +22,16 @@ type DeviceResult struct {
 }
 
 func RunMassCommand(ctx context.Context, siteID, command string) []DeviceResult {
-	// Load controller private key
-	keyPath := "./certs/id_controller"
-	keyBytes, err := os.ReadFile(keyPath)
+	signer, err := orchestrator.GetKeyStore().Get()
 	if err != nil {
-		log.Printf("[BATCH] Cannot read private key: %v", err)
-		return []DeviceResult{{DeviceID: "CONTROLLER", Error: "No SSH private key found at " + keyPath}}
-	}
-
-	signer, err := ssh.ParsePrivateKey(keyBytes)
-	if err != nil {
-		log.Printf("[BATCH] Cannot parse private key: %v", err)
-		return []DeviceResult{{DeviceID: "CONTROLLER", Error: "Invalid private key format"}}
+		log.Printf("[BATCH] cannot load SSH key: %v", err)
+		return []DeviceResult{{DeviceID: "CONTROLLER", Error: err.Error()}}
 	}
 
 	// Fetch all devices in site with their last known IP
 	rows, err := database.Tx(ctx).Query(`
 		SELECT id, COALESCE(last_ip, '') as ip
-		FROM devices 
+		FROM devices
 		WHERE site_id = $1 AND last_ip IS NOT NULL AND last_ip != ''
 	`, siteID)
 	if err != nil {
@@ -94,8 +85,6 @@ func runSSHCommand(deviceID, ip, command string, signer ssh.Signer) DeviceResult
 	addr := ip + ":22"
 	client, err := ssh.Dial("tcp", addr, config)
 	if err != nil {
-		// Try common fallback port
-		addr = ip + ":22"
 		return DeviceResult{
 			DeviceID: deviceID,
 			Error:    fmt.Sprintf("SSH dial failed: %v", err),
@@ -134,8 +123,7 @@ func runSSHCommand(deviceID, ip, command string, signer ssh.Signer) DeviceResult
 	}
 }
 
-var (
-	knownHostsPath = "./certs/known_hosts"
-	knownHostsMu   sync.Mutex
-)
+// The old `knownHostsPath` / `knownHostsMu` globals were removed: the
+// canonical TOFU + known_hosts store now lives in
+// orchestrator.HostKeyManager (see internal/orchestrator/hostkey.go).
 

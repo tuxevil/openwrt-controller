@@ -1,20 +1,24 @@
 package services
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/pem"
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"time"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/orchestrator"
 
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/sync/semaphore"
 )
 
-func CreateBackup(schema, deviceID string) error {
+func CreateBackup(ctx context.Context, schema, deviceID string) error {
 	// Obtenemos la topología/IP más reciente
 	var ip string
 	err := database.DB.QueryRow(fmt.Sprintf(`SELECT COALESCE(last_ip, '') FROM %s.devices WHERE id = $1`, schema), deviceID).Scan(&ip)
@@ -28,11 +32,7 @@ func CreateBackup(schema, deviceID string) error {
 
 
 	// Obtenemos la llave asimétrica para auth
-	keyBytes, err := loadControllerPrivateKey()
-	if err != nil {
-		return err
-	}
-	signer, err := ssh.ParsePrivateKey(keyBytes)
+	signer, err := orchestrator.GetKeyStore().Get()
 	if err != nil {
 		return err
 	}
@@ -80,8 +80,39 @@ func CreateBackup(schema, deviceID string) error {
 }
 
 func loadControllerPrivateKey() ([]byte, error) {
-	return os.ReadFile("./certs/id_controller")
+	// Deprecated — the canonical key loader is orchestrator.LoadKeyStore.
+	// Kept as a thin shim for any external caller that still imports it.
+	ks := orchestrator.GetKeyStore()
+	if ks == nil {
+		return nil, fmt.Errorf("controller SSH key not loaded")
+	}
+	signer, err := ks.Get()
+	if err != nil {
+		return nil, err
+	}
+	// MarshalPrivateKey returns a *pem.Block; encode it to PEM bytes for
+	// backwards compatibility with the previous byte-slice signature.
+	pemBlock, err := ssh.MarshalPrivateKey(signer, "")
+	if err != nil {
+		return nil, fmt.Errorf("marshal private key: %w", err)
+	}
+	return pem.EncodeToMemory(pemBlock), nil
 }
+
+var _ = ssh.AuthMethod(nil) // keep ssh import in use while migrating
+
+// vaultBackupLimiter caps the number of concurrent sysupgrade backups so a
+// large fleet does not exhaust file descriptors or saturate the network.
+// Defaults to 10; override with VAULT_BACKUP_CONCURRENCY.
+var vaultBackupLimiter = func() *semaphore.Weighted {
+	n := int64(10)
+	if raw := os.Getenv("VAULT_BACKUP_CONCURRENCY"); raw != "" {
+		if v, err := strconv.Atoi(raw); err == nil && v > 0 {
+			n = int64(v)
+		}
+	}
+	return semaphore.NewWeighted(n)
+}()
 
 func StartVaultCron() {
 	ticker := time.NewTicker(24 * time.Hour)
@@ -108,7 +139,12 @@ func StartVaultCron() {
 				rows.Close()
 
 				for _, dev := range devices {
-					go CreateBackup(schema, dev) // Parallel backup map-reduce
+					dev := dev
+					go func() {
+						_ = vaultBackupLimiter.Acquire(context.Background(), 1)
+						defer vaultBackupLimiter.Release(1)
+						_ = CreateBackup(context.Background(), schema, dev)
+					}()
 				}
 			}
 		}

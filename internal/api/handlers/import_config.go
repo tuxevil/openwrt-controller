@@ -5,8 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"log"
+	"net/http"
+	"strconv"
 	"strings"
 
 	"openwrt-controller/internal/database"
@@ -255,14 +256,12 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	for _, sec := range dhcpSecs {
 		if sec.ID == "lan" && sec.Type == "dhcp" {
 			if sVal, ok := sec.Options["start"].(string); ok {
-				var s int
-				if _, err := fmt.Sscanf(sVal, "%d", &s); err == nil {
+				if s, err := strconv.Atoi(sVal); err == nil {
 					dhcpStart = s
 				}
 			}
 			if lVal, ok := sec.Options["limit"].(string); ok {
-				var l int
-				if _, err := fmt.Sscanf(lVal, "%d", &l); err == nil {
+				if l, err := strconv.Atoi(lVal); err == nil {
 					dhcpLimit = l
 				}
 			}
@@ -330,10 +329,14 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 					destIP = dip
 				}
 				if spVal, ok := sec.Options["src_dport"].(string); ok {
-					fmt.Sscanf(spVal, "%d", &srcPort)
+					if p, err := strconv.Atoi(spVal); err == nil {
+						srcPort = p
+					}
 				}
 				if dpVal, ok := sec.Options["dest_port"].(string); ok {
-					fmt.Sscanf(dpVal, "%d", &destPort)
+					if p, err := strconv.Atoi(dpVal); err == nil {
+						destPort = p
+					}
 				}
 				if enVal, ok := sec.Options["enabled"].(string); ok {
 					enabled = (enVal == "1" || enVal == "true")
@@ -385,7 +388,9 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	for _, sec := range dropbearSecs {
 		if sec.Type == "dropbear" {
 			if pVal, ok := sec.Options["Port"].(string); ok {
-				fmt.Sscanf(pVal, "%d", &dropbearPort)
+				if p, err := strconv.Atoi(pVal); err == nil {
+					dropbearPort = p
+				}
 			}
 			if pa, ok := sec.Options["PasswordAuth"].(string); ok {
 				dropbearPasswordAuth = (pa == "1" || pa == "true")

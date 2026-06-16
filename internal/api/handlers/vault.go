@@ -1,16 +1,41 @@
 package handlers
 
 import (
-	"openwrt-controller/internal/api/middleware"
+	"context"
 	"encoding/json"
-	"github.com/google/uuid"
 	"io"
 	"log"
 	"net/http"
+	"path/filepath"
+	"strings"
 
+	"github.com/google/uuid"
+
+	"openwrt-controller/internal/api/middleware"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
+
+// sanitiseFirmwareFilename returns a safe filename for storage. It strips
+// any directory component, rejects control characters, and caps the length
+// to 255 bytes (the practical limit for ext4/NTFS). Returns "" if the
+// input is empty or reduces to nothing after sanitisation.
+func sanitiseFirmwareFilename(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "" || name == "." || name == "/" {
+		return ""
+	}
+	// Reject any non-printable runes / control characters.
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	if len(name) > 255 {
+		name = name[:255]
+	}
+	return name
+}
 
 func CreateBackupTrigger(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
@@ -33,7 +58,7 @@ func CreateBackupTrigger(w http.ResponseWriter, r *http.Request) {
 
 	// Correr asincrónicamente para no bloquear UI
 	go func() {
-		if err := services.CreateBackup(middleware.GetTenantSchema(r), deviceID); err != nil {
+		if err := services.CreateBackup(context.Background(), middleware.GetTenantSchema(r), deviceID); err != nil {
 			log.Printf("[VAULT][ERROR] Backup failed for device %s: %v", deviceID, err)
 		} else {
 			log.Printf("[VAULT][OK] Backup completed for device %s", deviceID)
@@ -130,10 +155,20 @@ func UploadFirmwareHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Sanitise the user-supplied filename before persisting. The previous
+	// version stored handler.Filename verbatim, which would propagate
+	// directory-traversal sequences (../) and control characters to the
+	// download endpoint and to sysupgrade invocations.
+	safeName := sanitiseFirmwareFilename(handler.Filename)
+	if safeName == "" {
+		http.Error(w, "invalid filename", http.StatusBadRequest)
+		return
+	}
+
 	var id uuid.UUID
 	err = database.Tx(r.Context()).QueryRow(`
 		INSERT INTO firmwares (filename, version, data) VALUES ($1, $2, $3) RETURNING id
-	`, handler.Filename, r.FormValue("version"), buf).Scan(&id)
+	`, safeName, r.FormValue("version"), buf).Scan(&id)
 
 	if err != nil {
 		http.Error(w, "db error", http.StatusInternalServerError)

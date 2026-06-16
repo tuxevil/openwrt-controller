@@ -3,22 +3,20 @@ package orchestrator
 import (
 	"database/sql"
 	"fmt"
-	"os"
 
 	"golang.org/x/crypto/ssh"
 	"openwrt-controller/internal/database"
 )
 
-var privateKey ssh.Signer
-
-func init() {
-	keyBytes, err := os.ReadFile("certs/id_controller")
-	if err == nil {
-		signer, err := ssh.ParsePrivateKey(keyBytes)
-		if err == nil {
-			privateKey = signer
-		}
+// getSigner returns the controller's SSH signer from the process-wide
+// KeyStore. It exists so the per-command helpers below don't all have to
+// re-implement the same nil check.
+func getSigner() (ssh.Signer, error) {
+	ks := GetKeyStore()
+	if ks == nil {
+		return nil, fmt.Errorf("controller SSH key not loaded (call orchestrator.LoadKeyStore in main)")
 	}
+	return ks.Get()
 }
 
 // ExecuteCommand runs a bash command over SSH on the target device
@@ -29,14 +27,15 @@ func ExecuteCommand(schema, deviceID string, cmd string) error {
 		return fmt.Errorf("device ip not found")
 	}
 
-	if privateKey == nil {
-		return fmt.Errorf("ssh private key not loaded")
+	signer, err := getSigner()
+	if err != nil {
+		return err
 	}
 
 	config := &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(privateKey),
+			ssh.PublicKeys(signer),
 		},
 		HostKeyCallback: TofuHostKeyCallback,
 	}
@@ -75,14 +74,15 @@ func ExecuteCommandWithOutput(schema, deviceID string, cmd string) (string, erro
 		return "", fmt.Errorf("device ip not found")
 	}
 
-	if privateKey == nil {
-		return "", fmt.Errorf("ssh private key not loaded")
+	signer, err := getSigner()
+	if err != nil {
+		return "", err
 	}
 
 	config := &ssh.ClientConfig{
 		User: "root",
 		Auth: []ssh.AuthMethod{
-			ssh.PublicKeys(privateKey),
+			ssh.PublicKeys(signer),
 		},
 		HostKeyCallback: TofuHostKeyCallback,
 	}

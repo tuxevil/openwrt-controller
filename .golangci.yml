@@ -1,0 +1,44 @@
+# golangci-lint configuration for openwrt-controller.
+# See https://golangci-lint.run/usage/configuration/ for all options.
+run:
+  timeout: 5m
+  tests: true
+  # Skip generated files and the vendor tree.
+  skip-dirs:
+    - vendor
+    - node_modules
+  skip-files:
+    - ".*\\.pb\\.go$"
+    - ".*_mock\\.go$"
+
+linters:
+  # Default + a curated set focused on catching the kind of issues the
+  # audit found: error wrapping, static analysis, security smells,
+  # performance, and style.
+  disable-all: true
+  enable:
+    - errcheck       # Unchecked errors.
+    - gosec          # Security issues (SQL injection, weak crypto, etc.).
+    - govet          # go vet (catches build breakages like test_echo).
+    - ineffassign    # Unused assignments.
+    - staticcheck    # Static analysis: bug, unused, performance.
+    - unused         # Unused variables / functions.
+    - gofmt          # Formatting.
+    - goimports      # Import grouping.
+    - gocritic       # Style + performance nits.
+    - bodyclose      # http.ResponseWriter not closed.
+    - contextcheck   # Missing context propagation.
+    - nilerr         # Returning nil after handling err.
+    - prealloc       # Slice pre-allocation hints.
+
+issues:
+  # We have several "ctx unused" patterns in handler stubs that are
+  # intentional placeholders.
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
+    - path: internal/orchestrator/executor\.go
+      text: "G404"  # Insecure random — not used for crypto.
+  max-issues-per-linter: 50
+  max-same-issues: 10

@@ -126,16 +126,17 @@ type VPNMesh struct {
 }
 
 type VPNMeshNode struct {
-	ID          string    `json:"id"`
-	MeshID      string    `json:"mesh_id"`
-	DeviceID    string    `json:"device_id"`
-	DeviceName  string    `json:"device_name,omitempty"` // For UI
-	Role        string    `json:"role"`
-	PrivateKey  string    `json:"private_key"`
-	PublicKey   string    `json:"public_key"`
-	ListenPort  int       `json:"listen_port"`
-	InternalIP  string    `json:"internal_ip"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID             string    `json:"id"`
+	MeshID         string    `json:"mesh_id"`
+	DeviceID       string    `json:"device_id"`
+	DeviceName     string    `json:"device_name,omitempty"` // For UI
+	Role           string    `json:"role"`
+	PrivateKey     string    `json:"private_key"`
+	PublicKey      string    `json:"public_key"`
+	ListenPort     int       `json:"listen_port"`
+	InternalIP     string    `json:"internal_ip"`
+	PublicEndpoint string    `json:"public_endpoint,omitempty"` // Hub's public IP[:port] (auto-detected if empty)
+	CreatedAt      time.Time `json:"created_at"`
 }
 
 type Webhook struct {
