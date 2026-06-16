@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 
+	"openwrt-controller/internal/authtickets"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/orchestrator"
 )
@@ -96,6 +97,43 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ── Authentication: ticket first, then legacy JWT query string ──
+	// The ticket path is the new flow:
+	//   1. Dashboard POSTs /api/ws-ticket with the JWT in the
+	//      Authorization header.
+	//   2. Dashboard opens this WS with ?ticket=<id>.
+	//   3. We redeem the ticket here (single-use, 30s TTL) and
+	//      never see the JWT in this request.
+	// The legacy JWT query string is kept for backwards compatibility
+	// behind the WS_ALLOW_QUERY_TOKEN env flag.
+	username := "system"
+	ticketID := r.URL.Query().Get("ticket")
+	if ticketID != "" {
+		store := authtickets.GetStore()
+		if store == nil {
+			http.Error(w, "ws ticket store not initialised", http.StatusServiceUnavailable)
+			return
+		}
+		t, err := store.Consume(ticketID)
+		if err != nil {
+			log.Printf("[ssh] ticket reject: %v (from %s)", err, r.RemoteAddr)
+			http.Error(w, "invalid or expired ticket", http.StatusUnauthorized)
+			return
+		}
+		username = t.Username
+	} else if os.Getenv("WS_ALLOW_QUERY_TOKEN") == "true" {
+		// Legacy path: ?token=<jwt>. Off by default.
+		raw := r.URL.Query().Get("token")
+		if raw == "" {
+			http.Error(w, "ticket required (legacy JWT in query string disabled)", http.StatusUnauthorized)
+			return
+		}
+		username = GetUsernameFromReq(r)
+	} else {
+		http.Error(w, "ticket required", http.StatusUnauthorized)
+		return
+	}
+
 	var targetIP sql.NullString
 	err := database.Tx(r.Context()).QueryRow("SELECT last_ip FROM devices WHERE id = $1", deviceID).Scan(&targetIP)
 	if err != nil || !targetIP.Valid || targetIP.String == "" {
@@ -176,7 +214,6 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	// shared across three goroutines without synchronisation; that raced
 	// under -race. The fixed version accumulates into a *sync.Mutex-guarded
 	// buffer.
-	username := GetUsernameFromReq(r)
 	clientIP := r.RemoteAddr
 
 	const maxBufferedInput = 1 << 20 // 1 MiB; anything larger is truncated.

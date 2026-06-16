@@ -16,6 +16,12 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/telemetry", handlers.TelemetryHandler)
 	mux.HandleFunc("GET /api/devices/{device_id}/config", handlers.GetDeviceConfigHandler)
 
+	// ── WebSocket ticket issuance (auth via JWT in Authorization header) ──
+	// The dashboard calls this to mint a short-lived single-use ticket
+	// that it then exchanges for a WebSocket upgrade. Avoids putting
+	// the JWT in the URL.
+	mux.HandleFunc("POST /api/ws-ticket", middleware.WithAuth(handlers.IssueWSTicketHandler))
+
 	// ── Public Guest Portal routes ───────────────────────────────────────────
 	mux.HandleFunc("GET /portal/auth/{site_id}", handlers.GetPortalAuthHandler)
 	mux.HandleFunc("POST /api/public/portal/{site_id}/validate", handlers.ValidatePortalHandler)

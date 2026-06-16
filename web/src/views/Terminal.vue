@@ -57,20 +57,31 @@ onMounted(async () => {
   })
   resizeObserver.observe(terminalContainer.value)
 
-  // Connect WebSocket
-  const token = localStorage.getItem('jwt_token') || ''
+  // Connect WebSocket — use the ticket-based auth flow so the JWT
+  // never appears in the URL. See internal/api/handlers/ws_ticket.go
+  // and internal/authtickets for the protocol.
   const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  
-  // Note: WebSocket does not natively support custom headers like Authorization Bearer 
-  // without jumping through hoops. We pass the token via query param to bypass standard browser limitation.
-  // We need to update middleware auth optionally to check query string, OR rely on a cookie.
-  // Actually, wait, let's just use the query string: ?token=...
-  // For now, if the router handles it, great. If not, we might need a tick.
-  const wsUrl = `${wsProtocol}//${window.location.host}/api/devices/${deviceId}/ssh?token=${token}`
-  
+
+  let ticket
+  try {
+    const ticketRes = await api.client.post('/ws-ticket', { device_id: deviceId })
+    ticket = ticketRes.data.ticket
+  } catch (e) {
+    connectionStatus.value = 'ERROR: TICKET_DENIED'
+    term.writeln('\r\n\x1b[31m[!] Failed to obtain WebSocket ticket: ' + (e.response?.data?.error || e.message) + '\x1b[0m')
+    return
+  }
+  if (!ticket) {
+    connectionStatus.value = 'ERROR: TICKET_DENIED'
+    term.writeln('\r\n\x1b[31m[!] Server did not return a ticket\x1b[0m')
+    return
+  }
+
+  const wsUrl = `${wsProtocol}//${window.location.host}/api/devices/${deviceId}/ssh?ticket=${ticket}`
+
   try {
     ws = new WebSocket(wsUrl)
-    
+
     ws.onopen = () => {
       connectionStatus.value = 'CONNECTED'
       term.writeln('\x1b[32m[MATRIX_SHELL] SECURE UPLINK ESTABLISHED...\x1b[0m')
