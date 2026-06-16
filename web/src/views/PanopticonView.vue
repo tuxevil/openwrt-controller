@@ -1,27 +1,17 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
+const auth = useAuthStore()
 const logs = ref([])
 const error = ref(null)
 
 const modalPayload = ref(null)
 const showModal = ref(false)
 
-const isAdmin = () => {
-  try {
-    const token = localStorage.getItem('jwt_token')
-    if (!token) return false
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    const role = payload.role ? payload.role.toUpperCase() : ""
-    return role === "ADMIN" || role === "SUPERADMIN"
-  } catch (e) {
-    return false
-  }
-}
-
 onMounted(async () => {
-  if (!isAdmin()) {
+  if (!auth.isAdmin) {
     error.value = "ACCESS_DENIED: REQUIRES ADMIN ROLE"
     return
   }

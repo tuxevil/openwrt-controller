@@ -2,8 +2,10 @@
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 const username = ref('')
 const password = ref('')
 const error = ref('')
@@ -18,16 +20,13 @@ async function handleLogin() {
   try {
     const res = await api.login(username.value, password.value)
     const { token, username: user, role, schema_alias } = res.data
-    localStorage.setItem('jwt_token', token)
-    localStorage.setItem('username', user)
-    localStorage.setItem('role', role)
-    // If user is tenant-scoped, auto-set the tenant context
+    // The Pinia store handles all the localStorage write side-effects
+    // so the rest of the app sees a consistent view of auth state.
+    auth.login(token, user, role)
     if (schema_alias) {
-      localStorage.setItem('assumed_tenant', schema_alias)
-      localStorage.setItem('assumed_tenant_name', user)
+      auth.assumeTenant(schema_alias, user)
     } else {
-      localStorage.removeItem('assumed_tenant')
-      localStorage.removeItem('assumed_tenant_name')
+      auth.exitAssumedIdentity()
     }
     router.push('/global')
   } catch (e) {

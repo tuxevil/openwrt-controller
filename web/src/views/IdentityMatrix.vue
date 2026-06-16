@@ -2,26 +2,15 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 const users = ref([])
 const error = ref('')
 
-// Check if user is admin
-const isAdmin = () => {
-  try {
-    const token = localStorage.getItem('jwt_token')
-    if (!token) return false
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    const role = payload.role ? payload.role.toUpperCase() : ""
-    return role === "ADMIN" || role === "SUPERADMIN"
-  } catch (e) {
-    return false
-  }
-}
-
 onMounted(async () => {
-  if (!isAdmin()) {
+  if (!auth.isAdmin) {
     error.value = 'ACCESS DENIED: IDENTITY MATRIX IS CLASSIFIED'
     return
   }

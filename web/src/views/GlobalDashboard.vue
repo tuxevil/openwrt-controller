@@ -2,25 +2,14 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 const sites = ref([])
 const pendingDevices = ref([])
 const newSiteName = ref('')
 const selectedSite = ref('')
-
-const isAdmin = () => {
-  try {
-    const token = localStorage.getItem('jwt_token')
-    if (!token) return false
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    const role = payload.role ? payload.role.toUpperCase() : ""
-    return role === "ADMIN" || role === "SUPERADMIN"
-  } catch (e) {
-    return false
-  }
-}
-
 
 onMounted(async () => {
   await fetchData()
@@ -83,15 +72,15 @@ const jumpToSite = (siteId) => {
     <div class="flex justify-between items-center pb-2 border-b border-neon-green/30">
       <h1 class="text-4xl shadow-neon glitch-anim w-fit">GLOBAL_DASHBOARD</h1>
       <div class="flex gap-4">
-        <router-link v-if="isAdmin()" to="/landlord" class="px-4 py-2 border-2 border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all font-bold tracking-[0.2em] shadow-[0_0_12px_rgba(245,158,11,0.4)] active:scale-95 flex items-center gap-2 clip-chamfer">
+        <router-link v-if="auth.isAdmin" to="/landlord" class="px-4 py-2 border-2 border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all font-bold tracking-[0.2em] shadow-[0_0_12px_rgba(245,158,11,0.4)] active:scale-95 flex items-center gap-2 clip-chamfer">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
           [ LANDLORD PANEL ]
         </router-link>
-        <router-link v-if="isAdmin()" to="/global/identity" class="px-4 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_#bc13fe] active:scale-95 flex items-center gap-2 clip-chamfer">
+        <router-link v-if="auth.isAdmin" to="/global/identity" class="px-4 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_#bc13fe] active:scale-95 flex items-center gap-2 clip-chamfer">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
           [ IDENTITY MATRIX ]
         </router-link>
-        <router-link v-if="isAdmin()" to="/global/panopticon" class="px-4 py-2 border border-gray-400 text-gray-400 hover:text-white hover:border-white transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_gray] active:scale-95 flex items-center gap-2 clip-chamfer">
+        <router-link v-if="auth.isAdmin" to="/global/panopticon" class="px-4 py-2 border border-gray-400 text-gray-400 hover:text-white hover:border-white transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_gray] active:scale-95 flex items-center gap-2 clip-chamfer">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3 9c7 0 10-9 10-9s-3-9-10-9-10 9-10 9 3 9 10 9z"/></svg>
           [ PANÓPTICO ]
         </router-link>

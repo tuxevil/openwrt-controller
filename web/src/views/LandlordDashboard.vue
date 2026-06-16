@@ -2,8 +2,10 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
 const router = useRouter()
+const auth = useAuthStore()
 const tenants = ref([])
 const billingData = ref(null)
 const loading = ref(true)
@@ -16,29 +18,13 @@ const newTenantName = ref('')
 const newTenantAlias = ref('')
 const createError = ref('')
 
-// Role check
-const isSuperAdmin = () => {
-  try {
-    const token = localStorage.getItem('jwt_token')
-    if (!token) return false
-    const payload = JSON.parse(atob(token.split('.')[1]))
-    return payload.role && payload.role.toUpperCase() === 'SUPERADMIN'
-  } catch (e) {
-    return false
-  }
-}
-
-// Current assumed tenant
-const assumedTenant = ref(localStorage.getItem('assumed_tenant') || '')
-const assumedTenantName = ref(localStorage.getItem('assumed_tenant_name') || '')
-
 // Stats
 const totalSites = computed(() => tenants.value.reduce((sum, t) => sum + (t.site_count || 0), 0))
 const totalDevices = computed(() => tenants.value.reduce((sum, t) => sum + (t.device_count || 0), 0))
 const activeTenants = computed(() => tenants.value.filter(t => t.is_active).length)
 
 onMounted(async () => {
-  if (!isSuperAdmin()) {
+  if (!auth.isSuperAdmin) {
     error.value = 'ACCESS DENIED: SUPERADMIN CLEARANCE REQUIRED'
     loading.value = false
     return
@@ -88,18 +74,12 @@ const handleCreateTenant = async () => {
 }
 
 const assumeIdentity = (tenant) => {
-  localStorage.setItem('assumed_tenant', tenant.schema_alias)
-  localStorage.setItem('assumed_tenant_name', tenant.name)
-  assumedTenant.value = tenant.schema_alias
-  assumedTenantName.value = tenant.name
+  auth.assumeTenant(tenant.schema_alias, tenant.name)
   router.push('/global')
 }
 
 const exitAssumedIdentity = () => {
-  localStorage.removeItem('assumed_tenant')
-  localStorage.removeItem('assumed_tenant_name')
-  assumedTenant.value = ''
-  assumedTenantName.value = ''
+  auth.exitAssumedIdentity()
 }
 
 const toggleTenant = async (tenant) => {
@@ -144,14 +124,14 @@ const formatDate = (d) => {
     <div v-else class="flex-1 flex flex-col p-6 lg:p-8 max-w-7xl mx-auto w-full">
       
       <!-- ASSUMED IDENTITY BANNER -->
-      <div v-if="assumedTenant" class="mb-6 p-3 border-2 border-amber-500 bg-amber-500/10 flex items-center justify-between animate-pulse-slow">
+      <div v-if="auth.assumedTenant" class="mb-6 p-3 border-2 border-amber-500 bg-amber-500/10 flex items-center justify-between animate-pulse-slow">
         <div class="flex items-center gap-3">
           <svg class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3 9c7 0 10-9 10-9s-3-9-10-9-10 9-10 9 3 9 10 9z"/>
           </svg>
           <span class="text-amber-400 text-sm tracking-widest uppercase">
-            OPERATING AS: <span class="font-bold text-white">{{ assumedTenantName }}</span> 
-            <span class="text-amber-400/60">(schema: tenant_{{ assumedTenant }})</span>
+            OPERATING AS: <span class="font-bold text-white">{{ auth.assumedTenantName }}</span>
+            <span class="text-amber-400/60">(schema: tenant_{{ auth.assumedTenant }})</span>
           </span>
         </div>
         <button 
