@@ -82,6 +82,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           args: --timeout=5m --new-from-rev=origin/main
 
       # Full-repo lint, info-only, so we can track the existing
@@ -90,6 +91,7 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+          install-mode: goinstall
           args: --timeout=5m --out-format=line-number
         continue-on-error: true
 
