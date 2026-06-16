@@ -79,7 +79,7 @@ jobs:
       # in this PR, so the existing ~50 errcheck/gosec findings don't
       # block merge. New issues are caught as they appear.
       - name: golangci-lint (new code only)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --timeout=5m --new-from-rev=origin/main
@@ -87,7 +87,7 @@ jobs:
       # Full-repo lint, info-only, so we can track the existing
       # tech-debt count over time without blocking merges.
       - name: golangci-lint (full repo, info only)
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
           args: --timeout=5m --out-format=line-number
