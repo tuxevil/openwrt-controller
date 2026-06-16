@@ -259,5 +259,30 @@ export default {
   },
   getLandlordTenantStats(tenantId) {
     return apiClient.get(`/landlord/tenants/${tenantId}/stats`)
+  },
+
+  // ── WEBHOOKS ───────────────────────────────────────────────────────────────
+  getWebhooks() {
+    return apiClient.get('/webhooks')
+  },
+  createWebhook(payload) {
+    return apiClient.post('/webhooks', payload)
+  },
+  deleteWebhook(webhookId) {
+    return apiClient.delete(`/webhooks/${webhookId}`)
+  },
+
+  // ── SITE SETTINGS / GEOFENCE ───────────────────────────────────────────────
+  updateSiteLocation(siteId, latitude, longitude) {
+    return apiClient.put(`/sites/${siteId}/location`, { latitude, longitude })
+  },
+  updateWLAN(siteId, wlanId, payload) {
+    return apiClient.put(`/sites/${siteId}/wlans/${wlanId}`, payload)
+  },
+  rotateSiteKey(siteId) {
+    return apiClient.post(`/sites/${siteId}/rotate-key`)
+  },
+  getBilling() {
+    return apiClient.get('/billing/usage')
   }
 }

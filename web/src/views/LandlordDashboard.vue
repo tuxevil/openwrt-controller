@@ -111,6 +111,16 @@ const toggleTenant = async (tenant) => {
   }
 }
 
+const loadBilling = async () => {
+  try {
+    const { data } = await api.getBilling()
+    billingData.value = data?.data || data || []
+  } catch (e) {
+    console.error('Billing load failed', e)
+    billingData.value = []
+  }
+}
+
 const formatDate = (d) => {
   if (!d) return '—'
   return new Date(d).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })

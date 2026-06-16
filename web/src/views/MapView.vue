@@ -19,7 +19,9 @@
 </template>
 
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
+import L from 'leaflet'
+import 'leaflet/dist/leaflet.css'
 import api from '../services/api'
 
 let map = null
@@ -27,38 +29,40 @@ let map = null
 onMounted(async () => {
   const { data } = await api.getSites()
   const sites = data.data || []
-  
-  if (window.L) {
-    map = L.map('map', {
-      zoomControl: false,
-      attributionControl: false
-    }).setView([0, 0], 2)
-    
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19
-    }).addTo(map)
 
-    const bounds = []
-    
-    sites.forEach(s => {
-      if (s.latitude && s.longitude) {
-        const marker = L.circleMarker([s.latitude, s.longitude], {
-          radius: 8,
-          fillColor: "#14b8a6",
-          color: "#134e4a",
-          weight: 2,
-          opacity: 1,
-          fillOpacity: 0.8
-        }).addTo(map)
-        
-        marker.bindPopup(`<div style="background:#000;color:#14b8a6;border:1px solid #14b8a6;padding:5px;font-family:monospace"><b>${s.name}</b><br/>LAT: ${s.latitude}<br/>LON: ${s.longitude}</div>`)
-        bounds.push([s.latitude, s.longitude])
-      }
-    })
-    
-    if (bounds.length > 0) {
-      map.fitBounds(bounds, { padding: [50, 50] })
+  // We import Leaflet as a real npm dependency (rather than relying on
+  // a globally-injected window.L) so the bundle is self-contained and
+  // does not silently break if a future maintainer forgets to add the
+  // <script> tag.
+  map = L.map('map', {
+    zoomControl: false,
+    attributionControl: false
+  }).setView([0, 0], 2)
+
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19
+  }).addTo(map)
+
+  const bounds = []
+
+  sites.forEach(s => {
+    if (s.latitude && s.longitude) {
+      const marker = L.circleMarker([s.latitude, s.longitude], {
+        radius: 8,
+        fillColor: "#14b8a6",
+        color: "#134e4a",
+        weight: 2,
+        opacity: 1,
+        fillOpacity: 0.8
+      }).addTo(map)
+
+      marker.bindPopup(`<div style="background:#000;color:#14b8a6;border:1px solid #14b8a6;padding:5px;font-family:monospace"><b>${s.name}</b><br/>LAT: ${s.latitude}<br/>LON: ${s.longitude}</div>`)
+      bounds.push([s.latitude, s.longitude])
     }
+  })
+
+  if (bounds.length > 0) {
+    map.fitBounds(bounds, { padding: [50, 50] })
   }
 })
 
