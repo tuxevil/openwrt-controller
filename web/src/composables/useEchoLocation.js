@@ -31,7 +31,7 @@ const nodeRadius = (d) => {
 
 const edgeColor = (d) => (d.type === 'wired' ? COLORS.edgeWired : COLORS.edgeWireless)
 
-export function useEchoLocation(siteIdRef) {
+export function useEchoLocation(siteId) {
   const router = useRouter()
   const svgContainer = ref(null)
   const selectedNode = ref(null)
@@ -39,7 +39,7 @@ export function useEchoLocation(siteIdRef) {
 
   async function load() {
     try {
-      const res = await api.getSiteEchoLocation(siteIdRef.value)
+      const res = await api.getSiteEchoLocation(siteId)
       const data = res.data?.data || { nodes: [], links: [] }
       render(data)
     } catch (err) {
@@ -125,14 +125,14 @@ export function useEchoLocation(siteIdRef) {
   }
 
   function goTerminal(mac) {
-    router.push(`/site/${siteIdRef.value}/ssh/${mac}`)
+    router.push(`/site/${siteId}/ssh/${mac}`)
   }
 
   onMounted(() => {
     load()
     window.addEventListener('resize', load)
   })
-  watch(siteIdRef, load)
+  watch(() => siteId, load)
   onUnmounted(() => {
     if (simulation) simulation.stop()
     window.removeEventListener('resize', load)

@@ -11,7 +11,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import api from '../services/api'
 
-export function useTerminal(siteIdRef, deviceIdRef) {
+export function useTerminal(siteId, deviceId) {
   const terminalContainer = ref(null)
   const connectionStatus = ref('CONNECTING...')
   let term = null
@@ -19,17 +19,17 @@ export function useTerminal(siteIdRef, deviceIdRef) {
   let ws = null
 
   onMounted(async () => {
-    let deviceId = deviceIdRef.value || ''
-    if (!deviceId) {
+    let devId = deviceId || ''
+    if (!devId) {
       try {
-        const res = await api.getSiteDevices(siteIdRef.value)
+        const res = await api.getSiteDevices(siteId)
         const list = res.data.data || []
-        if (list.length > 0) deviceId = list[0].id
+        if (list.length > 0) devId = list[0].id
       } catch (e) {
         console.error('Failed to load devices', e)
       }
     }
-    if (!deviceId) {
+    if (!devId) {
       connectionStatus.value = 'ERROR: NO_DEVICES_IN_SITE'
       return
     }

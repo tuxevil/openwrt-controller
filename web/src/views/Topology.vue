@@ -9,7 +9,7 @@ import { useTopology } from '../composables/useTopology'
 const props = defineProps(['site_id'])
 const graphRef = ref(null)
 const { nodes, edges, layouts, configs, selectedNode, load, goTerminal } = useTopology(
-  () => props.site_id,
+  props.site_id,
 )
 </script>
 

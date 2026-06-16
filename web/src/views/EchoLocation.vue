@@ -6,7 +6,7 @@ import { useEchoLocation } from '../composables/useEchoLocation'
 
 const props = defineProps(['site_id'])
 const { svgContainer, selectedNode, load, goTerminal } = useEchoLocation(
-  () => props.site_id,
+  props.site_id,
 )
 </script>
 

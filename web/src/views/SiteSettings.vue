@@ -35,7 +35,7 @@ const {
   load: loadSiteConfig,
   saveTemplate,
   buildPayload,
-} = useSiteConfig(() => props.site_id)
+} = useSiteConfig(props.site_id)
 
 // ─── Local UI state ──────────────────────────────────────────────────────────
 const activeTab = ref(DEFAULT_TAB)

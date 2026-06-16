@@ -6,8 +6,8 @@ import { useTerminal } from '../composables/useTerminal'
 
 const props = defineProps(['site_id', 'device_id'])
 const { terminalContainer, connectionStatus } = useTerminal(
-  () => props.site_id,
-  () => props.device_id,
+  props.site_id,
+  props.device_id,
 )
 </script>
 

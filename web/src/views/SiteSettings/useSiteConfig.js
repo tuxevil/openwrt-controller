@@ -58,7 +58,7 @@ function parseJsonField(raw, fallback) {
   return fallback
 }
 
-export function useSiteConfig(siteIdRef) {
+export function useSiteConfig(siteId) {
   const config = ref(defaultConfig())
   const dirty = ref(false)
   const saving = ref(false)
@@ -83,7 +83,7 @@ export function useSiteConfig(siteIdRef) {
   async function load() {
     error.value = null
     try {
-      const res = await api.getSiteConfig(siteIdRef.value)
+      const res = await api.getSiteConfig(siteId)
       if (res?.data?.site_id) {
         config.value = { ...config.value, ...res.data }
         staticLeases.value = parseJsonField(res.data.dhcp_reservations, [])
@@ -110,7 +110,7 @@ export function useSiteConfig(siteIdRef) {
     saving.value = true
     error.value = null
     try {
-      await api.putSiteConfig(siteIdRef.value, buildPayload())
+      await api.putSiteConfig(siteId, buildPayload())
       dirty.value = false
       successMsg.value = 'Template saved — no devices were touched'
       setTimeout(() => (successMsg.value = null), 3500)
@@ -140,7 +140,7 @@ export function useSiteConfig(siteIdRef) {
 
 // Provide/Inject helpers. Using a Symbol so accidental string-key
 // collisions are impossible.
-export function provideSiteConfig(siteIdRef) {
+export function provideSiteConfig(siteId) {
   const ctx = useSiteConfig(siteIdRef)
   // No actual provide() here — the caller wraps the return in Vue's
   // provide() inside <script setup>. The Symbol is exported for

@@ -9,7 +9,7 @@ import { ForceLayout } from 'v-network-graph/lib/force-layout'
 import 'v-network-graph/lib/style.css'
 import api from '../services/api'
 
-export function useTopology(siteIdRef) {
+export function useTopology(siteId) {
   const router = useRouter()
   const nodes = ref({})
   const edges = ref({})
@@ -69,7 +69,7 @@ export function useTopology(siteIdRef) {
 
   async function load() {
     try {
-      const res = await api.getSiteTopology(siteIdRef.value)
+      const res = await api.getSiteTopology(siteId)
       const data = res.data?.data || { nodes: {}, edges: {} }
       nodes.value = data.nodes || {}
       edges.value = data.edges || {}
@@ -79,11 +79,11 @@ export function useTopology(siteIdRef) {
   }
 
   function goTerminal(mac) {
-    router.push(`/site/${siteIdRef.value}/ssh/${mac}`)
+    router.push(`/site/${siteId}/ssh/${mac}`)
   }
 
   onMounted(load)
-  watch(siteIdRef, load)
+  watch(() => siteId, load)
 
   return { nodes, edges, layouts, configs, selectedNode, load, goTerminal }
 }
