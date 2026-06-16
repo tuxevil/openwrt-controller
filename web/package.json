@@ -15,7 +15,7 @@
     "chart.js": "^4.5.1",
     "d3": "^7.9.0",
     "d3-force": "^3.0.0",
-    "dompurify": "^3.4.7",
+    "dompurify": "^3.4.9",
     "marked": "^18.0.0",
     "v-network-graph": "^0.9.22",
     "vue": "^3.5.32",
