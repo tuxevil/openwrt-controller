@@ -30,8 +30,8 @@ EXPOSE 3000
 
 # Set production environment variables defaults
 ENV PORT=3000
-ENV DATABASE_URL=postgres://postgres:postgres@openwrt_postgres:5432/openwrthub
-ENV INFLUX_URL=http://openwrt_influx:8086
+# DATABASE_URL must be provided via env (no default — security)
+# INFLUX_URL must be provided via env
 ENV INFLUX_ORG=openwrthub
 ENV INFLUX_BUCKET=telemetry
 

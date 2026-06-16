@@ -8,7 +8,7 @@ services:
       - "3000:3000"
     environment:
       - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/openwrthub
-      - INFLUX_URL=http://172.18.0.2:8086
+      - INFLUX_URL=http://influxdb:8086
       - INFLUX_ORG=openwrthub
       - INFLUX_BUCKET=telemetry
       - INFLUX_TOKEN=${INFLUX_TOKEN:?INFLUX_TOKEN required}
@@ -65,7 +65,7 @@ services:
       sed -i "s/server = \"localhost\"/server = \"postgres\"/g" /etc/raddb/mods-available/sql &&
       sed -i "s/port = 3306/port = 5432/g" /etc/raddb/mods-available/sql &&
       sed -i "s/login = \"radius\"/login = \"postgres\"/g" /etc/raddb/mods-available/sql &&
-      sed -i "s/password = \"radpass\"/password = \"postgres\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/password = \"radpass\"/password = \"${POSTGRES_PASSWORD}\"/g" /etc/raddb/mods-available/sql &&
       sed -i "s/radius_db = \"radius\"/radius_db = \"openwrthub\"/g" /etc/raddb/mods-available/sql &&
       sed -i "s/read_clients = no/read_clients = yes/g" /etc/raddb/mods-available/sql &&
       radiusd -f'
