@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"openwrt-controller/internal/api"
@@ -27,14 +28,19 @@ func main() {
 `
 	log.Println(banner)
 
-	// CLI flags. Port and TLS material are intentionally explicit so that
-	// production deployments fail closed instead of accidentally exposing
-	// JWTs / API keys over plain HTTP.
+	// CLI flags. Port value is normalised (":3000" or "3000" both work).
 	port := flag.String("port", envOr("PORT", ":3000"), "TCP port to listen on (e.g. :3000 or :8443)")
 	tlsCert := flag.String("tls-cert", os.Getenv("TLS_CERT"), "Path to TLS certificate (PEM). Enables HTTPS if set together with --tls-key.")
 	tlsKey := flag.String("tls-key", os.Getenv("TLS_KEY"), "Path to TLS private key (PEM). Enables HTTPS if set together with --tls-cert.")
 	requireTLS := flag.Bool("require-tls", envBool("REQUIRE_TLS", false), "If true, refuse to start without --tls-cert and --tls-key. Recommended for production.")
 	flag.Parse()
+
+	// Normalise: if the port is missing the ':' prefix, add it.
+	// This handles both the old .env convention (PORT=3000) and the
+	// new one (PORT=:3000). Override via --port=:3000 or -port :3000.
+	if !strings.HasPrefix(*port, ":") {
+		*port = ":" + *port
+	}
 
 	// Initialize PostgreSQL
 	if err := database.InitPostgres(); err != nil {
