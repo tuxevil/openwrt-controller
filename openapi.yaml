@@ -1,0 +1,475 @@
+openapi: 3.1.0
+info:
+  title: openwrt-controller API
+  version: 0.1.0
+  description: |
+    REST API for the openwrt-controller — a multi-tenant orchestrator
+    for fleets of OpenWrt access points. Most endpoints require a JWT
+    (Authorization: Bearer …). WebSockets use single-use tickets issued
+    via `POST /api/ws-ticket`.
+
+    **Stability:** This project is pre-1.0. The URL namespace is `/api/`
+    without a version prefix. URL versioning (`/api/v1/`) will be
+    introduced before 1.0.
+  contact:
+    name: tuxevil
+    email: tuxevil@gmail.com
+  license:
+    name: MIT
+    url: https://github.com/tuxevil/openwrt-controller/blob/main/LICENSE
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://controller.example.com
+    description: Production (replace with your host)
+
+tags:
+  - name: auth
+    description: Login, logout, token refresh
+  - name: sites
+    description: Tenant sites (groups of OpenWrt devices)
+  - name: devices
+    description: Individual OpenWrt devices
+  - name: wlans
+    description: Wireless networks
+  - name: clients
+    description: Connected Wi-Fi clients
+  - name: telemetry
+    description: Device telemetry ingest
+  - name: global
+    description: Platform-wide operations (SuperAdmin)
+  - name: chatops
+    description: LLM / chat-driven device queries
+  - name: probes
+    description: Container liveness / readiness (anonymous)
+  - name: metrics
+    description: Prometheus exposition (anonymous)
+
+paths:
+  # ── Auth ──────────────────────────────────────────────────────────────────
+  /api/auth/login:
+    post:
+      tags: [auth]
+      summary: Exchange username + password for a JWT
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string, format: password }
+      responses:
+        '200':
+          description: JWT issued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token:    { type: string }
+                  username: { type: string }
+                  role:     { type: string, enum: [superadmin, admin, user] }
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  # ── Telemetry ─────────────────────────────────────────────────────────────
+  /api/telemetry:
+    post:
+      tags: [telemetry]
+      summary: Device → controller telemetry post
+      description: |
+        Called by the OpenWrt agent. Authenticates via `X-Device-Token`
+        header (preferred) or the legacy provision API key (set
+        `ALLOW_LEGACY_PROVISION=false` once all devices are migrated).
+      security: []
+      responses:
+        '204': { description: Accepted }
+
+  /api/devices/{device_id}/config:
+    get:
+      tags: [devices]
+      summary: Fetch the agent's per-device config
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '200':
+          description: Agent config block
+          content:
+            application/json: {}
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  # ── Sites ─────────────────────────────────────────────────────────────────
+  /api/sites:
+    get:
+      tags: [sites]
+      summary: List all sites visible to the caller
+      responses:
+        '200':
+          description: Site list
+          content:
+            application/json: {}
+    post:
+      tags: [sites]
+      summary: Create a new site
+      responses:
+        '201': { description: Created }
+
+  /api/sites/{site_id}:
+    delete:
+      tags: [sites]
+      summary: Delete a site (admin only)
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '204': { description: Deleted }
+
+  /api/sites/{site_id}/rotate-key:
+    post:
+      tags: [sites]
+      summary: Rotate the site's API key
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200':
+          description: New key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  api_key: { type: string }
+
+  /api/sites/{site_id}/devices:
+    get:
+      tags: [sites, devices]
+      summary: List devices in a site
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: Device list }
+
+  /api/sites/{site_id}/wlans:
+    get:
+      tags: [sites, wlans]
+      summary: List WLANs
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: WLAN list }
+    post:
+      tags: [sites, wlans]
+      summary: Create a WLAN
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '201': { description: Created }
+
+  /api/sites/{site_id}/clients:
+    get:
+      tags: [sites, clients]
+      summary: List connected clients
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: Client list }
+
+  /api/sites/{site_id}/incidents:
+    get:
+      tags: [sites]
+      summary: Recent incidents
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: Incident list }
+
+  /api/sites/{site_id}/topology:
+    get:
+      tags: [sites]
+      summary: Site topology (devices + links)
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: Topology }
+
+  /api/sites/{site_id}/echolocation:
+    get:
+      tags: [sites]
+      summary: Echo-location heatmap
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: Heatmap data }
+
+  /api/sites/{site_id}/flow-sense:
+    get:
+      tags: [sites]
+      summary: Flow Sense (DPI) data
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: Flow data }
+
+  /api/sites/{site_id}/rf-optimization:
+    get:
+      tags: [sites]
+      summary: RF optimization recommendations
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: RF recommendations }
+
+  /api/sites/{site_id}/rf-fix:
+    post:
+      tags: [sites]
+      summary: Apply a recommended RF fix
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '202': { description: Accepted }
+
+  /api/sites/{site_id}/history:
+    get:
+      tags: [sites]
+      summary: Per-site historical events
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: History }
+
+  /api/sites/{site_id}/logs:
+    get:
+      tags: [sites]
+      summary: Per-site log tail
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      responses:
+        '200': { description: Logs }
+
+  # ── Devices ───────────────────────────────────────────────────────────────
+  /api/devices:
+    get:
+      tags: [devices]
+      summary: List all devices
+      responses:
+        '200': { description: Device list }
+
+  /api/devices/{device_id}:
+    delete:
+      tags: [devices]
+      summary: Forget a device (admin only)
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '204': { description: Forgotten }
+
+  /api/devices/{device_id}/adopt:
+    post:
+      tags: [devices]
+      summary: Adopt a device into a site
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '200': { description: Adopted }
+
+  /api/devices/{device_id}/migrate:
+    post:
+      tags: [devices]
+      summary: Migrate a device to another site
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '200': { description: Migrated }
+
+  /api/devices/{device_id}/pcap:
+    post:
+      tags: [devices]
+      summary: Capture a packet trace
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '202': { description: Capture started }
+
+  /api/devices/{device_id}/iperf:
+    post:
+      tags: [devices]
+      summary: Run an iperf3 test
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '202': { description: Test started }
+
+  /api/devices/{device_id}/metrics:
+    get:
+      tags: [devices]
+      summary: Live metrics for a device
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '200': { description: Metrics }
+
+  /api/devices/{device_id}/ssh:
+    get:
+      tags: [devices]
+      summary: Open a WebSocket SSH session
+      description: |
+        Returns a `ticket` to be exchanged via the WebSocket upgrade.
+        WebSocket tickets are single-use, 30s TTL.
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+      responses:
+        '200': { description: Ticket issued }
+
+  # ── Global ────────────────────────────────────────────────────────────────
+  /api/global/health:
+    get:
+      tags: [global]
+      summary: Business health score (0–100)
+      responses:
+        '200':
+          description: Health score
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  health: { type: integer, minimum: 0, maximum: 100 }
+
+  /api/global/sentinel:
+    get:
+      tags: [global]
+      summary: Sentinel AI insights
+      responses:
+        '200': { description: Insights }
+
+  /api/global/sentinel/trigger:
+    post:
+      tags: [global]
+      summary: Manually trigger a Sentinel scan
+      responses:
+        '202': { description: Scan started }
+
+  /api/global/settings:
+    get:
+      tags: [global]
+      summary: Platform settings
+      responses:
+        '200': { description: Settings }
+    post:
+      tags: [global]
+      summary: Update platform settings
+      responses:
+        '200': { description: Updated }
+
+  # ── ChatOps ───────────────────────────────────────────────────────────────
+  /api/chatops/query:
+    post:
+      tags: [chatops]
+      summary: Natural-language query → device action
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [query]
+              properties:
+                query: { type: string }
+      responses:
+        '200': { description: Answer }
+
+  # ── Probes (anonymous) ────────────────────────────────────────────────────
+  /healthz:
+    get:
+      tags: [probes]
+      summary: Liveness probe
+      description: |
+        Anonymous. Returns 200 as long as the process is up. Used by
+        container orchestrators (Docker, Kubernetes) for liveness.
+      security: []
+      responses:
+        '200':
+          description: Alive
+          content:
+            text/plain:
+              schema: { type: string, example: ok }
+
+  /readyz:
+    get:
+      tags: [probes]
+      summary: Readiness probe
+      description: |
+        Anonymous. Returns 200 only when the controller can reach
+        Postgres. Used as the readiness gate in orchestrators.
+      security: []
+      responses:
+        '200':
+          description: Ready
+        '503':
+          description: Not ready (DB unreachable)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: not-ready }
+                  error:  { type: string }
+
+  # ── Metrics (anonymous) ───────────────────────────────────────────────────
+  /metrics:
+    get:
+      tags: [metrics]
+      summary: Prometheus exposition
+      security: []
+      responses:
+        '200':
+          description: Metrics in Prometheus text format
+          content:
+            text/plain: {}
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    SiteID:
+      in: path
+      name: site_id
+      required: true
+      schema: { type: string, format: uuid }
+    DeviceID:
+      in: path
+      name: device_id
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthorized:
+      description: Missing or invalid JWT
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:    { type: string }
+        request_id: { type: string, description: 'Correlation ID for log lookup' }
+
+security:
+  - bearerAuth: []

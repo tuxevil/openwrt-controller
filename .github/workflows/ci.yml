@@ -121,7 +121,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: web/package-lock.json
 
@@ -139,6 +139,9 @@ jobs:
             echo "No tsconfig.json; skipping type-check"
           fi
         continue-on-error: true
+
+      - name: Unit tests (vitest)
+        run: npm test
 
       - name: Build
         run: npm run build

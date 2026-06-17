@@ -6,7 +6,17 @@ import (
 
 	"openwrt-controller/internal/api/handlers"
 	"openwrt-controller/internal/api/middleware"
+	"openwrt-controller/internal/metrics"
 )
+
+// Metrics is the global metrics registry, initialised in main and
+// injected into the api package via SetupRoutes. It is exposed so
+// other packages can record custom metrics.
+var Metrics *metrics.Registry
+
+// SetMetrics wires the global metrics registry. Must be called once
+// from main before serving traffic. Idempotent.
+func SetMetrics(m *metrics.Registry) { Metrics = m }
 
 func SetupRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
@@ -21,6 +31,13 @@ func SetupRoutes() *http.ServeMux {
 	// /readyz   — readiness. 200 only when DB is reachable.
 	mux.HandleFunc("GET /healthz", handlers.HealthzHandler)
 	mux.HandleFunc("GET /readyz", handlers.ReadyzHandler)
+
+	// /metrics  — Prometheus exposition format. Anonymous by design so
+	// a sidecar scraper does not need a JWT. Restrict access at the
+	// network layer (firewall, mesh policy) if needed.
+	if Metrics != nil {
+		mux.Handle("GET /metrics", Metrics.Handler())
+	}
 
 	// ── WebSocket ticket issuance (auth via JWT in Authorization header) ──
 	// The dashboard calls this to mint a short-lived single-use ticket
