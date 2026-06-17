@@ -4,14 +4,23 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
 
 func main() {
-	db, err := sql.Open("pgx", "postgres://postgres:postgres@localhost:5432/openwrthub")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		panic("DATABASE_URL is required (e.g. postgres://user:pass@host:5432/db)")
+	}
+
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		panic(err)
+	}
+	if err := db.Ping(); err != nil {
+		panic(fmt.Sprintf("cannot reach database: %v", err))
 	}
 	defer db.Close()
 

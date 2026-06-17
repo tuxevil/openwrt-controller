@@ -1,0 +1,41 @@
+# Auto-detect text files; normalise line endings to LF on commit.
+*           text=auto eol=lf
+
+# Force LF for shell, Go, JS/TS, Vue, YAML, Python
+*.sh        text eol=lf
+*.bash      text eol=lf
+*.go        text eol=lf
+*.js        text eol=lf
+*.cjs       text eol=lf
+*.mjs       text eol=lf
+*.ts        text eol=lf
+*.vue       text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.md        text eol=lf
+*.py        text eol=lf
+Dockerfile  text eol=lf
+
+# CRLF for Windows-only files (none right now, kept for reference)
+# *.bat      text eol=crlf
+
+# Binary files - do not diff
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.gif       binary
+*.ico       binary
+*.pdf       binary
+*.zip       binary
+*.tar.gz    binary
+*.tgz       binary
+
+# Linguist overrides — keep generated files out of language stats
+docs/omada-backups/* linguist-generated
+package-lock.json   linguist-generated
+go.sum              linguist-generated
+coverage.out        linguist-generated
+*.min.js            linguist-generated
+*.min.css           linguist-generated

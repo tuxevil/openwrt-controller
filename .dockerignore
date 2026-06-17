@@ -1,12 +1,91 @@
+# ── VCS / metadata ───────────────────────────────────────────────────────────
 .git
 .gitignore
+.gitattributes
+.github
+.dolt/
+
+# ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
 **/node_modules/
 web/dist/
-backend.log
-state.json
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ── Go test/build artifacts ──────────────────────────────────────────────────
+*.test
+*.prof
+*.out
+coverage.out
 tmp_test/
 test_bin/
+scratch-deploy/
+test_bin
+tmp_test
+
+# ── Pre-built binary (built fresh inside the image) ──────────────────────────
 openwrt-controller
-*.log
+openwrt-controller.old
 *.exe
+*.bin
+*.so
+*.dylib
+
+# ── Logs / runtime state ─────────────────────────────────────────────────────
+*.log
+backend.log
+state.json
+debug_topo.out
+dump_*.json
+
+# ── Secrets, certs, env files ────────────────────────────────────────────────
+.env
+.env.local
+.env.*.local
+.env.example
+certs/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+id_controller*
+known_hosts
+
+# ── Docs (not needed in image) ───────────────────────────────────────────────
+*.md
+!web/README.md
+docs/
+
+# ── Agent-context / project-meta files (not needed in image) ──────────────────
+AGENTS.md
+CLAUDE.md
+NEURAL_CONTEXT.md
+NEXT_STAGE.md
+.ai-rules.md
+
+# ── Editor / OS noise ────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+*~
+
+# ── CI / lint / security configs (not needed in image) ──────────────────────
+.golangci.yml
+.gitleaks.toml
+.gitleaks/
+clean-repo.sh
+get-docker.sh
+test_fetch.sh
+fix_*.py
+
+# ── Beads (issue tracker, not needed in image) ────────────────────────────────
+.beads/
+*.db
+.beads-credential-key

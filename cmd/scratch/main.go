@@ -12,9 +12,17 @@ import (
 )
 
 func main() {
-	db, err := sql.Open("pgx", "postgres://postgres:postgres@localhost:5432/openwrthub?sslmode=disable")
+	dsn := os.Getenv("DATABASE_URL")
+	if dsn == "" {
+		log.Fatal("DATABASE_URL is required (e.g. postgres://user:pass@host:5432/db?sslmode=disable)")
+	}
+
+	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		log.Fatal(err)
+	}
+	if err := db.Ping(); err != nil {
+		log.Fatalf("cannot reach database: %v", err)
 	}
 
 	content, err := os.ReadFile("devices/agent.sh")
