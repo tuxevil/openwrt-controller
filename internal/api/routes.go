@@ -16,6 +16,12 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/telemetry", handlers.TelemetryHandler)
 	mux.HandleFunc("GET /api/devices/{device_id}/config", handlers.GetDeviceConfigHandler)
 
+	// ── Container probes (no auth) ───────────────────────────────────────────
+	// /healthz  — liveness. 200 as long as the process is up.
+	// /readyz   — readiness. 200 only when DB is reachable.
+	mux.HandleFunc("GET /healthz", handlers.HealthzHandler)
+	mux.HandleFunc("GET /readyz", handlers.ReadyzHandler)
+
 	// ── WebSocket ticket issuance (auth via JWT in Authorization header) ──
 	// The dashboard calls this to mint a short-lived single-use ticket
 	// that it then exchanges for a WebSocket upgrade. Avoids putting

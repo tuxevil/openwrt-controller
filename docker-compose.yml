@@ -5,11 +5,22 @@ services:
       dockerfile: Dockerfile
     container_name: openwrt_controller
     # SECURITY: never run as root in production; require TLS; read-only fs.
+    # The Dockerfile ships a non-root user (app, uid 10001) so the
+    # read-only rootfs is actually usable — files in /app are owned by
+    # app:app at build time.
     read_only: true
     security_opt:
       - no-new-privileges:true
+    # Drop all Linux capabilities except what we strictly need. The
+    # server only opens TCP/UDP sockets, so NET_BIND_SERVICE is the
+    # only one we keep.
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/api/global/health", "||", "exit", "1"]
+      # /healthz is anonymous and cheap; see internal/api/handlers/probes.go.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz", "||", "exit", "1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -23,10 +34,96 @@ services:
       - INFLUX_BUCKET=telemetry
       - INFLUX_TOKEN=${INFLUX_TOKEN:?INFLUX_TOKEN required}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET required, min 32 chars}
+      - REQUIRE_TLS=${REQUIRE_TLS:-false}
+      - WS_ALLOWED_ORIGINS=${WS_ALLOWED_ORIGINS:-}
+      - ALLOW_LEGACY_PROVISION=${ALLOW_LEGACY_PROVISION:-false}
     depends_on:
-      - postgres
-      - influxdb
+      postgres:
+        condition: service_started
+      influxdb:
+        condition: service_started
     restart: unless-stopped
+
+  postgres:
+    image: postgres:15.13-alpine
+    container_name: openwrt_postgres
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d openwrthub"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD required}
+      POSTGRES_DB: openwrthub
+    # Bind to loopback only by default. Production deployments that need
+    # remote access should set PG_BIND_ADDR to a private network interface
+    # (e.g. 10.0.0.1) and adjust firewall rules accordingly.
+    ports:
+      - "${PG_BIND_ADDR:-127.0.0.1}:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  influxdb:
+    image: influxdb:2.7.10-alpine
+    container_name: openwrt_influx
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8086/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    # Same loopback-by-default policy as Postgres.
+    ports:
+      - "${INFLUX_BIND_ADDR:-127.0.0.1}:8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${INFLUXDB_PASSWORD:?INFLUXDB_PASSWORD required}
+      DOCKER_INFLUXDB_INIT_ORG: openwrthub
+      DOCKER_INFLUXDB_INIT_BUCKET: telemetry
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${INFLUX_TOKEN:?INFLUX_TOKEN required}
+    volumes:
+      - influxdata:/var/lib/influxdb2
+    restart: unless-stopped
+
+  freeradius:
+    # Pinned to a specific version. The :latest tag is unacceptable in
+    # production — supply-chain risk and untested upgrades.
+    image: freeradius/freeradius-server:3.2.5-alpine
+    container_name: openwrt_radius
+    healthcheck:
+      test: ["CMD", "radtest", "dummy", "dummy", "127.0.0.1", "0", "testing123"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    ports:
+      - "1812:1812/udp"
+      - "1813:1813/udp"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    command: >
+      sh -c '
+      apk add --no-cache freeradius-postgresql &&
+      ln -sf /etc/raddb/mods-available/sql /etc/raddb/mods-enabled/sql &&
+      sed -i "s/driver = \"rlm_sql_null\"/driver = \"rlm_sql_postgresql\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/dialect = \"sqlite\"/dialect = \"postgresql\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/server = \"localhost\"/server = \"postgres\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/port = 3306/port = 5432/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/login = \"radius\"/login = \"postgres\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/password = \"radpass\"/password = \"${POSTGRES_PASSWORD}\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/radius_db = \"radius\"/radius_db = \"openwrthub\"/g" /etc/raddb/mods-available/sql &&
+      sed -i "s/read_clients = no/read_clients = yes/g" /etc/raddb/mods-available/sql &&
+      radiusd -f'
+
+volumes:
+  pgdata:
+  influxdata:
 
   postgres:
     image: postgres:15-alpine

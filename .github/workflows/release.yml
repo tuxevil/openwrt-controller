@@ -1,0 +1,116 @@
+name: Release
+
+# Triggers:
+#   - Push of a tag matching v*.*.*  → build & publish
+#   - Manual dispatch (workflow_dispatch) for dry runs
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Skip publishing images / release"
+        required: false
+        default: "true"
+        type: boolean
+
+permissions:
+  contents: write   # create the GitHub release
+  packages: write   # push to ghcr.io
+  id-token: write   # cosign keyless signing (OIDC)
+
+# Avoid two release runs racing each other for the same tag.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # 1. Build and publish a multi-arch image, sign it, attach SBOM.
+  #    Pushes to both Docker Hub (tuxevil/openwrt-controller) and GHCR.
+  # ──────────────────────────────────────────────────────────────────────
+  release:
+    name: Build & Publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      # Login to both registries. Secrets must be configured in the
+      # repo settings (DOCKERHUB_USERNAME / DOCKERHUB_TOKEN, or rely on
+      # the default GITHUB_TOKEN for ghcr.io).
+      - name: Login to Docker Hub
+        if: ${{ github.event_name == 'push' && !inputs.dry_run }}
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to GHCR
+        if: ${{ github.event_name == 'push' && !inputs.dry_run }}
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: meta
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [ "$TAG" = "refs/tags/" ] || [ -z "$TAG" ]; then
+            TAG="dev-${{ github.sha }}"
+          fi
+          echo "tag=${TAG}"      >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push (multi-arch)
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: ${{ github.event_name == 'push' && !inputs.dry_run }}
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            tuxevil/openwrt-controller:${{ steps.meta.outputs.tag }}
+            tuxevil/openwrt-controller:${{ steps.meta.outputs.version }}
+            ghcr.io/tuxevil/openwrt-controller:${{ steps.meta.outputs.tag }}
+            ghcr.io/tuxevil/openwrt-controller:${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=openwrt-controller
+            org.opencontainers.image.source=https://github.com/tuxevil/openwrt-controller
+            org.opencontainers.image.licenses=MIT
+            org.opencontainers.image.version=${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Generate SBOM
+        if: ${{ github.event_name == 'push' && !inputs.dry_run }}
+        uses: anchore/sbom-action@v0
+        with:
+          artifact: openwrt-controller-image
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Sign image (cosign keyless)
+        if: ${{ github.event_name == 'push' && !inputs.dry_run }}
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          echo "${{ steps.meta.outputs.tag }}" > cosign-tag.txt
+          cosign sign --yes \
+            tuxevil/openwrt-controller@${{ steps.build.outputs.digest }}
+
+      - name: Create GitHub Release
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            sbom.spdx.json
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-rc') || contains(github.ref_name, '-beta') }}
