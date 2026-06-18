@@ -3,10 +3,9 @@ package spa
 import (
 	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
-
-// _ = strings.Contains // ensure import used (legacy, can remove if unused)
 
 // NewHandler returns an http.Handler that serves files from distDir.
 //
@@ -120,22 +119,39 @@ func serveIndex(w http.ResponseWriter, body []byte) {
 }
 
 // injectCSPAndFallback inserts (a) a <meta> CSP tag as the first
-// child of <head> and (b) a static <div id="boot-fallback"> that
+// child of <head>, (b) a static <div id="boot-fallback"> that
 // shows "JavaScript is blocked or failed to load" if Vue never
-// mounts. The fallback uses a CSS animation with a 4-second delay
-// — no JavaScript needed. The Vue app's first action should remove
-// the element so it never shows during normal operation.
+// mounts, and (c) strips any <script> tag that doesn't look like
+// our Vite build output.
 //
-// We deliberately avoid an inline <script> for the reveal: the strict
-// CSP (script-src 'self') would block it anyway. The CSS animation
-// is the lowest-tech path that works even when all scripts are
-// blocked, which is exactly the situation we want to detect.
+// The script-stripping is the key fix. A reverse proxy on this
+// host (or an MDM policy on the phone, or a browser extension)
+// has been observed appending <script src="wrs_env.js"> and
+// <script src="web-client-content-script.js"> to the served HTML.
+// Those scripts are minified, throw synchronously, and kill the
+// page before Vue can mount. The strict CSP allows them because
+// they are same-origin external scripts.
+//
+// We defensively remove any <script> that:
+//   - has an src attribute that doesn't match /assets/index-*.js or
+//     /assets/vue-router-*.js or /assets/leaflet-*.js
+//   - OR has no src attribute (inline — already blocked by CSP but
+//     we strip for paranoia since some proxy shims convert external
+//     scripts to inline equivalents to dodge CSP)
+//
+// The resulting HTML only ever runs the Vue bundle. If a script
+// gets appended, it's deleted before the bytes leave the server.
 func injectCSPAndFallback(body []byte) []byte {
 	csp := `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">`
 	fallback := `<style>@keyframes nc-boot-fallback-reveal{from{opacity:0}to{opacity:1}}#boot-fallback{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center;z-index:9999;opacity:0;animation:nc-boot-fallback-reveal .3s 4s forwards}#boot-fallback .icon{font-size:48px;margin-bottom:16px}#boot-fallback .title{font-size:18px;margin-bottom:12px;color:#39FF14}#boot-fallback .hint{font-size:12px;color:#888;max-width:340px;line-height:1.6}#boot-fallback code{color:#fff;background:#111;padding:2px 6px;border-radius:3px}</style><div id="boot-fallback"><div class="icon">⚠</div><div class="title">JavaScript failed to start</div><div class="hint">The dashboard did not load. This usually means a browser extension, MDM policy, captive portal, or reverse proxy is blocking scripts. Try <code>incognito mode</code> (Ctrl+Shift+N on desktop, ⋮ → New incognito on mobile) or open <code>/survey/&lt;id&gt;</code> in a different network.</div></div><noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center"><div><div style="font-size:18px;margin-bottom:12px">JavaScript is required</div><div style="font-size:12px;color:#888">Please enable JavaScript in your browser.</div></div></div></noscript>`
 
-	// Insert the CSP meta as the first child of <head>.
 	s := string(body)
+	// Strip any <script> that doesn't look like the Vite-built
+	// bundle. We do this BEFORE injecting our CSP meta tag so the
+	// regex doesn't see our own additions.
+	s = stripForeignScripts(s)
+
+	// Insert the CSP meta as the first child of <head>.
 	if i := strings.Index(s, "<head>"); i >= 0 {
 		ins := i + len("<head>")
 		s = s[:ins] + csp + s[ins:]
@@ -146,6 +162,52 @@ func injectCSPAndFallback(body []byte) []byte {
 		s = s[:ins] + fallback + s[ins:]
 	}
 	return []byte(s)
+}
+
+// stripForeignScripts removes any <script>...</script> from html
+// whose src attribute is not in the allowlist. Also removes
+// inline <script>...</script> blocks entirely (we never use
+// them; if one appears, it's injected). The Vue app, the vue-
+// router chunk, the leaflet chunk, and any modulepreload pointing
+// at them all use Vite's hashed filenames under /assets/.
+//
+// This is intentionally a regex over raw bytes rather than a
+// full HTML parse: the alternative (golang.org/x/net/html) is
+// too slow for a per-request hot path and Vite's output is
+// well-formed.
+func stripForeignScripts(html string) string {
+	// Match either <script src="X" ...> or <script> (inline body)
+	scriptRe := regexp.MustCompile(`(?is)<script\b([^>]*)>([\s\S]*?)</script>`)
+	// Allowlist for src: anything under /assets/ that Vite generated.
+	// Vite's index.html references the bundle as
+	//   src="/assets/index-XXXX.js"
+	//   href="/assets/vue-router-XXXX.js" (modulepreload, in <link>)
+	// and any other chunked module. We accept any path that starts
+	// with `/assets/` and ends in `.js`. (And the .css link, which
+	// is in a <link rel="stylesheet"> not a <script>.)
+	allowed := regexp.MustCompile(`^/assets/[A-Za-z0-9_\-./]+\.js$`)
+
+	return scriptRe.ReplaceAllStringFunc(html, func(match string) string {
+		sm := scriptRe.FindStringSubmatch(match)
+		if len(sm) < 3 {
+			return "" // shouldn't happen
+		}
+		attrs := sm[1]
+		body := strings.TrimSpace(sm[2])
+		// Inline script (no src, non-empty body): always drop.
+		if !strings.Contains(attrs, "src=") && body != "" {
+			return ""
+		}
+		// External script: keep only if src is in the allowlist.
+		srcRe := regexp.MustCompile(`(?i)\bsrc\s*=\s*"([^"]+)"`)
+		if m := srcRe.FindStringSubmatch(attrs); len(m) == 2 {
+			if allowed.MatchString(m[1]) {
+				return match
+			}
+		}
+		// src missing or not in allowlist → drop
+		return ""
+	})
 }
 
 // fileExists reports whether p (interpreted relative to distDir) maps
