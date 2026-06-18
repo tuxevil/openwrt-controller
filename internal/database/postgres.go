@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -813,10 +814,13 @@ func SweepOldLogs(ctx context.Context, schema string, olderThanDays int) (int64,
 	if olderThanDays <= 0 {
 		olderThanDays = 7
 	}
+	// Postgres needs a string for the || ' days' concatenation. pgx
+	// refuses to encode a bare int as text; strconv is the cheapest
+	// conversion that satisfies the type checker.
 	res, err := Tx(ctx).Exec(fmt.Sprintf(`
 		DELETE FROM %s.system_logs
 		 WHERE created_at < CURRENT_TIMESTAMP - ($1 || ' days')::interval
-	`, schema), olderThanDays)
+	`, schema), strconv.Itoa(olderThanDays))
 	if err != nil {
 		return 0, err
 	}

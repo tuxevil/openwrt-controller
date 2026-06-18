@@ -174,16 +174,46 @@ func SetSurveyToken(ctx context.Context, schema, surveyID, tokenHash string) err
 	return err
 }
 
+// SetSurveyStatus transitions a survey between pending/active/completed/aborted
+// and stamps the corresponding timestamp exactly once (started_at on the
+// first transition to active, ended_at on the first transition to
+// completed/aborted).
+//
+// Two separate Exec calls (start vs end) instead of one with CASE on $2.
+// Postgres' prepared-statement protocol refuses to plan a query that
+// uses the same $2 parameter in multiple CASE branches with different
+// expected types (SQLSTATE 42P08 "inconsistent types deduced for
+// parameter $2"). Splitting avoids the conflict and makes the intent
+// self-documenting. Also fast: both branches use the indexed pkey.
 func SetSurveyStatus(ctx context.Context, schema, surveyID, status string) error {
-	_, err := Tx(ctx).Exec(fmt.Sprintf(`
-		UPDATE %s.wifi_surveys
-		   SET status = $2,
-		       started_at = CASE WHEN $2 = 'active' AND started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END,
-		       ended_at   = CASE WHEN $2 IN ('completed','aborted') AND ended_at IS NULL THEN CURRENT_TIMESTAMP ELSE ended_at END,
-		       updated_at = CURRENT_TIMESTAMP
-		 WHERE id = $1
-	`, schema), surveyID, status)
-	return err
+	switch status {
+	case "active":
+		_, err := Tx(ctx).Exec(fmt.Sprintf(`
+			UPDATE %s.wifi_surveys
+			   SET status = $2::varchar,
+			       started_at = CASE WHEN started_at IS NULL THEN CURRENT_TIMESTAMP ELSE started_at END,
+			       updated_at = CURRENT_TIMESTAMP
+			 WHERE id = $1::uuid
+		`, schema), surveyID, status)
+		return err
+	case "completed", "aborted":
+		_, err := Tx(ctx).Exec(fmt.Sprintf(`
+			UPDATE %s.wifi_surveys
+			   SET status = $2::varchar,
+			       ended_at = CASE WHEN ended_at IS NULL THEN CURRENT_TIMESTAMP ELSE ended_at END,
+			       updated_at = CURRENT_TIMESTAMP
+			 WHERE id = $1::uuid
+		`, schema), surveyID, status)
+		return err
+	default:
+		_, err := Tx(ctx).Exec(fmt.Sprintf(`
+			UPDATE %s.wifi_surveys
+			   SET status = $2::varchar,
+			       updated_at = CURRENT_TIMESTAMP
+			 WHERE id = $1::uuid
+		`, schema), surveyID, status)
+		return err
+	}
 }
 
 func SetSurveyTokenFirstUse(ctx context.Context, schema, surveyID, ip, ua string) error {
