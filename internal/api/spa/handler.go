@@ -2,15 +2,9 @@ package spa
 
 import (
 	"net/http"
-	"net/url"
 	"path/filepath"
-	"regexp"
 	"strings"
 )
-
-// queryEscape is a tiny indirection so we don't depend on
-// url.QueryEscape being a particular package-level symbol.
-func queryEscape(s string) string { return url.QueryEscape(s) }
 
 // NewHandler returns an http.Handler that serves files from distDir.
 //
@@ -37,7 +31,7 @@ func NewHandler(distDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setCacheHeaders(w, r.URL.Path)
 		if r.URL.Path == "/" || r.URL.Path == "" {
-			serveIndex(w, r, spaIndex)
+			serveIndex(w, spaIndex)
 			return
 		}
 		// Real on-disk file? serve as-is (FileServer handles Range, etc.)
@@ -54,7 +48,7 @@ func NewHandler(distDir string) http.Handler {
 			return
 		}
 		// SPA history-mode fallback.
-		serveIndex(w, r, spaIndex)
+		serveIndex(w, spaIndex)
 	})
 }
 
@@ -69,163 +63,13 @@ func setCacheHeaders(w http.ResponseWriter, urlPath string) {
 	}
 }
 
-// looksLikeAssetPath reports whether the final path segment has a
-// file extension. We use this as a proxy for "this is a static asset
-// request" so the SPA fallback doesn't paper over missing files with
-// an HTML body when the browser is expecting a script or stylesheet.
-func looksLikeAssetPath(urlPath string) bool {
-	// Strip query string if any.
-	if i := strings.IndexByte(urlPath, '?'); i >= 0 {
-		urlPath = urlPath[:i]
-	}
-	lastSlash := strings.LastIndexByte(urlPath, '/')
-	seg := urlPath
-	if lastSlash >= 0 {
-		seg = urlPath[lastSlash+1:]
-	}
-	if seg == "" {
-		return false
-	}
-	return strings.Contains(seg, ".")
-}
-
-func serveIndex(w http.ResponseWriter, r *http.Request, body []byte) {
+func serveIndex(w http.ResponseWriter, body []byte) {
 	if len(body) == 0 {
 		http.Error(w, "frontend not built (index.html missing)", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// Strict CSP. Defends against reverse-proxy shims (e.g. Coolify's
-	// wrs_env.js) that try to inject inline scripts into the SPA
-	// response — the page then throws before Vue can mount and the
-	// user sees a blank screen. Inline <script> is disallowed
-	// entirely; the production build only loads /assets/*.js from
-	// the same origin, which is covered by 'self'. We keep
-	// 'unsafe-inline' for style only because Vite's runtime CSS
-	// dev-shim uses it, and the harm surface is much smaller.
-	w.Header().Set("Content-Security-Policy",
-		"default-src 'self'; "+
-			"script-src 'self'; "+
-			"style-src 'self' 'unsafe-inline'; "+
-			"img-src 'self' data: https:; "+
-			"font-src 'self' data:; "+
-			"connect-src 'self'; "+
-			"worker-src 'self' blob:; "+
-			"frame-ancestors 'none'; "+
-			"base-uri 'self'; "+
-			"form-action 'self'")
-	// Belt-and-suspenders: also write the same CSP as a <meta> tag
-	// inside the served HTML so the policy survives any reverse
-	// proxy that strips response headers but not the body. The
-	// meta tag is injected right after the <head> opening tag so
-	// the browser picks it up before evaluating any further
-	// markup.
-	_, _ = w.Write(injectCSPAndFallback(r, body))
-}
-
-// injectCSPAndFallback inserts (a) a <meta> CSP tag as the first
-// child of <head>, (b) a static <div id="boot-fallback"> that
-// shows "JavaScript is blocked or failed to load" if Vue never
-// mounts, and (c) strips any <script> tag that doesn't look like
-// our Vite build output.
-//
-// The script-stripping is the key fix. A reverse proxy on this
-// host (or an MDM policy on the phone, or a browser extension)
-// has been observed appending <script src="wrs_env.js"> and
-// <script src="web-client-content-script.js"> to the served HTML.
-// Those scripts are minified, throw synchronously, and kill the
-// page before Vue can mount. The strict CSP allows them because
-// they are same-origin external scripts.
-//
-// We defensively remove any <script> that:
-//   - has an src attribute that doesn't match /assets/index-*.js or
-//     /assets/vue-router-*.js or /assets/leaflet-*.js
-//   - OR has no src attribute (inline — already blocked by CSP but
-//     we strip for paranoia since some proxy shims convert external
-//     scripts to inline equivalents to dodge CSP)
-//
-// The resulting HTML only ever runs the Vue bundle. If a script
-// gets appended, it's deleted before the bytes leave the server.
-//
-// The "USE BASIC MODE" link href is server-side rendered with
-// the current request's path + ?token= so it works even when no
-// JS is available to build the href. The strict CSP would have
-// blocked an inline <script> that tried to set the href
-// client-side anyway, so this is the only way to keep the
-// escape hatch functional in the very situation the fallback
-// exists to handle.
-func injectCSPAndFallback(r *http.Request, body []byte) []byte {
-	csp := `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">`
-
-	token := r.URL.Query().Get("token")
-	basicHref := "/basic-mode.html?path=" + queryEscape(r.URL.Path) +
-		"&token=" + queryEscape(token)
-
-	fallback := `<style>@keyframes nc-boot-fallback-reveal{from{opacity:0}to{opacity:1}}#boot-fallback{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center;z-index:9999;opacity:0;animation:nc-boot-fallback-reveal .3s 4s forwards}#boot-fallback .icon{font-size:48px;margin-bottom:16px}#boot-fallback .title{font-size:18px;margin-bottom:12px;color:#39FF14}#boot-fallback .hint{font-size:12px;color:#888;max-width:380px;line-height:1.6}#boot-fallback code{color:#000;background:#39FF14;padding:2px 6px;border-radius:3px}#boot-fallback a{color:#000;background:#39FF14;border:none;padding:12px 24px;margin-top:20px;text-decoration:none;display:inline-block;font-weight:bold;letter-spacing:0.1em}#boot-fallback a:hover{background:#fff}</style><div id="boot-fallback"><div class="icon">⚠</div><div class="title">JavaScript failed to start</div><div class="hint">The dashboard did not load. This usually means a browser extension, MDM policy, captive portal, or reverse proxy is blocking scripts. Try <code>incognito mode</code> (Ctrl+Shift+N on desktop, ⋮ → New incognito on mobile).<br><br>You can still submit GPS samples using the <strong>basic mode</strong> below — no JavaScript framework required.</div><a href="` + basicHref + `">→ USE BASIC MODE</a></div><noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center"><div><div style="font-size:18px;margin-bottom:12px">JavaScript is required for the full PWA</div><div style="font-size:12px;color:#888">Use the <a href="` + basicHref + `" style="color:#000;background:#39FF14;padding:8px 16px;text-decoration:none">basic mode</a> instead.</div></div></div></noscript>`
-
-	s := string(body)
-	// Strip any <script> that doesn't look like the Vite-built
-	// bundle. We do this BEFORE injecting our CSP meta tag so the
-	// regex doesn't see our own additions.
-	s = stripForeignScripts(s)
-
-	// Insert the CSP meta as the first child of <head>.
-	if i := strings.Index(s, "<head>"); i >= 0 {
-		ins := i + len("<head>")
-		s = s[:ins] + csp + s[ins:]
-	}
-	// Insert the fallback block right after <body>.
-	if i := strings.Index(s, "<body>"); i >= 0 {
-		ins := i + len("<body>")
-		s = s[:ins] + fallback + s[ins:]
-	}
-	return []byte(s)
-}
-
-// stripForeignScripts removes any <script>...</script> from html
-// whose src attribute is not in the allowlist. Also removes
-// inline <script>...</script> blocks entirely (we never use
-// them; if one appears, it's injected). The Vue app, the vue-
-// router chunk, the leaflet chunk, and any modulepreload pointing
-// at them all use Vite's hashed filenames under /assets/.
-//
-// This is intentionally a regex over raw bytes rather than a
-// full HTML parse: the alternative (golang.org/x/net/html) is
-// too slow for a per-request hot path and Vite's output is
-// well-formed.
-func stripForeignScripts(html string) string {
-	// Match either <script src="X" ...> or <script> (inline body)
-	scriptRe := regexp.MustCompile(`(?is)<script\b([^>]*)>([\s\S]*?)</script>`)
-	// Allowlist for src: anything under /assets/ that Vite generated.
-	// Vite's index.html references the bundle as
-	//   src="/assets/index-XXXX.js"
-	//   href="/assets/vue-router-XXXX.js" (modulepreload, in <link>)
-	// and any other chunked module. We accept any path that starts
-	// with `/assets/` and ends in `.js`. (And the .css link, which
-	// is in a <link rel="stylesheet"> not a <script>.)
-	allowed := regexp.MustCompile(`^/assets/[A-Za-z0-9_\-./]+\.js$`)
-
-	return scriptRe.ReplaceAllStringFunc(html, func(match string) string {
-		sm := scriptRe.FindStringSubmatch(match)
-		if len(sm) < 3 {
-			return "" // shouldn't happen
-		}
-		attrs := sm[1]
-		body := strings.TrimSpace(sm[2])
-		// Inline script (no src, non-empty body): always drop.
-		if !strings.Contains(attrs, "src=") && body != "" {
-			return ""
-		}
-		// External script: keep only if src is in the allowlist.
-		srcRe := regexp.MustCompile(`(?i)\bsrc\s*=\s*"([^"]+)"`)
-		if m := srcRe.FindStringSubmatch(attrs); len(m) == 2 {
-			if allowed.MatchString(m[1]) {
-				return match
-			}
-		}
-		// src missing or not in allowlist → drop
-		return ""
-	})
+	_, _ = w.Write(body)
 }
 
 // fileExists reports whether p (interpreted relative to distDir) maps
@@ -244,4 +88,19 @@ func fileExists(distDir, urlPath string) bool {
 		return false
 	}
 	return !info.IsDir()
+}
+
+// looksLikeAssetPath returns true if the final segment of urlPath
+// contains a dot — i.e. it looks like "foo.js", "bar.css",
+// "favicon.svg", etc. We use this as a proxy for "this is a static
+// asset request, not an SPA route".
+func looksLikeAssetPath(urlPath string) bool {
+	if urlPath == "" {
+		return false
+	}
+	seg := urlPath
+	if i := strings.LastIndex(urlPath, "/"); i >= 0 {
+		seg = urlPath[i+1:]
+	}
+	return strings.Contains(seg, ".")
 }

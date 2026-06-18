@@ -2,395 +2,194 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
 
 const route = useRoute()
-
-// ─── URL params ─────────────────────────────────────────────────────────────
 const surveyId = computed(() => String(route.params.survey_id || ''))
 const token = computed(() => String(route.query.token || ''))
 
-// ─── State ──────────────────────────────────────────────────────────────────
-const state = ref('init') // init | ready | running | stopped | error
-const errorMessage = ref('')
-const errorCode = ref('')
+const status = ref('idle')     // idle | requesting | streaming | stopped | error
+const errorMsg = ref('')
 const lastFix = ref(null)
-const sampleCount = ref(0)
-const lastError = ref('')
-const debugLog = ref([]) // visible on-screen log so we can see what's happening
+const samples = ref(0)
 let watchId = null
-let map = null
-let marker = null
-let lastPostAt = 0
-let fixCount = 0
-let errorCount = 0
-let permissionState = 'unknown' // unknown | granted | denied | prompt
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
-function log(msg) {
-  const t = new Date().toLocaleTimeString()
-  debugLog.value.unshift(`[${t}] ${msg}`)
-  if (debugLog.value.length > 20) debugLog.value.length = 20
-}
-
-const isSecureContext = computed(() => {
-  if (typeof window === 'undefined') return false
-  return Boolean(window.isSecureContext) ||
-    window.location.hostname === 'localhost' ||
-    window.location.hostname === '127.0.0.1' ||
-    window.location.hostname === '::1'
-})
-
-const protocolBadge = computed(() => {
-  if (typeof window === 'undefined') return '…'
-  return window.location.protocol.replace(':', '').toUpperCase()
-})
-
-const hostBadge = computed(() => {
-  if (typeof window === 'undefined') return '…'
-  return window.location.host
-})
-
-// ─── Lifecycle ──────────────────────────────────────────────────────────────
-onMounted(async () => {
-  // Remove the boot-fallback element the SPA handler injects as a
-  // safety net. If Vue never mounts (e.g. because a third-party
-  // script extension broke the page or a proxy stripped the JS
-  // bundle) the CSS animation in the handler reveals the fallback
-  // div after 4 s. Reaching this line means we mounted cleanly, so
-  // it's safe to take the fallback down.
-  if (typeof document !== 'undefined') {
-    const fb = document.getElementById('boot-fallback')
-    if (fb) fb.remove()
+onMounted(() => {
+  if (!surveyId.value || !token.value) {
+    status.value = 'error'
+    errorMsg.value = 'Missing survey ID or token in URL. Scan the QR code again.'
   }
-
-  // Register the script-firewall service worker. It runs in the
-  // background and rejects any <script> the browser tries to fetch
-  // that isn't one of our /assets/*.js bundles. This stops a
-  // Chrome extension / captive portal / etc. from sneaking
-  // wrs_env.js or web-client-content-script.js in via DOM
-  // manipulation after the page is loaded.
-  if ('serviceWorker' in navigator && location.protocol === 'https:') {
-    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(
-      (e) => log('sw.register failed: ' + e.message)
-    )
-  }
-
-  log(`mounted: ${hostBadge.value} (${protocolBadge.value}, secure=${isSecureContext.value})`)
-  log(`survey id: ${surveyId.value.slice(0, 8)}…`)
-  log(`token: ${token.value ? token.value.slice(0, 8) + '…' : 'MISSING'}`)
-  log(`geolocation API: ${('geolocation' in navigator) ? 'yes' : 'NO'}`)
-  log(`permissions API: ${('permissions' in navigator) ? 'yes' : 'no'}`)
-
-  if (!surveyId.value) {
-    setError('INVALID', 'Missing survey id in URL')
-    return
-  }
-  if (!token.value) {
-    setError('INVALID', 'Missing ?token= in URL. Ask the admin for a new QR code.')
-    return
-  }
-  if (!('geolocation' in navigator)) {
-    setError('GPS_UNAVAILABLE', 'This browser does not expose navigator.geolocation.')
-    return
-  }
-
-  // Check the permission state up front via the Permissions API where
-  // available. Saves a round trip and lets us pre-empt PERMISSION_DENIED
-  // (which Chrome won't even surface a prompt for — it just silently
-  // calls the error callback with code=1).
-  if ('permissions' in navigator) {
-    try {
-      const p = await navigator.permissions.query({ name: 'geolocation' })
-      permissionState = p.state
-      log(`permission.query state: ${p.state}`)
-      p.onchange = () => {
-        permissionState = p.state
-        log(`permission.onchange: ${p.state}`)
-      }
-    } catch (e) {
-      log(`permission.query failed: ${e.message}`)
-    }
-  }
-
-  if (!isSecureContext.value) {
-    setError(
-      'INSECURE_CONTEXT',
-      'GPS is blocked because this page is not HTTPS. Open it via the controller’s https:// URL or http://localhost:3000.'
-    )
-    return
-  }
-
-  initMap()
-  // Auto-prompt on mount. The page is loaded via a user gesture
-  // (the user just tapped the QR / typed the URL), so Chrome should
-  // honor the request. We also show a manual START button as a
-  // fallback in case the auto-prompt is dismissed.
-  state.value = 'ready'
-  // Give the map a moment to render before the prompt arrives, so
-  // the UI doesn't feel janky on slow phones.
-  setTimeout(() => attemptStart('auto'), 600)
 })
 
 onUnmounted(() => {
-  if (watchId != null && navigator.geolocation) {
-    navigator.geolocation.clearWatch(watchId)
-  }
-  if (map) {
-    map.remove()
-    map = null
-  }
+  if (watchId !== null) navigator.geolocation?.clearWatch(watchId)
 })
 
-function initMap() {
-  setTimeout(() => {
-    if (!document.getElementById('pwa-map')) return
-    map = L.map('pwa-map', { zoomControl: false, attributionControl: false })
-      .setView([0, 0], 18)
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19
-    }).addTo(map)
-    marker = L.circleMarker([0, 0], {
-      radius: 8, color: '#39FF14', fillColor: '#39FF14', fillOpacity: 0.9, weight: 2
-    }).addTo(map)
-  }, 50)
-}
-
-function setError(code, msg) {
-  errorCode.value = code
-  errorMessage.value = msg
-  state.value = 'error'
-  log(`ERROR ${code}: ${msg}`)
-}
-
-function geoErrorCode(c) {
-  return { 1: 'PERMISSION_DENIED', 2: 'POSITION_UNAVAILABLE', 3: 'TIMEOUT' }[c] || `CODE_${c}`
-}
-
-// Two entry points: auto (from page load) and manual (button tap).
-// Both eventually call watchPosition. Chrome shows the permission
-// dialog on the first getCurrentPosition OR watchPosition call.
-function attemptStart(source) {
-  if (state.value === 'running') return
-  log(`attemptStart (${source})`)
-  state.value = 'running'
-
-  // watchPosition works better than getCurrentPosition on mobile:
-  // getCurrentPosition shows the dialog once and then resolves with
-  // a single fix; watchPosition shows the dialog once and keeps
-  // streaming. With watchPosition the page only needs one user
-  // gesture for the entire session.
-  watchId = navigator.geolocation.watchPosition(
-    (pos) => onFix(pos),
+function startGPS() {
+  if (!navigator.geolocation) {
+    status.value = 'error'
+    errorMsg.value = 'This browser does not support geolocation.'
+    return
+  }
+  status.value = 'requesting'
+  navigator.geolocation.getCurrentPosition(
+    () => beginWatch(),
     (err) => {
-      errorCount++
-      const code = geoErrorCode(err.code)
-      log(`watchPosition error #${errorCount}: ${code} — ${err.message || ''}`)
-      if (err.code === 1) {
-        // PERMISSION_DENIED. Re-query the permission state to update
-        // the badge, then surface the error UI with actionable hint.
-        if ('permissions' in navigator) {
-          navigator.permissions.query({ name: 'geolocation' }).then(p => {
-            permissionState = p.state
-            log(`post-deny permission state: ${p.state}`)
-          })
-        }
-        setError(
-          'GPS_DENIED',
-          'Location was blocked. Tap the lock/tune icon in the address bar → "Permissions" → set Location to "Allow", then tap RESUME.'
-        )
-      } else if (err.code === 2) {
-        setError(
-          'GPS_UNAVAILABLE',
-          'No GPS fix available. Step outside, wait 10 seconds, then tap RESUME.'
-        )
-      } else if (err.code === 3) {
-        // TIMEOUT — non-fatal: just keep watching, the next fix
-        // attempt will succeed or trigger a real error.
-        log('timeout — continuing to watch')
-        return
-      } else {
-        setError('GPS_ERROR', `GPS error: ${err.message || code}`)
-      }
+      status.value = 'error'
+      errorMsg.value = geoError(err)
     },
-    {
-      enableHighAccuracy: true,
-      maximumAge: 0,
-      timeout: 25000
-    }
+    { enableHighAccuracy: true, timeout: 30000 }
   )
+}
 
-  // Some Android Chrome builds (especially older WebView wrappers)
-  // never surface the prompt for watchPosition and instead only
-  // respond to getCurrentPosition. Kick a one-shot as a fallback
-  // so the prompt at least shows up. If the permission is already
-  // granted, the prompt is skipped.
-  if (source === 'auto' && fixCount === 0) {
-    setTimeout(() => {
-      if (state.value === 'running' && fixCount === 0) {
-        log('kick: getCurrentPosition fallback to force prompt')
-        navigator.geolocation.getCurrentPosition(
-          (pos) => log(`kick fix: ${pos.coords.latitude},${pos.coords.longitude}`),
-          (err) => log(`kick error: ${geoErrorCode(err.code)} ${err.message || ''}`),
-          { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
-        )
+function beginWatch() {
+  status.value = 'streaming'
+  watchId = navigator.geolocation.watchPosition(
+    async (pos) => {
+      lastFix.value = {
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        acc: pos.coords.accuracy,
       }
-    }, 1500)
-  }
+      await sendSample(pos)
+    },
+    (err) => {
+      // Non-fatal: keep streaming, brief GPS gaps are normal.
+      console.warn('GPS gap:', err.message)
+    },
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 30000 }
+  )
 }
 
-async function onFix(pos) {
-  fixCount++
-  const fix = {
-    lat: pos.coords.latitude,
-    lon: pos.coords.longitude,
-    accuracy: pos.coords.accuracy,
-    ts: pos.timestamp || Date.now()
-  }
-  lastFix.value = fix
-  if (map) {
-    marker.setLatLng([fix.lat, fix.lon])
-    if (fixCount === 1) {
-      map.setView([fix.lat, fix.lon], 19)
-      log(`first fix: ${fix.lat.toFixed(5)},${fix.lon.toFixed(5)} ±${fix.accuracy.toFixed(0)}m`)
-    }
-  }
-  const now = Date.now()
-  if (now - lastPostAt < 900) return
-  lastPostAt = now
-  await postSample(fix)
-}
-
-async function postSample(fix) {
+async function sendSample(pos) {
   try {
     await axios.post(`/api/surveys/${surveyId.value}/samples`, {
-      lat: fix.lat, lon: fix.lon,
-      accuracy_m: fix.accuracy, ts: fix.ts
+      lat: pos.coords.latitude,
+      lon: pos.coords.longitude,
+      accuracy_m: pos.coords.accuracy,
+      ts: pos.timestamp || Date.now(),
     }, {
-      headers: {
-        'X-Survey-Token': token.value,
-        'Content-Type': 'application/json'
-      },
-      timeout: 8000
+      headers: { 'X-Survey-Token': token.value },
+      timeout: 10000,
     })
-    sampleCount.value++
+    samples.value++
   } catch (e) {
-    const status = e.response?.status
-    const code = e.response?.data?.error || ''
-    if (status === 401) {
-      if (code === 'TOKEN_REVOKED') {
-        setError('TOKEN_REVOKED', 'The admin revoked this survey token. Ask for a new QR.')
-      } else {
-        setError('INVALID', 'Token rejected. Ask the admin for a new QR.')
-      }
-    } else if (status === 403) {
-      setError('PUBLIC_SURVEY_DISABLED', 'Access denied (public surveys may be disabled).')
-    } else if (status === 410) {
-      setError('TOKEN_EXPIRED', 'Survey ended. The token has expired.')
-    } else if (status === 429) {
-      lastError.value = 'rate-limited'
-    } else if (status === 404) {
-      setError('INVALID', 'Survey not found. Ask the admin for a new QR.')
-    } else {
-      lastError.value = `post failed ${status || ''} ${code || e.message}`
-      log(lastError.value)
+    if (e.response?.status === 410) {
+      stopGPS()
+      status.value = 'error'
+      errorMsg.value = 'Survey ended.'
+    } else if (e.response?.status === 401) {
+      stopGPS()
+      status.value = 'error'
+      errorMsg.value = 'Token rejected. Ask for a new QR code.'
     }
+    // Other errors (429, network) are non-fatal.
   }
 }
 
-function stopSurvey() {
-  if (watchId != null) {
+function stopGPS() {
+  if (watchId !== null) {
     navigator.geolocation.clearWatch(watchId)
     watchId = null
   }
-  state.value = 'stopped'
-  log('stopped')
+  status.value = 'stopped'
 }
 
-function resume() {
-  if (errorCode.value === 'INSECURE_CONTEXT' ||
-      errorCode.value === 'INVALID' ||
-      errorCode.value === 'GPS_UNAVAILABLE' ||
-      errorCode.value === 'TOKEN_REVOKED' ||
-      errorCode.value === 'TOKEN_EXPIRED' ||
-      errorCode.value === 'PUBLIC_SURVEY_DISABLED') {
-    return // not retryable
+function geoError(err) {
+  switch (err.code) {
+    case 1: return 'Location permission denied. Tap the lock icon in the address bar → Site settings → Location → Allow, then retry.'
+    case 2: return 'No GPS fix. Go outside and retry.'
+    case 3: return 'GPS request timed out. Retry.'
+    default: return err.message || 'Unknown GPS error.'
   }
-  errorCode.value = ''
-  errorMessage.value = ''
-  attemptStart('manual')
 }
 </script>
 
 <template>
-  <div class="min-h-screen w-screen bg-black text-gray-200 font-mono flex flex-col">
-    <header class="px-4 py-3 border-b border-[#39FF14]/30 flex items-center justify-between">
-      <div>
-        <div class="text-[10px] tracking-[0.3em] text-[#39FF14]/60">WI-FI SURVEY</div>
-        <div class="text-[11px] text-gray-400 mt-0.5">
-          {{ protocolBadge }} · {{ hostBadge }} ·
-          <span :class="isSecureContext ? 'text-[#39FF14]' : 'text-[#ff0055]'">
-            {{ isSecureContext ? 'SECURE' : 'INSECURE' }}
-          </span>
-        </div>
-      </div>
-      <div class="text-right">
-        <div class="text-[10px] tracking-widest" :class="state === 'running' ? 'text-[#39FF14] animate-pulse' : state === 'stopped' ? 'text-gray-500' : state === 'error' ? 'text-[#ff0055]' : 'text-yellow-400'">
-          {{ state === 'running' ? '● REC' : state === 'stopped' ? '■ STOP' : state === 'error' ? '⚠ ERR' : '…' }}
-          · perm:{{ permissionState }}
-        </div>
-        <div class="text-[10px] text-gray-500 mt-0.5">{{ sampleCount }} samples · {{ fixCount }} fixes · {{ errorCount }} err</div>
-      </div>
-    </header>
-
-    <div class="relative flex-1 min-h-0">
-      <div id="pwa-map" class="absolute inset-0"></div>
-      <div class="pointer-events-none absolute inset-0 flex items-center justify-center">
-        <div class="w-3 h-3 border-2 border-[#39FF14] rounded-full opacity-60"></div>
-      </div>
-      <div v-if="lastFix" class="absolute bottom-3 left-3 right-3 bg-black/80 border border-[#39FF14]/40 px-3 py-2 text-[11px] rounded">
-        <div class="flex justify-between"><span class="text-gray-400">LAT</span><span class="text-white">{{ lastFix.lat.toFixed(6) }}</span></div>
-        <div class="flex justify-between"><span class="text-gray-400">LON</span><span class="text-white">{{ lastFix.lon.toFixed(6) }}</span></div>
-        <div class="flex justify-between"><span class="text-gray-400">±</span><span class="text-white">{{ lastFix.accuracy.toFixed(0) }} m</span></div>
-      </div>
+  <div class="survey">
+    <div class="header">
+      <span class="title">WI-FI SURVEY</span>
+      <span class="id">{{ surveyId.slice(0, 8) }}…</span>
     </div>
 
-    <footer class="px-4 py-3 border-t border-[#39FF14]/30 bg-black/95 space-y-2 max-h-[55vh] overflow-y-auto">
-      <button
-        v-if="state === 'running'"
-        @click="stopSurvey"
-        class="w-full py-3 border-2 border-[#ff0055] text-[#ff0055] font-bold tracking-widest clip-chamfer active:scale-95 hover:bg-[#ff0055] hover:text-black"
-      >■ STOP</button>
-
-      <button
-        v-else-if="state === 'error' || state === 'ready' || state === 'stopped' || state === 'init'"
-        @click="resume"
-        class="w-full py-3 border-2 border-[#39FF14] text-[#39FF14] font-bold tracking-widest clip-chamfer active:scale-95 hover:bg-[#39FF14] hover:text-black"
-      >▶ REQUEST GPS PERMISSION</button>
-
-      <div v-if="errorCode" class="text-center text-xs space-y-1 pt-1">
-        <div class="text-[#ff0055] font-bold">{{ errorCode }}</div>
-        <div class="text-gray-300">{{ errorMessage }}</div>
+    <div class="info">
+      <div v-if="lastFix" class="fix">
+        <div>LAT {{ lastFix.lat.toFixed(6) }}</div>
+        <div>LON {{ lastFix.lon.toFixed(6) }}</div>
+        <div>± {{ lastFix.acc.toFixed(0) }} m</div>
       </div>
+      <div class="count">{{ samples }} samples sent</div>
+    </div>
 
-      <!-- Live debug log — always visible so we can see what's
-           actually happening on the device without devtools. -->
-      <details open class="text-[10px] text-gray-500 mt-2">
-        <summary class="cursor-pointer text-[#39FF14]/70">debug log</summary>
-        <div class="font-mono leading-snug max-h-40 overflow-y-auto bg-black/60 border border-gray-800 p-2 mt-1">
-          <div v-for="(line, i) in debugLog" :key="i">{{ line }}</div>
-          <div v-if="!debugLog.length" class="text-gray-700">no events yet</div>
-        </div>
-      </details>
+    <div class="actions">
+      <button v-if="status === 'idle'" @click="startGPS" class="go">
+        ▶ START GPS
+      </button>
+      <button v-if="status === 'requesting'" disabled class="wait">
+        Requesting GPS…
+      </button>
+      <button v-if="status === 'streaming'" @click="stopGPS" class="stop">
+        ■ STOP ({{ samples }})
+      </button>
+      <button v-if="status === 'stopped' || status === 'error'" @click="startGPS" class="go">
+        ▶ RESUME
+      </button>
+    </div>
 
-      <div v-if="lastError && state === 'running'" class="text-[10px] text-yellow-500 text-center">
-        {{ lastError }}
-      </div>
-    </footer>
+    <div v-if="status === 'streaming'" class="live">● RECORDING</div>
+
+    <div v-if="status === 'error'" class="err">
+      {{ errorMsg }}
+    </div>
+
+    <div v-if="status === 'idle'" class="hint">
+      Tap START. Your browser will ask for location permission.
+    </div>
   </div>
 </template>
 
-<style>
-button { min-height: 48px; }
+<style scoped>
+.survey {
+  min-height: 100vh;
+  background: #000;
+  color: #39FF14;
+  font-family: monospace;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 20px;
+  box-sizing: border-box;
+}
+.header {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid #39FF1430;
+}
+.title { font-size: 12px; letter-spacing: 0.3em; color: #39FF1460; }
+.id { font-size: 12px; color: #888; }
+.info { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.fix { text-align: center; font-size: 14px; line-height: 1.8; }
+.count { font-size: 14px; color: #888; }
+.actions { width: 100%; max-width: 400px; }
+button {
+  width: 100%;
+  padding: 18px;
+  font-family: monospace;
+  font-size: 18px;
+  font-weight: bold;
+  border: 2px solid;
+  cursor: pointer;
+  border-radius: 0;
+}
+.go { border-color: #39FF14; color: #39FF14; background: transparent; }
+.go:active { background: #39FF14; color: #000; }
+.stop { border-color: #ff0055; color: #ff0055; background: transparent; }
+.stop:active { background: #ff0055; color: #000; }
+.wait { border-color: #888; color: #888; }
+.live { margin-top: 12px; color: #39FF14; animation: pulse 1s infinite; }
+@keyframes pulse { 50% { opacity: 0.3; } }
+.err { margin-top: 16px; color: #ff5555; font-size: 13px; text-align: center; max-width: 340px; line-height: 1.5; }
+.hint { margin-top: 16px; color: #888; font-size: 13px; text-align: center; }
 </style>
