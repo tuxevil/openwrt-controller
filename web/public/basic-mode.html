@@ -15,21 +15,22 @@
     input:focus { outline: none; border-color: #39FF14; }
     button { display: block; width: 100%; padding: 16px; margin-top: 16px; background: #39FF14; color: #000; border: none; font-family: monospace; font-size: 16px; font-weight: bold; cursor: pointer; }
     button:disabled { background: #333; color: #888; cursor: not-allowed; }
-    .status { font-size: 12px; padding: 8px; margin-top: 12px; border-radius: 4px; }
+    .status { font-size: 12px; padding: 8px; margin-top: 12px; border-radius: 4px; word-break: break-word; }
     .ok { background: #0a3a0a; color: #39FF14; border: 1px solid #39FF14; }
     .err { background: #3a0a0a; color: #ff5555; border: 1px solid #ff5555; }
     .row { display: flex; gap: 8px; }
     .row > * { flex: 1; }
+    .ed { font-size: 10px; color: #555; margin-top: 8px; }
   </style>
 </head>
 <body>
   <h1>📡 Surveyor (Basic Mode)</h1>
-  <div class="sub">No JavaScript. Use this if your browser blocks the full PWA.</div>
+  <div class="sub">No JavaScript framework. Works even with browser extensions that block scripts.</div>
 
   <div class="card">
     <div style="font-size: 12px; color: #888;">Survey ID</div>
-    <div id="surveyId" style="font-size: 18px; color: #39FF14; word-break: break-all;">—</div>
-    <div style="font-size: 11px; color: #888; margin-top: 4px;">Token from URL ?token=… is held by the form below.</div>
+    <div id="surveyId" style="font-size: 18px; color: #39FF14; word-break: break-all; font-weight: bold;">—</div>
+    <div style="font-size: 11px; color: #888; margin-top: 4px;">Token loaded from <code>?token=…</code> in the URL.</div>
   </div>
 
   <div class="card">
@@ -57,36 +58,57 @@
     </div>
   </form>
 
-  <script>
-    // Tiny inline JS is allowed because this page has no CSP. The
-    // main PWA blocks inline scripts; this fallback page is a
-    // deliberate exception so users with no-JS-ish environments
-    // can still submit samples.
-    (function() {
-      var path = location.pathname.split('/');
-      var id = path[path.length - 1] || '';
-      document.getElementById('surveyId').textContent = id || 'MISSING — use /basic-mode.html?id=…';
+  <div class="ed">If GPS button says "denied" you need to grant Location permission to this origin in your browser settings, then re-tap.</div>
 
-      // If id is missing, allow ?id=… for convenience.
+  <script>
+    // This page deliberately has no CSP — inline scripts are
+    // allowed so the form always works even on phones with
+    // browser extensions that interfere with normal pages.
+    (function() {
+      // Resolve survey id from /basic-mode.html?path=/survey/<id>
+      // or from the explicit ?id=... fallback.
       var qs = new URLSearchParams(location.search);
-      if (!id && qs.get('id')) id = qs.get('id');
-      if (id) document.getElementById('surveyId').textContent = id;
+      var id = '';
+      var pathParam = qs.get('path') || '';
+      var m = pathParam.match(/\/survey\/([0-9a-fA-F-]{8,})/);
+      if (m) id = m[1];
+      if (!id) id = qs.get('id') || '';
+      if (!id) {
+        // Last resort: parse from referrer
+        var ref = document.referrer || '';
+        var m2 = ref.match(/\/survey\/([0-9a-fA-F-]{8,})/);
+        if (m2) id = m2[1];
+      }
+      var token = qs.get('token') || '';
+      if (id) {
+        document.getElementById('surveyId').textContent = id;
+      } else {
+        document.getElementById('surveyId').innerHTML =
+          '<span style="color:#ff5555">MISSING</span> — open this page via the QR code or add ?id=…&token=…';
+      }
 
       var form = document.getElementById('f');
       form.action = '/api/surveys/' + encodeURIComponent(id) + '/samples';
+
       document.getElementById('gpsBtn').addEventListener('click', function() {
         var s = document.getElementById('gpsStatus');
         s.textContent = 'requesting GPS…';
-        if (!navigator.geolocation) { s.textContent = 'no geolocation API'; return; }
+        if (!navigator.geolocation) { s.textContent = 'no geolocation API in this browser'; return; }
         navigator.geolocation.getCurrentPosition(function(p) {
           document.getElementById('lat').value = p.coords.latitude.toFixed(6);
           document.getElementById('lon').value = p.coords.longitude.toFixed(6);
           document.getElementById('acc').value = Math.round(p.coords.accuracy);
           s.textContent = 'GPS filled in — tap SEND';
         }, function(e) {
-          s.textContent = 'GPS error ' + e.code + ': ' + (e.message || 'denied');
+          var msg = {
+            1: 'PERMISSION_DENIED — open the lock icon in the address bar, allow Location, and retry',
+            2: 'POSITION_UNAVAILABLE — no GPS fix (try outdoors)',
+            3: 'TIMEOUT — try again'
+          }[e.code] || ('GPS error ' + e.code);
+          s.textContent = msg;
         }, { enableHighAccuracy: true, timeout: 20000 });
       });
+
       form.addEventListener('submit', function(ev) {
         ev.preventDefault();
         var btn = form.querySelector('button[type=submit]');
@@ -101,11 +123,23 @@
         var body = {
           lat: parseFloat(fd.get('lat')),
           lon: parseFloat(fd.get('lon')),
-          accuracy_m: fd.get('accuracy_m') ? parseFloat(fd.get('accuracy_m')) : undefined,
-          ts: fd.get('ts') ? parseInt(fd.get('ts'), 10) : undefined,
         };
-        // X-Survey-Token comes from ?token= in the URL.
-        var token = qs.get('token') || '';
+        var acc = fd.get('accuracy_m');
+        if (acc) body.accuracy_m = parseFloat(acc);
+        var ts = fd.get('ts');
+        if (ts) body.ts = parseInt(ts, 10);
+        if (!id) {
+          st.className = 'status err';
+          st.textContent = 'no survey id; cannot send';
+          btn.disabled = false; btn.textContent = '▶ SEND GPS SAMPLE';
+          return;
+        }
+        if (!token) {
+          st.className = 'status err';
+          st.textContent = 'no survey token; cannot send';
+          btn.disabled = false; btn.textContent = '▶ SEND GPS SAMPLE';
+          return;
+        }
         fetch(form.action, {
           method: 'POST',
           headers: {
@@ -116,24 +150,35 @@
         }).then(function(r) {
           if (r.status === 202) {
             st.className = 'status ok';
-            st.textContent = '✓ sample accepted (' + r.status + '). Walk somewhere else and send another.';
-            btn.disabled = false;
-            btn.textContent = '▶ SEND GPS SAMPLE';
+            st.textContent = '✓ sample accepted (HTTP 202). Walk somewhere else and tap SEND again.';
+            btn.disabled = false; btn.textContent = '▶ SEND GPS SAMPLE';
           } else {
             return r.text().then(function(t) {
               st.className = 'status err';
-              st.textContent = '✗ ' + r.status + ' — ' + t;
-              btn.disabled = false;
-              btn.textContent = '▶ SEND GPS SAMPLE';
+              st.textContent = '✗ HTTP ' + r.status + ' — ' + t;
+              btn.disabled = false; btn.textContent = '▶ SEND GPS SAMPLE';
             });
           }
         }).catch(function(e) {
           st.className = 'status err';
           st.textContent = '✗ network error: ' + e.message;
-          btn.disabled = false;
-          btn.textContent = '▶ SEND GPS SAMPLE';
+          btn.disabled = false; btn.textContent = '▶ SEND GPS SAMPLE';
         });
       });
+
+      // Service worker registration. The first time the user loads
+      // this page (or any page on the controller), the SW installs
+      // and from then on intercepts and blocks any non-allowlisted
+      // script request that some browser extension tries to inject.
+      // The /survey/ PWA itself depends on this — without the SW,
+      // wrs_env.js and web-client-content-script.js get through and
+      // crash the page.
+      if ('serviceWorker' in navigator && location.protocol === 'https:') {
+        navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(function(e) {
+          // best-effort: SW might fail in some privacy modes, but the
+          // page still works without it.
+        });
+      }
     })();
   </script>
 </body>

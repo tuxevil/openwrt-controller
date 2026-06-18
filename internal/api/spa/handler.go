@@ -2,10 +2,15 @@ package spa
 
 import (
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"regexp"
 	"strings"
 )
+
+// queryEscape is a tiny indirection so we don't depend on
+// url.QueryEscape being a particular package-level symbol.
+func queryEscape(s string) string { return url.QueryEscape(s) }
 
 // NewHandler returns an http.Handler that serves files from distDir.
 //
@@ -32,7 +37,7 @@ func NewHandler(distDir string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setCacheHeaders(w, r.URL.Path)
 		if r.URL.Path == "/" || r.URL.Path == "" {
-			serveIndex(w, spaIndex)
+			serveIndex(w, r, spaIndex)
 			return
 		}
 		// Real on-disk file? serve as-is (FileServer handles Range, etc.)
@@ -49,7 +54,7 @@ func NewHandler(distDir string) http.Handler {
 			return
 		}
 		// SPA history-mode fallback.
-		serveIndex(w, spaIndex)
+		serveIndex(w, r, spaIndex)
 	})
 }
 
@@ -84,7 +89,7 @@ func looksLikeAssetPath(urlPath string) bool {
 	return strings.Contains(seg, ".")
 }
 
-func serveIndex(w http.ResponseWriter, body []byte) {
+func serveIndex(w http.ResponseWriter, r *http.Request, body []byte) {
 	if len(body) == 0 {
 		http.Error(w, "frontend not built (index.html missing)", http.StatusNotFound)
 		return
@@ -115,7 +120,7 @@ func serveIndex(w http.ResponseWriter, body []byte) {
 	// meta tag is injected right after the <head> opening tag so
 	// the browser picks it up before evaluating any further
 	// markup.
-	_, _ = w.Write(injectCSPAndFallback(body))
+	_, _ = w.Write(injectCSPAndFallback(r, body))
 }
 
 // injectCSPAndFallback inserts (a) a <meta> CSP tag as the first
@@ -141,9 +146,22 @@ func serveIndex(w http.ResponseWriter, body []byte) {
 //
 // The resulting HTML only ever runs the Vue bundle. If a script
 // gets appended, it's deleted before the bytes leave the server.
-func injectCSPAndFallback(body []byte) []byte {
+//
+// The "USE BASIC MODE" link href is server-side rendered with
+// the current request's path + ?token= so it works even when no
+// JS is available to build the href. The strict CSP would have
+// blocked an inline <script> that tried to set the href
+// client-side anyway, so this is the only way to keep the
+// escape hatch functional in the very situation the fallback
+// exists to handle.
+func injectCSPAndFallback(r *http.Request, body []byte) []byte {
 	csp := `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">`
-	fallback := `<style>@keyframes nc-boot-fallback-reveal{from{opacity:0}to{opacity:1}}#boot-fallback{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center;z-index:9999;opacity:0;animation:nc-boot-fallback-reveal .3s 4s forwards}#boot-fallback .icon{font-size:48px;margin-bottom:16px}#boot-fallback .title{font-size:18px;margin-bottom:12px;color:#39FF14}#boot-fallback .hint{font-size:12px;color:#888;max-width:380px;line-height:1.6}#boot-fallback code{color:#fff;background:#111;padding:2px 6px;border-radius:3px}#boot-fallback a{color:#39FF14;border:1px solid #39FF14;padding:8px 16px;margin-top:16px;text-decoration:none;display:inline-block}#boot-fallback a:hover{background:#39FF14;color:#000}</style><div id="boot-fallback"><div class="icon">⚠</div><div class="title">JavaScript failed to start</div><div class="hint">The dashboard did not load. This usually means a browser extension, MDM policy, captive portal, or reverse proxy is blocking scripts. Try <code>incognito mode</code> (Ctrl+Shift+N on desktop, ⋮ → New incognito on mobile).<br><br>You can still submit GPS samples using the <strong>basic mode</strong> below — no JavaScript framework required.</div><a id="boot-fallback-link">→ USE BASIC MODE</a></div><noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center"><div><div style="font-size:18px;margin-bottom:12px">JavaScript is required for the full PWA</div><div style="font-size:12px;color:#888">Use the <a href="/basic-mode.html" style="color:#39FF14">basic mode</a> page instead.</div></div></div></noscript><script>document.getElementById('boot-fallback-link').href='/basic-mode.html?path='+encodeURIComponent(location.pathname)+'&token='+encodeURIComponent(new URLSearchParams(location.search).get('token')||'');</script>`
+
+	token := r.URL.Query().Get("token")
+	basicHref := "/basic-mode.html?path=" + queryEscape(r.URL.Path) +
+		"&token=" + queryEscape(token)
+
+	fallback := `<style>@keyframes nc-boot-fallback-reveal{from{opacity:0}to{opacity:1}}#boot-fallback{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center;z-index:9999;opacity:0;animation:nc-boot-fallback-reveal .3s 4s forwards}#boot-fallback .icon{font-size:48px;margin-bottom:16px}#boot-fallback .title{font-size:18px;margin-bottom:12px;color:#39FF14}#boot-fallback .hint{font-size:12px;color:#888;max-width:380px;line-height:1.6}#boot-fallback code{color:#000;background:#39FF14;padding:2px 6px;border-radius:3px}#boot-fallback a{color:#000;background:#39FF14;border:none;padding:12px 24px;margin-top:20px;text-decoration:none;display:inline-block;font-weight:bold;letter-spacing:0.1em}#boot-fallback a:hover{background:#fff}</style><div id="boot-fallback"><div class="icon">⚠</div><div class="title">JavaScript failed to start</div><div class="hint">The dashboard did not load. This usually means a browser extension, MDM policy, captive portal, or reverse proxy is blocking scripts. Try <code>incognito mode</code> (Ctrl+Shift+N on desktop, ⋮ → New incognito on mobile).<br><br>You can still submit GPS samples using the <strong>basic mode</strong> below — no JavaScript framework required.</div><a href="` + basicHref + `">→ USE BASIC MODE</a></div><noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center"><div><div style="font-size:18px;margin-bottom:12px">JavaScript is required for the full PWA</div><div style="font-size:12px;color:#888">Use the <a href="` + basicHref + `" style="color:#000;background:#39FF14;padding:8px 16px;text-decoration:none">basic mode</a> instead.</div></div></div></noscript>`
 
 	s := string(body)
 	// Strip any <script> that doesn't look like the Vite-built
