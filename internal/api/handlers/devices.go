@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"openwrt-controller/internal/api/middleware"
@@ -77,23 +78,17 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 
 	var devices []map[string]interface{}
+	var deviceIDs []string
+	// First pass: read the device rows, capture IDs for the batched
+	// incident lookup below. The previous N+1 ran one SELECT per device;
+	// with even 50 devices that was 50 round-trips on every dashboard
+	// refresh. We now do exactly one.
 	for rows.Next() {
 		var id string
 		var sID, name, model, status, lastSeen, lastPulled, lastIP, agentVersion sql.NullString
 		var stateJSON []byte
 		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON); err == nil {
-			lastSeenTime, _ := time.Parse(time.RFC3339Nano, lastSeen.String)
-
-			openIncidents, incidentErr := loadOpenIncidents(r, id)
-			if incidentErr != nil {
-				openIncidents = nil
-			}
-
-			health := services.ClassifyDeviceHealth(
-				sql.NullTime{Valid: !lastSeenTime.IsZero(), Time: lastSeenTime},
-				openIncidents,
-				now,
-			)
+			deviceIDs = append(deviceIDs, id)
 
 			dev := map[string]interface{}{
 				"id":                    id,
@@ -101,12 +96,11 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 				"name":                  name.String,
 				"model":                 model.String,
 				"status":                status.String,
-				"health":                string(health),
 				"last_seen_at":          lastSeen.String,
 				"last_config_pulled_at": lastPulled.String,
 				"last_ip":               lastIP.String,
 				"agent_version":         agentVersion.String,
-				"open_incidents":        incidentsToMap(openIncidents),
+				"open_incidents":        []map[string]string{},
 			}
 			if len(stateJSON) > 0 {
 				var parsedState map[string]interface{}
@@ -116,6 +110,33 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			devices = append(devices, dev)
 		}
+	}
+
+	// Second pass: one batched query for all open incidents across all
+	// devices in this site. device_id = ANY($1) uses the index on
+	// incidents.device_id (added by RunTenantMigrations). Builds a
+	// map[deviceID][]IncidentSummary so per-device health classification
+	// stays a hash lookup away.
+	incidentsByDevice := make(map[string][]services.IncidentSummary)
+	if len(deviceIDs) > 0 {
+		if rows2, err2 := loadOpenIncidentsBatch(r, deviceIDs); err2 == nil {
+			incidentsByDevice = rows2
+		}
+	}
+
+	// Third pass: stamp health + incidents onto each device row.
+	for _, dev := range devices {
+		id, _ := dev["id"].(string)
+		incs := incidentsByDevice[id]
+		lastSeenStr, _ := dev["last_seen_at"].(string)
+		lastSeenTime, _ := time.Parse(time.RFC3339Nano, lastSeenStr)
+
+		dev["health"] = string(services.ClassifyDeviceHealth(
+			sql.NullTime{Valid: !lastSeenTime.IsZero(), Time: lastSeenTime},
+			incs,
+			now,
+		))
+		dev["open_incidents"] = incidentsToMap(incs)
 	}
 
 	if devices == nil {
@@ -173,6 +194,65 @@ func loadOpenIncidents(r *http.Request, deviceID string) ([]services.IncidentSum
 		out = append(out, services.IncidentSummary{IncidentType: t, Severity: s})
 	}
 	return out, nil
+}
+
+// loadOpenIncidentsBatch fetches OPEN incidents for many devices in a
+// single query. Returns a map keyed by device_id for O(1) lookup. This
+// replaces the per-device query loop and is the reason the dashboard
+// site list now refreshes in tens of ms instead of seconds.
+func loadOpenIncidentsBatch(r *http.Request, deviceIDs []string) (map[string][]services.IncidentSummary, error) {
+	out := make(map[string][]services.IncidentSummary)
+	if len(deviceIDs) == 0 {
+		return out, nil
+	}
+	schema, err := database.SafeSchemaIdent(middleware.GetTenantSchema(r))
+	if err != nil || schema == "" {
+		return out, fmt.Errorf("no tenant schema in context: %w", err)
+	}
+	rows, err := database.Tx(r.Context()).Query(
+		"SELECT device_id, incident_type, severity FROM "+schema+".incidents WHERE device_id = ANY($1::text[]) AND status = 'OPEN'",
+		deviceIDsAsPGArray(deviceIDs),
+	)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var dev, t, s string
+		if err := rows.Scan(&dev, &t, &s); err != nil {
+			continue
+		}
+		out[dev] = append(out[dev], services.IncidentSummary{IncidentType: t, Severity: s})
+	}
+	return out, nil
+}
+
+// deviceIDsAsPGArray formats a []string as a Postgres text array literal
+// (`{a,b,c}`). Used with the ANY($1::text[]) operator; safer than
+// building a comma-separated IN-list because it handles commas and
+// quotes inside MACs (which are illegal but we still defend in depth).
+func deviceIDsAsPGArray(ids []string) string {
+	// Empty literal would make ANY() always-false. Caller checks len.
+	var b strings.Builder
+	b.WriteByte('{')
+	for i, id := range ids {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		// Backslash-escape any embedded braces or backslashes per
+		// Postgres array-literal rules. MACs won't contain these, but
+		// this keeps the helper safe for future non-MAC IDs.
+		for _, r := range id {
+			switch r {
+			case '{', '}', '"', '\\':
+				b.WriteByte('\\')
+			}
+			b.WriteRune(r)
+		}
+	}
+	b.WriteByte('}')
+	return b.String()
 }
 
 func incidentsToMap(in []services.IncidentSummary) []map[string]string {

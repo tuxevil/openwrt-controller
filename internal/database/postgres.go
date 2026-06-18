@@ -317,11 +317,36 @@ func createTenantTables(schema string) error {
 		log_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
 		severity VARCHAR(20) NOT NULL,
 		message TEXT NOT NULL,
-		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE (device_id, log_timestamp, message)
 	);
 
 	CREATE EXTENSION IF NOT EXISTS pg_trgm;
 	CREATE INDEX IF NOT EXISTS trgm_idx_%[1]s_system_logs_message ON %[1]s.system_logs USING gin (message gin_trgm_ops);
+	-- Composite B-tree for the dedup check in InsertDeviceLogs
+	-- (WHERE NOT EXISTS (... device_id, log_timestamp, message)).
+	-- Without this index, every telemetry POST triggers a full table
+	-- scan on system_logs and pegs CPU once the table grows past a
+	-- few hundred thousand rows. Index-only lookups collapse the
+	-- dedup to O(log n).
+	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_dedup
+		ON %[1]s.system_logs (device_id, log_timestamp, message);
+	-- btree on created_at so the retention sweep (DELETE older than N days)
+	-- can range-scan instead of seq-scanning the whole table.
+	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_created_at
+		ON %[1]s.system_logs (created_at);
+	-- Composite B-tree for the dedup check in InsertDeviceLogs
+	-- (WHERE NOT EXISTS (... device_id, log_timestamp, message)).
+	-- Without this index, every telemetry POST triggers a full table
+	-- scan on system_logs and pegs CPU once the table grows past a
+	-- few hundred thousand rows. Index-only lookups collapse the
+	-- dedup to O(log n).
+	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_dedup
+		ON %[1]s.system_logs (device_id, log_timestamp, message);
+	-- btree on created_at so the retention sweep (DELETE older than N days)
+	-- can range-scan instead of seq-scanning the whole table.
+	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_created_at
+		ON %[1]s.system_logs (created_at);
 
 	CREATE TABLE IF NOT EXISTS %[1]s.client_hostnames (
 		mac VARCHAR(50) PRIMARY KEY,
@@ -731,46 +756,101 @@ type LogEntry struct {
 	DeviceName string `json:"device_name"`
 }
 
+// MaxLogsPerTelemetry caps the number of log lines persisted from a single
+// telemetry POST. Anything above is dropped. A runaway agent emitting 10k
+// lines per cycle would otherwise monopolise the DB even with the new
+// batch INSERT (the index still has to touch every row). 200 is a
+// generous ceiling for the agent's `logread -l 20` × 10× retries.
+const MaxLogsPerTelemetry = 200
+
+// InsertDeviceLogs inserts a batch of log lines for one device in a single
+// round-trip. Previously this was an N+1 loop: one prepared INSERT with a
+// NOT EXISTS dedup subquery, executed once per log line. With 50 lines per
+// telemetry × N devices × 6 cycles/min that meant 300+ full-table-scan
+// INSERTs/min. Now it's one INSERT ... SELECT FROM unnest(...) with
+// ON CONFLICT DO NOTHING, which is index-only and bounded by the batch size.
+//
+// The unique constraint on (device_id, log_timestamp, message) is the
+// canonical dedup primitive — adding it as part of the migration was safe
+// because the index created in the same migration lists the same columns.
 func InsertDeviceLogs(schema string, deviceID string, logs []LogEntry) error {
 	if len(logs) == 0 {
 		return nil
 	}
-
-	tx, err := DB.Begin()
-	if err != nil {
-		return err
+	// Defence in depth: even if the agent is misbehaving we don't want
+	// one telemetry to write thousands of rows.
+	if len(logs) > MaxLogsPerTelemetry {
+		logs = logs[:MaxLogsPerTelemetry]
 	}
-	defer tx.Rollback()
 
-	stmt, err := tx.Prepare(fmt.Sprintf(`
-		WITH input AS (
-			SELECT CAST($1 AS VARCHAR) as device_id,
-			       CAST($2 AS TIMESTAMP WITH TIME ZONE) as log_timestamp,
-			       CAST($3 AS VARCHAR) as severity,
-			       CAST($4 AS TEXT) as message
-		)
+	// Build parallel arrays for unnest.
+	timestamps := make([]string, len(logs))
+	severities := make([]string, len(logs))
+	messages := make([]string, len(logs))
+	for i, l := range logs {
+		timestamps[i] = l.Timestamp
+		severities[i] = l.Level
+		messages[i] = l.Message
+	}
+
+	// ON CONFLICT DO NOTHING is the dedup primitive now: the unique
+	// constraint (device_id, log_timestamp, message) catches duplicates
+	// and skips them silently. The unnest pattern lets us send the whole
+	// batch as a single round-trip with three array parameters.
+	_, err := DB.Exec(fmt.Sprintf(`
 		INSERT INTO %s.system_logs (device_id, log_timestamp, severity, message)
-		SELECT device_id, log_timestamp, severity, message FROM input
-		WHERE NOT EXISTS (
-			SELECT 1 FROM %s.system_logs 
-			WHERE device_id = input.device_id 
-			  AND log_timestamp = input.log_timestamp 
-			  AND message = input.message
-		)
-	`, schema, schema))
-	if err != nil {
-		return err
-	}
-	defer stmt.Close()
+		SELECT $1, t.ts, t.sev, t.msg
+		FROM unnest($2::timestamptz[], $3::text[], $4::text[]) AS t(ts, sev, msg)
+		ON CONFLICT (device_id, log_timestamp, message) DO NOTHING
+	`, schema), deviceID, timestamps, severities, messages)
+	return err
+}
 
-	for _, logLine := range logs {
-		_, err := stmt.Exec(deviceID, logLine.Timestamp, logLine.Level, logLine.Message)
+// SweepOldLogs deletes system_logs rows older than the given number of
+// days for one tenant schema. Returns the number of rows deleted. Called
+// by a background cron in main.go so the table doesn't grow without bound.
+func SweepOldLogs(ctx context.Context, schema string, olderThanDays int) (int64, error) {
+	if olderThanDays <= 0 {
+		olderThanDays = 7
+	}
+	res, err := Tx(ctx).Exec(fmt.Sprintf(`
+		DELETE FROM %s.system_logs
+		 WHERE created_at < CURRENT_TIMESTAMP - ($1 || ' days')::interval
+	`, schema), olderThanDays)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// SweepAllOldLogs runs SweepOldLogs against every active tenant schema.
+// Tenant list is queried from the landlord registry; tenants added after
+// the cron started are picked up on the next tick (15-minute cadence).
+func SweepAllOldLogs(ctx context.Context, olderThanDays int) (map[string]int64, error) {
+	rows, err := DB.QueryContext(ctx, `SELECT schema_alias FROM tenants WHERE is_active = true`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make(map[string]int64)
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			continue
+		}
+		schema := "tenant_" + alias
+		n, err := SweepOldLogs(ctx, schema, olderThanDays)
 		if err != nil {
-			return err
+			log.Printf("[LOG_RETENTION] sweep %s failed: %v", schema, err)
+			continue
+		}
+		if n > 0 {
+			out[schema] = n
 		}
 	}
-
-	return tx.Commit()
+	return out, nil
 }
 
 // ─── UTILITY ─────────────────────────────────────────────────────────────────

@@ -101,6 +101,10 @@ func main() {
 	services.GetSurveyWorker().Start()
 	defer services.GetSurveyWorker().Stop()
 
+	logStopCh := make(chan struct{})
+	services.StartLogRetentionCron(logStopCh)
+	defer close(logStopCh)
+
 	// Build the route mux and wrap it with the metrics middleware.
 	// The route label is taken from Go 1.22+ ServeMux patterns
 	// (req.Pattern.Path) which are low cardinality by construction.
