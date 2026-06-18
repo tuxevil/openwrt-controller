@@ -54,6 +54,7 @@ type SiteConfig struct {
 	PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
 	ThreatShieldEnabled  bool            `json:"threat_shield_enabled"`
 	GuestPortalEnabled   bool            `json:"guest_portal_enabled"`
+	AllowPublicSurveys   bool            `json:"allow_public_surveys"`
 	// SD-WAN: array of WAN uplinks for mwan3 multi-WAN / failover orchestration.
 	// If len >= 2 the Gateway will receive a full mwan3 ruleset.
 	WANInterfaces json.RawMessage `json:"wan_interfaces"`
@@ -428,7 +429,8 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 		       dhcp_reservations, port_forwarding_rules,
 		       COALESCE(threat_shield_enabled, false),
 		       COALESCE(guest_portal_enabled, false),
-		       COALESCE(wan_interfaces, '[]'::jsonb)
+		       COALESCE(wan_interfaces, '[]'::jsonb),
+		       COALESCE(allow_public_surveys, false)
 		FROM site_configs WHERE site_id = $1
 	`, siteID).Scan(
 		&sc.ID, &sc.SiteID, &sc.EnableGlobalSSID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
@@ -438,7 +440,7 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 		&sc.DropbearPort, &sc.DropbearPasswordAuth,
 		&sc.DHCPReservations, &sc.PortForwardingRules,
 		&sc.ThreatShieldEnabled, &sc.GuestPortalEnabled,
-		&sc.WANInterfaces,
+		&sc.WANInterfaces, &sc.AllowPublicSurveys,
 	)
 	if err != nil {
 		return nil, err
@@ -459,8 +461,8 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 			firewall_syn_flood, firewall_drop_invalid,
 			dropbear_port, dropbear_password_auth,
 			dhcp_reservations, port_forwarding_rules, threat_shield_enabled, guest_portal_enabled,
-			wan_interfaces, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,CURRENT_TIMESTAMP)
+			wan_interfaces, allow_public_surveys, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
 			enable_global_ssid=EXCLUDED.enable_global_ssid, global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
 			global_encryption=EXCLUDED.global_encryption,
@@ -478,6 +480,7 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 			threat_shield_enabled=EXCLUDED.threat_shield_enabled,
 			guest_portal_enabled=EXCLUDED.guest_portal_enabled,
 			wan_interfaces=EXCLUDED.wan_interfaces,
+			allow_public_surveys=EXCLUDED.allow_public_surveys,
 			updated_at=CURRENT_TIMESTAMP
 	`, sc.SiteID, sc.EnableGlobalSSID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
 		sc.LanIPAddr, sc.SQMCakeEnabled, sc.SqmDownload, sc.SqmUpload, sc.DPIEnabled, sc.SecureTunnelEnabled, sc.TailscaleEnabled, sc.TailscaleAuthKey, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
@@ -485,7 +488,7 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 		sc.FirewallSynFlood, sc.FirewallDropInvalid,
 		sc.DropbearPort, sc.DropbearPasswordAuth,
 		sc.DHCPReservations, sc.PortForwardingRules, sc.ThreatShieldEnabled, sc.GuestPortalEnabled,
-		sc.WANInterfaces,
+		sc.WANInterfaces, sc.AllowPublicSurveys,
 	)
 	return err
 }

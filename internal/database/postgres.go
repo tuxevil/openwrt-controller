@@ -98,6 +98,7 @@ func createLandlordTables() error {
 		sentinel_prompt TEXT DEFAULT 'You are a Fleet Security Analyst. Analyze this cross-device log stream. Look for coordinated attacks, lateral movements, or cascading hardware failures. If Device A shows a login failure and Device B shows a login success from the same IP, flag it as CRITICAL SUSPICION. Be technical, concise, and provide a ''Recommended Action''. The output must look like a high-level SOC report. No fluff.\n\nEnd your report with these two exact lines at the bottom for parsing:\nSEVERITY: [Critical, High, Medium, Low]\nDEVICES: [Device_Name_1, Device_Name_2]',
 		telegram_bot_token VARCHAR(255) DEFAULT '',
 		telegram_chat_id VARCHAR(255) DEFAULT '',
+		global_surveys_public_lockdown BOOLEAN NOT NULL DEFAULT false,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		CHECK (id = 1)
 	);
@@ -124,6 +125,7 @@ func createLandlordTables() error {
 	landlordMigrations := []string{
 		"ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)",
 		"UPDATE users SET role = UPPER(role)",
+		"ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS global_surveys_public_lockdown BOOLEAN NOT NULL DEFAULT false",
 	}
 	for _, m := range landlordMigrations {
 		if _, err := DB.Exec(m); err != nil {
@@ -416,6 +418,54 @@ func createTenantTables(schema string) error {
 		redirect_url TEXT,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	-- ── WIFI_SURVEY / Site-wide RF surveyor mode ─────────────────────────
+	-- One row per survey. Tokens are stored hashed; the raw token is
+	-- only returned ONCE at survey creation. The surveyor cell phone
+	-- authenticates with X-Survey-Token (constant-time compared).
+	CREATE TABLE IF NOT EXISTS %[1]s.wifi_surveys (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		site_id UUID NOT NULL REFERENCES %[1]s.sites(id) ON DELETE CASCADE,
+		name TEXT NOT NULL DEFAULT '',
+		surveyor_mac VARCHAR(50),
+		surveyor_label TEXT,
+		status VARCHAR(20) NOT NULL DEFAULT 'pending',
+		access_mode VARCHAR(20) NOT NULL DEFAULT 'authenticated'
+			CHECK (access_mode IN ('authenticated','public')),
+		survey_token_hash TEXT,
+		token_first_used_at TIMESTAMP WITH TIME ZONE,
+		token_first_ip INET,
+		token_first_ua TEXT,
+		token_revoked_at TIMESTAMP WITH TIME ZONE,
+		token_rotated_at TIMESTAMP WITH TIME ZONE,
+		started_at TIMESTAMP WITH TIME ZONE,
+		ended_at TIMESTAMP WITH TIME ZONE,
+		created_by VARCHAR(100),
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_%[1]s_wifi_surveys_site ON %[1]s.wifi_surveys(site_id);
+	CREATE INDEX IF NOT EXISTS idx_%[1]s_wifi_surveys_status ON %[1]s.wifi_surveys(status);
+
+	-- Correlated samples: (GPS from cell phone) + (signal from AP at that time).
+	-- Written by the survey_worker after pairing GPS samples with the most
+	-- recent client_signal InfluxDB point for the surveyor MAC.
+	CREATE TABLE IF NOT EXISTS %[1]s.wifi_survey_points (
+		id BIGSERIAL PRIMARY KEY,
+		survey_id UUID NOT NULL REFERENCES %[1]s.wifi_surveys(id) ON DELETE CASCADE,
+		ap_id VARCHAR(50) NOT NULL,
+		lat DOUBLE PRECISION,
+		lon DOUBLE PRECISION,
+		accuracy_m REAL,
+		signal_dbm REAL,
+		noise_dbm REAL,
+		snr REAL,
+		bssid VARCHAR(50),
+		neighbor_aps JSONB DEFAULT '[]',
+		captured_at TIMESTAMP WITH TIME ZONE NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_%[1]s_wifi_survey_points_survey_captured
+		ON %[1]s.wifi_survey_points(survey_id, captured_at);
 	`, s)
 
 	_, err := DB.Exec(query)
@@ -452,6 +502,7 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS guest_portal_enabled BOOLEAN DEFAULT false, sqm_enabled BOOLEAN DEFAULT false, sqm_download INTEGER DEFAULT 0, sqm_upload INTEGER DEFAULT 0", s),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS wan_interfaces JSONB DEFAULT '[]'", s),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS allow_public_surveys BOOLEAN NOT NULL DEFAULT false", s),
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
@@ -761,10 +812,19 @@ func GetTenantSchemaForSiteKey(siteKey string) (string, error) {
 	return "", fmt.Errorf("site key not found in any tenant schema")
 }
 
+// Queryer is the subset of *sql.DB / *sql.Tx that we use across
+// handlers. The Context variants are included so callers can bound
+// query latency via r.Context() (regression: Jun 17 2026 — login
+// handler hung indefinitely when the DB pool was exhausted because
+// QueryRow had no per-request deadline).
 type Queryer interface {
 	Query(query string, args ...any) (*sql.Rows, error)
 	QueryRow(query string, args ...any) *sql.Row
 	Exec(query string, args ...any) (sql.Result, error)
+
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
 type txKeyType string

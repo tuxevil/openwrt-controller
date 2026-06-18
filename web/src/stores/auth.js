@@ -1,10 +1,11 @@
-// Auth store — central place for the current JWT, username, and assumed
-// tenant context. Replaces the ad-hoc localStorage reads that were
-// previously duplicated in 5+ views (`JSON.parse(atob(token.split('.')[1])).role`).
+// Auth store — central place for the current JWT, username, role, and
+// assumed tenant context. State-only: it never makes network calls.
+//
+// The login HTTP call lives in `src/services/api.js#login`. The
+// component (Login.vue) calls that, then hands the response to
+// `setSession(token, username, role)` so the rest of the app sees a
+// consistent view of auth state via the Pinia getters.
 import { defineStore } from 'pinia'
-import axios from 'axios'
-
-const api = axios.create({ baseURL: '/api' })
 
 export const useAuthStore = defineStore('auth', {
   state: () => ({
@@ -20,14 +21,15 @@ export const useAuthStore = defineStore('auth', {
     isAuthenticated: (s) => !!s.token,
   },
   actions: {
-    async login(username, password) {
-      const { data } = await api.post('/auth/login', { username, password })
-      this.token = data.token
-      this.username = data.username
-      this.role = data.role
-      localStorage.setItem('jwt_token', data.token)
-      localStorage.setItem('username', data.username)
-      localStorage.setItem('role', data.role)
+    // setSession persists an already-issued session. Pure state
+    // mutation: no network, no side effects beyond localStorage.
+    setSession(token, username, role) {
+      this.token = token
+      this.username = username
+      this.role = role
+      localStorage.setItem('jwt_token', token)
+      localStorage.setItem('username', username)
+      localStorage.setItem('role', role)
     },
     logout() {
       this.token = ''

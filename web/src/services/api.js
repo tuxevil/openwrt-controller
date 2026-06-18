@@ -284,5 +284,34 @@ export default {
   },
   getBilling() {
     return apiClient.get('/billing/usage')
+  },
+
+  // ── WIFI_SURVEY / site-scoped CRUD ────────────────────────────────────────
+  listSurveys(siteId) {
+    return apiClient.get(`/sites/${siteId}/surveys`)
+  },
+  createSurvey(siteId, payload) {
+    return apiClient.post(`/sites/${siteId}/surveys`, payload)
+  },
+  getSurvey(siteId, surveyId) {
+    return apiClient.get(`/sites/${siteId}/surveys/${surveyId}`)
+  },
+  deleteSurvey(siteId, surveyId) {
+    return apiClient.delete(`/sites/${siteId}/surveys/${surveyId}`)
+  },
+  startSurvey(siteId, surveyId) {
+    return apiClient.post(`/sites/${siteId}/surveys/${surveyId}/start`)
+  },
+  stopSurvey(siteId, surveyId) {
+    return apiClient.post(`/sites/${siteId}/surveys/${surveyId}/stop`)
+  },
+  rotateSurveyToken(siteId, surveyId) {
+    return apiClient.post(`/sites/${siteId}/surveys/${surveyId}/rotate-token`)
+  },
+  revokeSurveyToken(siteId, surveyId) {
+    return apiClient.post(`/sites/${siteId}/surveys/${surveyId}/revoke-token`)
+  },
+  getSurveySamples(siteId, surveyId, limit = 5000) {
+    return apiClient.get(`/sites/${siteId}/surveys/${surveyId}/samples?limit=${limit}`)
   }
 }

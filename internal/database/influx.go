@@ -240,3 +240,126 @@ func WriteFlowAnalyticsBatch(deviceID string, flows []FlowAnalytic) error {
 
 	return nil
 }
+
+// ── WIFI_SURVEY / per-client signal time-series ──────────────────────────────
+// Written by the OpenWrt agent while a survey is active (2s cadence). The
+// survey_worker pulls from this series to correlate phone GPS with the
+// signal the AP saw from that MAC.
+
+type ClientSignalSample struct {
+	DeviceID  string
+	MAC       string
+	SurveyID  string
+	SignalDBM float64
+	NoiseDBM  float64
+	RxRate    float64
+	TxRate    float64
+	InactiveMs int64
+	Time      time.Time
+}
+
+// WriteClientSignalBatch writes one point per sample. Tags are intentionally
+// bounded (device_id, mac, survey_id) to keep Influx cardinality sane.
+func WriteClientSignalBatch(samples []ClientSignalSample) error {
+	if WriteAPI == nil {
+		return fmt.Errorf("influx write api is not initialized")
+	}
+	if len(samples) == 0 {
+		return nil
+	}
+	for _, s := range samples {
+		p := influxdb2.NewPointWithMeasurement("client_signal").
+			AddTag("device_id", s.DeviceID).
+			AddTag("mac", s.MAC).
+			AddTag("survey_id", s.SurveyID).
+			AddField("signal_dbm", s.SignalDBM).
+			AddField("noise_dbm", s.NoiseDBM).
+			AddField("rx_rate", s.RxRate).
+			AddField("tx_rate", s.TxRate).
+			AddField("inactive_ms", s.InactiveMs).
+			SetTime(s.Time)
+		if err := WriteAPI.WritePoint(context.Background(), p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetLatestClientSignal returns the most recent client_signal point for a
+// given surveyor MAC and survey within the given lookback window. Returns
+// ok=false if nothing is found inside the window.
+func GetLatestClientSignal(mac, surveyID, deviceID string, lookback time.Duration) (ClientSignalSample, bool, error) {
+	if InfluxClient == nil {
+		return ClientSignalSample{}, false, fmt.Errorf("influx client not initialized")
+	}
+	if mac == "" {
+		return ClientSignalSample{}, false, fmt.Errorf("mac required")
+	}
+
+	q := InfluxClient.QueryAPI(org)
+	// Pivot so we get a single record per (device_id, _time) with all fields
+	// as columns, then take the most recent one. Filter by survey_id when
+	// provided to avoid cross-survey bleed when a surveyor keeps reconnecting.
+	filter := fmt.Sprintf(`r["mac"] == "%s"`, mac)
+	if surveyID != "" {
+		filter += fmt.Sprintf(` and r["survey_id"] == "%s"`, surveyID)
+	}
+	if deviceID != "" {
+		filter += fmt.Sprintf(` and r["device_id"] == "%s"`, deviceID)
+	}
+
+	flux := fmt.Sprintf(`
+		from(bucket: "%s")
+		  |> range(start: -%ds)
+		  |> filter(fn: (r) => r["_measurement"] == "client_signal")
+		  |> filter(fn: (r) => %s)
+		  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+		  |> sort(columns: ["_time"], desc: true)
+		  |> limit(n: 1)
+	`, bucket, int(lookback.Seconds()), filter)
+
+	result, err := q.Query(context.Background(), flux)
+	if err != nil {
+		return ClientSignalSample{}, false, err
+	}
+	defer result.Close()
+
+	for result.Next() {
+		rec := result.Record()
+		out := ClientSignalSample{
+			DeviceID: stringField(rec.ValueByKey("device_id")),
+			MAC:      stringField(rec.ValueByKey("mac")),
+			SurveyID: stringField(rec.ValueByKey("survey_id")),
+			Time:     rec.Time(),
+		}
+		if v, ok := rec.ValueByKey("signal_dbm").(float64); ok {
+			out.SignalDBM = v
+		}
+		if v, ok := rec.ValueByKey("noise_dbm").(float64); ok {
+			out.NoiseDBM = v
+		}
+		if v, ok := rec.ValueByKey("rx_rate").(float64); ok {
+			out.RxRate = v
+		}
+		if v, ok := rec.ValueByKey("tx_rate").(float64); ok {
+			out.TxRate = v
+		}
+		if v, ok := rec.ValueByKey("inactive_ms").(int64); ok {
+			out.InactiveMs = v
+		} else if v, ok := rec.ValueByKey("inactive_ms").(float64); ok {
+			out.InactiveMs = int64(v)
+		}
+		return out, true, nil
+	}
+	if result.Err() != nil {
+		return ClientSignalSample{}, false, result.Err()
+	}
+	return ClientSignalSample{}, false, nil
+}
+
+func stringField(v interface{}) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
+}

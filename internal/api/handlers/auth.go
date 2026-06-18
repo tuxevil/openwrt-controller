@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +15,14 @@ import (
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/secrets"
 )
+
+// LoginDBTimeout bounds the per-request Postgres work for the login
+// handler. Without this, a degraded DB (network blip, exhausted
+// connection pool, replica failover) would block the handler on
+// QueryRow indefinitely and the user would see a hung browser.
+// The value is intentionally short — bcrypt comparison is the slow
+// step, not the lookup.
+const LoginDBTimeout = 3 * time.Second
 
 // jwtSecret is loaded lazily on first use so that test binaries can set
 // JWT_SECRET before the secret is materialised. secrets.JWTSecret() calls
@@ -52,13 +62,32 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bound the DB work so a degraded Postgres doesn't hang the UI.
+	// Regression: Jun 17 2026 — controller stopped accepting login
+	// because DB pool was exhausted and QueryRow had no context
+	// timeout, holding the request open until the browser gave up.
+	ctx, cancel := context.WithTimeout(r.Context(), LoginDBTimeout)
+	defer cancel()
+
 	// Fetch user from DB (now includes tenant_id)
 	var storedHash, role string
 	var tenantID sql.NullString
-	err := database.Tx(r.Context()).QueryRow(
+	err := database.Tx(ctx).QueryRowContext(ctx,
 		"SELECT password_hash, role, tenant_id FROM users WHERE username = $1",
 		req.Username,
 	).Scan(&storedHash, &role, &tenantID)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			w.Write([]byte(`{"error":"DATABASE_UNAVAILABLE"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		w.Write([]byte(`{"error":"ACCESS_DENIED"}`))
+		return
+	}
 
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
@@ -86,7 +115,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 	// If user has a tenant binding, resolve the schema_alias and include it
 	var schemaAlias string
 	if tenantID.Valid {
-		err := database.Tx(r.Context()).QueryRow(
+		err := database.Tx(ctx).QueryRowContext(ctx,
 			"SELECT schema_alias FROM tenants WHERE id = $1 AND is_active = true",
 			tenantID.String,
 		).Scan(&schemaAlias)

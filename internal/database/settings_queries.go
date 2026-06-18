@@ -1,20 +1,23 @@
 package database
 
 type PlatformSettings struct {
-	OllamaHost       string `json:"ollama_host"`
-	OllamaModel      string `json:"ollama_model"`
-	SentinelPrompt   string `json:"sentinel_prompt"`
-	TelegramBotToken string `json:"telegram_bot_token"`
-	TelegramChatID   string `json:"telegram_chat_id"`
+	OllamaHost                  string `json:"ollama_host"`
+	OllamaModel                 string `json:"ollama_model"`
+	SentinelPrompt              string `json:"sentinel_prompt"`
+	TelegramBotToken            string `json:"telegram_bot_token"`
+	TelegramChatID              string `json:"telegram_chat_id"`
+	GlobalSurveysPublicLockdown bool   `json:"global_surveys_public_lockdown"`
 }
 
 // GetPlatformSettings fetches global platform settings
 func GetPlatformSettings() PlatformSettings {
 	var s PlatformSettings
 	err := DB.QueryRow(`
-		SELECT ollama_host, ollama_model, sentinel_prompt, telegram_bot_token, telegram_chat_id
+		SELECT ollama_host, ollama_model, sentinel_prompt, telegram_bot_token, telegram_chat_id,
+		       COALESCE(global_surveys_public_lockdown, false)
 		FROM platform_settings WHERE id = 1
-	`).Scan(&s.OllamaHost, &s.OllamaModel, &s.SentinelPrompt, &s.TelegramBotToken, &s.TelegramChatID)
+	`).Scan(&s.OllamaHost, &s.OllamaModel, &s.SentinelPrompt, &s.TelegramBotToken, &s.TelegramChatID,
+		&s.GlobalSurveysPublicLockdown)
 
 	if err != nil {
 		// Provide basic defaults if the DB somehow fails

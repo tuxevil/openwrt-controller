@@ -98,6 +98,8 @@ func main() {
 	services.StartAlertEngine()
 	services.StartSniperReaper()
 	services.StartThreatIntelCron()
+	services.GetSurveyWorker().Start()
+	defer services.GetSurveyWorker().Stop()
 
 	// Build the route mux and wrap it with the metrics middleware.
 	// The route label is taken from Go 1.22+ ServeMux patterns

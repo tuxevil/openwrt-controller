@@ -174,6 +174,60 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}(deviceID, metrics)
 
+	// 2b. WIFI_SURVEY: when a survey_id is attached to the payload, write
+	//     per-station signal samples to the client_signal measurement so
+	//     the correlation worker can pair them with phone GPS samples.
+	//     This is the only path that gets the signal into InfluxDB at the
+	//     2s survey cadence without doubling the telemetry cost.
+	if surveyID, _ := raw["survey_id"].(string); surveyID != "" {
+		go func(devID string, payload map[string]interface{}, sID string) {
+			stations, _ := payload["wireless_stations"].(map[string]interface{})
+			if len(stations) == 0 {
+				return
+			}
+			var samples []database.ClientSignalSample
+			now := time.Now()
+			for iface, ifaceClients := range stations {
+				list, _ := ifaceClients.([]interface{})
+				for _, cIf := range list {
+					cMap, _ := cIf.(map[string]interface{})
+					mac, _ := cMap["mac"].(string)
+					if mac == "" {
+						continue
+					}
+					sig, _ := cMap["signal"].(float64)
+					noise, _ := cMap["noise"].(float64)
+					if sig == 0 {
+						continue
+					}
+					rxStr, _ := cMap["rx_rate"].(string)
+					txStr, _ := cMap["tx_rate"].(string)
+					inactF, _ := cMap["inactive"].(float64)
+					rx, _ := strconv.ParseFloat(rxStr, 64)
+					tx, _ := strconv.ParseFloat(txStr, 64)
+					_ = iface
+					samples = append(samples, database.ClientSignalSample{
+						DeviceID:   devID,
+						MAC:        mac,
+						SurveyID:   sID,
+						SignalDBM:  sig,
+						NoiseDBM:   noise,
+						RxRate:     rx,
+						TxRate:     tx,
+						InactiveMs: int64(inactF),
+						Time:       now,
+					})
+				}
+			}
+			if len(samples) == 0 {
+				return
+			}
+			if err := database.WriteClientSignalBatch(samples); err != nil {
+				log.Printf("[SURVEY] WriteClientSignalBatch failed for device %s: %v", devID, err)
+			}
+		}(deviceID, raw, surveyID)
+	}
+
 	// 3. Process logs
 	if logsStr, ok := raw["logs"].(string); ok && logsStr != "" {
 		lines := strings.Split(logsStr, "\n")

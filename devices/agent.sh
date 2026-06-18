@@ -233,7 +233,11 @@ while true; do
     DHCP_LEASES=$(ubus call dhcp ipv4leases 2>/dev/null || echo "{\"leases\":[]}")
 
     # 5. LOGS RECIENTES (Últimas 50 líneas de syslog)
-    SYS_LOGS=$(logread | tail -n 50 | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{printf "%s\\n", $0}')
+    # Usa `logread -l 50` (single process, ring-buffer native) en vez de
+    # `logread | tail -n 50` (pipe). Si el socket de logd se atasca, el pipe
+    # queda bloqueado indefinidamente (tail esperando EOF) y mata el bucle
+    # entero del agente — visto en MR8300 (10.128.128.1) Jun 17 2026.
+    SYS_LOGS=$(logread -l 50 | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{printf "%s\\n", $0}')
 
     # 5.5 FLOW_SENSE – Top 20 destinos activos desde /proc/net/nf_conntrack (ZERO CPU overhead)
     # Lee únicamente conexiones ESTABLISHED, extrae dst_ip y dst_port, agrupa y cuenta.
@@ -302,7 +306,9 @@ while true; do
     "neighbor_stats": $NEIGHBOR_STATS,
     "dhcp": $DHCP_LEASES,
     "flow_sense": $FLOW_SENSE_DATA,
-    "logs": "$SYS_LOGS"
+    "logs": "$SYS_LOGS",
+    "survey_id": "$SURVEY_ID",
+    "neighbor_aps": $NEIGHBOR_APS
 }
 EOF
 )
@@ -337,6 +343,51 @@ EOF
     CONFIG_RESPONSE=$(curl -m 5 -s -X GET \
         -H "X-Site-Key: $SITE_KEY" \
         "$CONFIG_URL")
+
+    # 7.0 WIFI_SURVEY: detect survey mode from controller. When active:
+    #   - telemetry interval drops to 2s (vs 10s normal)
+    #   - payload includes "survey_id" so the backend tags per-station signal
+    #     samples with the active survey and writes them to InfluxDB.
+    #   - "neighbor_aps" snapshot is included so the dashboard can show
+    #     "what other APs this device can hear from this location".
+    SURVEY_MODE=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.survey_mode' 2>/dev/null)
+    SURVEY_ID=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.survey_id' 2>/dev/null)
+    [ "$SURVEY_MODE" != "true" ] && SURVEY_MODE="false"
+    [ -z "$SURVEY_ID" ] && SURVEY_ID=""
+
+    if [ "$SURVEY_MODE" = "true" ]; then
+        # Build a compact neighbor_aps snapshot. iwinfo scan returns a
+        # human-readable table; we only need BSSID,SSID,channel,signal per row.
+        NEIGHBOR_APS="[]"
+        FIRST_IF=1
+        NEIGHBOR_APS="["
+        for IFACE in $(ls /sys/class/net | grep -E "wlan|ath|radio|ra|phy"); do
+            iwinfo "$IFACE" scan 2>/dev/null | awk -v iface="$IFACE" '
+                /Address:/ { bssid = $2 }
+                /ESSID:/   { essid = ""; for (i=2; i<=NF; i++) essid = essid (i==2?"":" ") $i; gsub(/"/, "", essid) }
+                /Channel:/ { chan = $2 }
+                /Signal:/  { sig = $2 " " $3
+                              if (count > 0) printf ","
+                              printf "{\"iface\":\"%s\",\"bssid\":\"%s\",\"ssid\":\"%s\",\"channel\":%s,\"signal\":\"%s\"}", iface, bssid, essid, chan, sig
+                              count++
+                              bssid=""; essid=""; chan=""; sig=""
+                            }
+                END { exit }
+            '
+        done | awk 'BEGIN{first=1} { if(NR>0){ if(!first)printf ","; printf "%s",$0; first=0} } END{print ""}'
+        # Wrap properly: prefix and suffix with brackets
+        if [ -n "$(echo "$NEIGHBOR_APS" | tr -d '[:space:]')" ]; then
+            NEIGHBOR_APS="[${NEIGHBOR_APS}]"
+        else
+            NEIGHBOR_APS="[]"
+        fi
+        # Cap neighbor_aps to 64 entries to keep payload small (and prevent
+        # a busy AP environment from ballooning telemetry).
+        NEIGHBOR_APS=$(echo "$NEIGHBOR_APS" | tr ',' '\n' | head -n 64 | tr '\n' ',' | sed 's/,$//')
+        NEIGHBOR_APS="[$NEIGHBOR_APS]"
+    else
+        NEIGHBOR_APS="[]"
+    fi
 
     if [ -n "$CONFIG_RESPONSE" ]; then
         # Extraer llave pública usando jsonfilter (nativo en OpenWrt)
@@ -662,5 +713,12 @@ EOF
         rm -f /tmp/ts.stamp 2>/dev/null
     fi
 
-    sleep 10
+    # WIFI_SURVEY: tighten the loop to 2s when an active survey exists.
+    # The controller toggles survey_mode via /api/devices/{id}/config; the
+    # next loop iteration picks up the new interval.
+    if [ "$SURVEY_MODE" = "true" ]; then
+        sleep 2
+    else
+        sleep 10
+    fi
 done

@@ -20,9 +20,13 @@ async function handleLogin() {
   try {
     const res = await api.login(username.value, password.value)
     const { token, username: user, role, schema_alias } = res.data
-    // The Pinia store handles all the localStorage write side-effects
-    // so the rest of the app sees a consistent view of auth state.
-    auth.login(token, user, role)
+    // Hand the response to the Pinia store. setSession is a pure
+    // state-setter (no network); the HTTP call lives in services/api.js
+    // and already completed successfully above. Calling a network-
+    // doing `login` action here previously caused a second /auth/login
+    // POST with the wrong credentials, returning 401 and bouncing the
+    // user back to this screen with ACCESS_DENIED.
+    auth.setSession(token, user, role)
     if (schema_alias) {
       auth.assumeTenant(schema_alias, user)
     } else {

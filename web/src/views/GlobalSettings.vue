@@ -33,18 +33,37 @@
       <!-- TELEGRAM ALERTING -->
       <div class="neon-panel border-neon-blue/50 flex flex-col gap-6 shadow-neon-blue/20">
         <h3 class="text-xl text-neon-blue uppercase tracking-widest border-b border-neon-blue/30 pb-2">/ COMMUNICATIONS (Telegram)</h3>
-        
+
         <div class="flex flex-col md:flex-row gap-6">
           <div class="flex-1 flex flex-col gap-2">
             <label class="text-xs text-muted uppercase tracking-widest">Bot Token</label>
             <input v-model="settings.telegram_bot_token" type="password" placeholder="123456:ABC-DEF123..." class="bg-black border border-neon-blue text-neon-blue p-3 outline-none font-mono focus:shadow-[0_0_15px_#00c8ff]">
           </div>
-          
+
           <div class="flex-1 flex flex-col gap-2">
             <label class="text-xs text-muted uppercase tracking-widest">Chat ID</label>
             <input v-model="settings.telegram_chat_id" type="text" class="bg-black border border-neon-blue text-neon-blue p-3 outline-none font-mono focus:shadow-[0_0_15px_#00c8ff]">
           </div>
         </div>
+      </div>
+
+      <!-- WIFI_SURVEY / public access lockdown -->
+      <div class="neon-panel border-neon-amber/50 flex flex-col gap-4 shadow-neon-amber/10">
+        <h3 class="text-xl text-neon-amber uppercase tracking-widest border-b border-neon-amber/30 pb-2">/ WIFI_SURVEY (Public Access)</h3>
+        <label class="flex items-center gap-3 cursor-pointer">
+          <input type="checkbox" v-model="globalLockdown" class="accent-neon-amber w-4 h-4" />
+          <span class="text-sm">
+            <b>Global lockdown on public WiFi surveys</b>
+            <span class="block text-xs text-muted mt-1">
+              When ON, no site — regardless of its own "Allow public surveys" setting — can issue
+              unauthenticated surveyor QR codes. Useful for multi-tenant MSPs or when a token leaks.
+              Site-level toggle is preserved and takes effect once lockdown is OFF.
+            </span>
+          </span>
+        </label>
+        <button @click="saveLockdown" :disabled="savingLockdown" class="self-start text-xs px-3 py-2 border border-neon-amber text-neon-amber clip-chamfer hover:bg-neon-amber hover:text-black transition-colors disabled:opacity-50">
+          {{ savingLockdown ? 'SAVING…' : 'APPLY LOCKDOWN' }}
+        </button>
       </div>
 
       <!-- SAVE BLOCK -->
@@ -66,8 +85,11 @@ const settings = ref({
   ollama_model: '',
   sentinel_prompt: '',
   telegram_bot_token: '',
-  telegram_chat_id: ''
+  telegram_chat_id: '',
+  global_surveys_public_lockdown: false
 });
+const globalLockdown = ref(false);
+const savingLockdown = ref(false);
 const loading = ref(true);
 const saving = ref(false);
 
@@ -81,6 +103,7 @@ const fetchSettings = async () => {
     const data = await res.json();
     if (data.status === 'success' && data.data) {
       settings.value = data.data;
+      globalLockdown.value = !!data.data.global_surveys_public_lockdown;
     }
   } catch (e) {
     console.error('Core Settings Error:', e);
@@ -114,6 +137,29 @@ const saveSettings = async () => {
 onMounted(() => {
   fetchSettings();
 });
+
+const saveLockdown = async () => {
+  savingLockdown.value = true;
+  try {
+    const token = localStorage.getItem('jwt_token');
+    const res = await fetch('/api/global/surveys/lockdown', {
+      method: 'PUT',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({ enabled: globalLockdown.value })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      alert('Lockdown update failed: ' + (err.error || res.statusText));
+    }
+  } catch (e) {
+    alert('Lockdown update failed: ' + e.message);
+  } finally {
+    setTimeout(() => savingLockdown.value = false, 400);
+  }
+};
 </script>
 
 <style scoped>
@@ -126,6 +172,10 @@ onMounted(() => {
 
 .text-neon-blue { color: #00c8ff; text-shadow: 0 0 5px #00c8ff; }
 .border-neon-blue { border-color: #00c8ff; }
+
+.text-neon-amber { color: #f59e0b; text-shadow: 0 0 5px #f59e0b; }
+.border-neon-amber { border-color: #f59e0b; }
+.bg-neon-amber { background-color: #f59e0b; }
 
 .neon-panel {
   padding: 2rem;

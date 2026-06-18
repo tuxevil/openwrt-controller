@@ -2,10 +2,10 @@ package api
 
 import (
 	"net/http"
-	"os"
 
 	"openwrt-controller/internal/api/handlers"
 	"openwrt-controller/internal/api/middleware"
+	"openwrt-controller/internal/api/spa"
 	"openwrt-controller/internal/metrics"
 )
 
@@ -48,6 +48,9 @@ func SetupRoutes() *http.ServeMux {
 	// ── Public Guest Portal routes ───────────────────────────────────────────
 	mux.HandleFunc("GET /portal/auth/{site_id}", handlers.GetPortalAuthHandler)
 	mux.HandleFunc("POST /api/public/portal/{site_id}/validate", handlers.ValidatePortalHandler)
+
+	// ── WIFI_SURVEY / public sample ingest (X-Survey-Token auth, no JWT) ─────
+	mux.HandleFunc("POST /api/surveys/{id}/samples", handlers.PostSurveySampleHandler)
 
 	// ── Protected API routes ─────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/global/health", middleware.WithAuth(handlers.GetGlobalHealthHandler))
@@ -201,6 +204,18 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/billing/usage", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetBillingUsageHandler)))
 	mux.HandleFunc("GET /api/landlord/tenants/{id}/stats", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.GetTenantStatsHandler)))
 
+	// ── WIFI_SURVEY / site-scoped CRUD (admin) ──────────────────────────────
+	mux.HandleFunc("POST /api/sites/{site_id}/surveys", middleware.WithAuth(handlers.CreateSurveyHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/surveys", middleware.WithAuth(handlers.ListSiteSurveysHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}", middleware.WithAuth(handlers.GetSurveyHandler))
+	mux.HandleFunc("DELETE /api/sites/{site_id}/surveys/{survey_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteSurveyHandler)))
+	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/start", middleware.WithAuth(handlers.StartSurveyHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/stop", middleware.WithAuth(handlers.StopSurveyHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/rotate-token", middleware.WithAuth(middleware.RequireAdmin(handlers.RotateSurveyTokenHandler)))
+	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/revoke-token", middleware.WithAuth(middleware.RequireAdmin(handlers.RevokeSurveyTokenHandler)))
+	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}/samples", middleware.WithAuth(handlers.GetSurveyPointsHandler))
+	mux.HandleFunc("PUT /api/global/surveys/lockdown", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.SetGlobalSurveyLockdownHandler)))
+
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Device-facing: authenticated by X-Site-Key header (no JWT)
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)
@@ -211,37 +226,16 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/agent/site/raw", middleware.WithAuth(handlers.GetSiteAgentRawHandler))
 
 	// ── SPA Static files ─────────────────────────────────────────────────────
-	fs := http.FileServer(http.Dir("./web/dist"))
-	spaIndex, _ := os.ReadFile("./web/dist/index.html")
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Asset files get long-term cache; everything else (including
-		// index.html) gets a no-cache header so users always see the
-		// latest dashboard after a release.
-		if r.URL.Path == "/" || r.URL.Path == "" || !isAsset(r.URL.Path) {
-			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-			w.Header().Set("Pragma", "no-cache")
-		} else {
-			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
-		}
-		// SPA history-mode fallback: if the requested path doesn't map to
-		// a real file under ./web/dist, serve index.html so vue-router can
-		// take over. The previous implementation redirected to "/", which
-		// produced 403s on routes that depended on the trailing path.
-		if _, err := http.Dir("./web/dist").Open(r.URL.Path); err != nil {
-			if len(spaIndex) == 0 {
-				http.Error(w, "frontend not built (web/dist missing)", http.StatusNotFound)
-				return
-			}
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write(spaIndex)
-			return
-		}
-		fs.ServeHTTP(w, r)
-	})
+	// Extracted into internal/api/spa so the asset/SPA-fallback rules
+	// are unit-tested. In particular: a path that LOOKS like a static
+	// asset (any last-segment with a file extension) must return 404
+	// when the file is missing, NOT fall through to index.html. A
+	// stale browser cache requesting an old bundle name was getting
+	// text/html back, which the module loader refuses to execute
+	// ("Expected a JavaScript-or-Wasm module script but the server
+	// responded with a MIME type of text/html").
+	mux.Handle("/", spa.NewHandler("./web/dist"))
 
 	return mux
 }
 
-func isAsset(path string) bool {
-	return len(path) > 8 && path[:8] == "/assets/"
-}

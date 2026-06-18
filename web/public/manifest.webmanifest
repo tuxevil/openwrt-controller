@@ -1,0 +1,19 @@
+{
+  "name": "Nerve Center Surveyor",
+  "short_name": "Survey",
+  "description": "Push GPS samples for a WiFi coverage survey.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#39FF14",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/icons.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

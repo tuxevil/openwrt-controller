@@ -36,10 +36,11 @@ func UpdatePlatformSettingsHandler(w http.ResponseWriter, r *http.Request) {
 
 	query := `
 		UPDATE platform_settings
-		SET ollama_host = $1, ollama_model = $2, sentinel_prompt = $3, telegram_bot_token = $4, telegram_chat_id = $5, updated_at = CURRENT_TIMESTAMP
+		SET ollama_host = $1, ollama_model = $2, sentinel_prompt = $3, telegram_bot_token = $4, telegram_chat_id = $5,
+		    global_surveys_public_lockdown = $6, updated_at = CURRENT_TIMESTAMP
 		WHERE id = 1
 	`
-	_, err := database.Tx(r.Context()).Exec(query, s.OllamaHost, s.OllamaModel, s.SentinelPrompt, s.TelegramBotToken, s.TelegramChatID)
+	_, err := database.Tx(r.Context()).Exec(query, s.OllamaHost, s.OllamaModel, s.SentinelPrompt, s.TelegramBotToken, s.TelegramChatID, s.GlobalSurveysPublicLockdown)
 	if err != nil {
 		http.Error(w, `{"error": "db update error"}`, http.StatusInternalServerError)
 		return

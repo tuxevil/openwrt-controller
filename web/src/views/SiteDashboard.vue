@@ -72,11 +72,27 @@ const formatUptime = (seconds) => {
 }
 
 const getHealth = (dev) => {
+  // Prefer the server-computed `health` field (see backend services.ClassifyDeviceHealth).
+  // Falls back to the legacy local heuristic for older backends that don't yet
+  // populate it. Mirrors the staleAfter threshold in the backend (120s).
+  if (dev.health) return dev.health
   if (!dev.last_seen_at) return 'OFFLINE'
   const seen = new Date(dev.last_seen_at).getTime()
   const now = new Date().getTime()
   const diffSeconds = (now - seen) / 1000
-  return diffSeconds < 120 ? 'ONLINE' : 'OFFLINE'
+  if (diffSeconds < 120) return 'ONLINE'
+  if (diffSeconds < 600) return 'STALE'
+  return 'OFFLINE'
+}
+
+const healthBadgeClass = (health) => {
+  switch (health) {
+    case 'ONLINE':   return 'bg-neon-green/20 text-neon-green border-neon-green/50'
+    case 'DEGRADED': return 'bg-neon-amber/20 text-neon-amber border-neon-amber/50'
+    case 'STALE':    return 'bg-orange-500/20 text-orange-300 border-orange-500/50'
+    case 'OFFLINE':  return 'bg-neon-red/20 text-neon-red border-neon-red/50 glitch-anim'
+    default:         return 'bg-white/10 text-muted border-white/20'
+  }
 }
 
 // Parse lldp_info from neighbor_stats to extract discovered LLDP neighbors.
@@ -312,8 +328,11 @@ const goBack = () => router.push('/global')
             <td class="py-3 text-cyan-400 font-bold">{{ dev.last_ip || 'UNKNOWN' }}</td>
             <td class="py-3">{{ dev.model || 'UNKNOWN' }}</td>
             <td class="py-3">
-              <div class="flex items-center gap-2">
-                <span :class="getHealth(dev) === 'ONLINE' ? 'bg-neon-green/20 text-neon-green border-neon-green/50' : 'bg-neon-red/20 text-neon-red border-neon-red/50'" class="px-2 py-0.5 border clip-chamfer text-xs">{{ getHealth(dev) }}</span>
+              <div class="flex items-center gap-2 flex-wrap">
+                <span :class="healthBadgeClass(getHealth(dev))" class="px-2 py-0.5 border clip-chamfer text-xs">{{ getHealth(dev) }}</span>
+                <span v-if="dev.open_incidents && dev.open_incidents.length" class="px-2 py-0.5 bg-neon-red/30 text-neon-red border border-neon-red/60 clip-chamfer text-xs" :title="dev.open_incidents.map(i => i.type + ' (' + i.severity + ')').join(', ')">
+                  ⚠ {{ dev.open_incidents.length }}
+                </span>
                 <span class="px-2 py-0.5 bg-neon-green/20 text-neon-green border border-neon-green/50 clip-chamfer text-xs">{{ dev.status }}</span>
               </div>
             </td>
@@ -355,12 +374,22 @@ const goBack = () => router.push('/global')
         </div>
         <div class="p-6 overflow-y-auto font-mono text-sm space-y-6 flex-1">
           <div class="grid grid-cols-2 md:grid-cols-3 gap-6 bg-black/40 p-4 border border-white/5 clip-chamfer">
-            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">STATE / HEALTH</span> <span :class="getHealth(selectedDeviceDetails) === 'ONLINE' ? 'text-neon-green' : 'text-neon-red font-bold animate-pulse'" class="truncate">{{ getHealth(selectedDeviceDetails) }}</span></div>
+            <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">STATE / HEALTH</span> <span :class="getHealth(selectedDeviceDetails) === 'ONLINE' ? 'text-neon-green' : (getHealth(selectedDeviceDetails) === 'DEGRADED' || getHealth(selectedDeviceDetails) === 'STALE') ? 'text-neon-amber' : 'text-neon-red font-bold animate-pulse'" class="truncate">{{ getHealth(selectedDeviceDetails) }}</span></div>
             <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">NODE_STATUS</span> <span class="text-neon-green truncate">{{ selectedDeviceDetails.status }}</span></div>
             <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">IP_ADDRESS</span> <span class="text-cyan-400 font-bold tracking-wider truncate">{{ selectedDeviceDetails.last_ip || 'UNKNOWN' }}</span></div>
             <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">HARDWARE_MODEL</span> <span class="truncate" :title="selectedDeviceDetails.model">{{ selectedDeviceDetails.model || 'UNKNOWN' }}</span></div>
             <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">AGENT_VERSION</span> <span class="truncate" :title="selectedDeviceDetails.agent_version">{{ selectedDeviceDetails.agent_version || 'UNKNOWN' }}</span></div>
             <div class="flex flex-col min-w-0"><span class="text-muted text-xs mb-1">LAST_SEEN_AT</span> <span class="truncate">{{ selectedDeviceDetails.last_seen_at ? new Date(selectedDeviceDetails.last_seen_at).toLocaleString() : 'NEVER' }}</span></div>
+          </div>
+
+          <div v-if="selectedDeviceDetails.open_incidents && selectedDeviceDetails.open_incidents.length" class="bg-neon-red/5 border border-neon-red/40 clip-chamfer p-4">
+            <h3 class="text-neon-red uppercase text-sm mb-2">&gt; OPEN_INCIDENTS ({{ selectedDeviceDetails.open_incidents.length }})</h3>
+            <ul class="space-y-1 font-mono text-xs">
+              <li v-for="(inc, i) in selectedDeviceDetails.open_incidents" :key="i" class="flex items-center gap-2">
+                <span class="px-1.5 py-0.5 border" :class="inc.severity === 'CRITICAL' ? 'border-neon-red/60 text-neon-red' : 'border-neon-amber/60 text-neon-amber'">{{ inc.severity }}</span>
+                <span>{{ inc.type }}</span>
+              </li>
+            </ul>
           </div>
           
           <div v-if="selectedDeviceDetails.state_json" class="flex flex-col gap-5 mt-2">

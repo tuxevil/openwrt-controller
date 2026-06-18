@@ -31,7 +31,7 @@ const sectors = ['CORE_VISIBILITY', 'ACTIVE_DEFENSE_SOC', 'RF_TELEMETRY', 'SYSTE
 const sectorRoutes = {
   CORE_VISIBILITY:    [/^\/site\/[^/]+$/, /topology/, /clients/, /advanced-telemetry/],
   ACTIVE_DEFENSE_SOC: [/threat-shield/, /flow-radar/, /bandwidth/, /incidents/, /diagnostics/],
-  RF_TELEMETRY:       [/\/rf$/],
+  RF_TELEMETRY:       [/\/rf$/, /\/surveys?/],
   SYSTEM_OPS:         [/vault/, /logs/, /site-settings/, /settings/, /central-config/, /orchestrator/, /migration/],
 }
 
@@ -53,13 +53,22 @@ function toggle(name) {
 }
 
 // ── Health pulse ─────────────────────────────────────────────────
+// Skip polling while unauthenticated. The /api/global/health endpoint
+// is auth-required; polling it on the /login screen produced a
+// continuous stream of 401s in the browser console, the response
+// interceptor would clear localStorage and push to /login (looping),
+// and the visual pulse had nothing useful to display anyway.
 onMounted(async () => {
+  if (!auth.isAuthenticated) return
   await fetchHealth()
   pulseInterval = setInterval(fetchHealth, 10000)
 })
 onUnmounted(() => { if (pulseInterval) clearInterval(pulseInterval) })
 
 const fetchHealth = async () => {
+  // Defensive check: if the user was logged out between ticks the
+  // request would 401 and the response interceptor would wipe state.
+  if (!auth.isAuthenticated) return
   try {
     const res = await api.getGlobalHealth()
     globalHealth.value = res.data.health || 0
@@ -181,11 +190,15 @@ const fetchHealth = async () => {
               <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
             </svg>
           </button>
-          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'RF_TELEMETRY' ? 'max-height:150px;opacity:1' : 'max-height:0;opacity:0'">
+          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'RF_TELEMETRY' ? 'max-height:200px;opacity:1' : 'max-height:0;opacity:0'">
             <div class="flex flex-col gap-1 pt-1 pb-1">
               <router-link :to="`/site/${$route.params.site_id}/rf`" active-class="bg-[#00ffff] !text-black shadow-[0_0_10px_#00ffff]" class="p-2.5 border border-[#00ffff] clip-chamfer text-[#00ffff] hover:bg-[#00ffff] hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
                 <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 <span class="tracking-widest">RF_ANALYZER</span>
+              </router-link>
+              <router-link :to="`/site/${$route.params.site_id}/surveys`" active-class="bg-[#39FF14] !text-black shadow-[0_0_10px_#39FF14]" class="p-2.5 border border-[#39FF14] clip-chamfer text-[#39FF14] hover:bg-[#39FF14] hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                <span class="tracking-widest">WI-FI_SURVEY</span>
               </router-link>
             </div>
           </div>

@@ -200,3 +200,11 @@ func GetTenantSchema(r *http.Request) string {
 	}
 	return ""
 }
+
+// GetClaims returns the JWT claims attached by WithAuth. The boolean is
+// false if the request was not authenticated (e.g. on a route that does
+// not use WithAuth, or on a public endpoint).
+func GetClaims(r *http.Request) (jwt.MapClaims, bool) {
+	c, ok := r.Context().Value(claimsKey).(jwt.MapClaims)
+	return c, ok
+}

@@ -33,6 +33,12 @@ const router = createRouter({
       meta: { public: true }
     },
     {
+      path: '/survey/:survey_id',
+      name: 'surveyor-pwa',
+      component: () => import('../views/SurveyorPwa.vue'),
+      meta: { public: true }
+    },
+    {
       path: '/',
       redirect: '/global'
     },
@@ -144,6 +150,12 @@ const router = createRouter({
       path: '/site/:site_id/threat-shield',
       name: 'site-threat-shield',
       component: () => import('../views/ThreatShield.vue'),
+      props: true
+    },
+    {
+      path: '/site/:site_id/surveys',
+      name: 'site-surveys',
+      component: () => import('../views/WiFiSurvey.vue'),
       props: true
     },
     {

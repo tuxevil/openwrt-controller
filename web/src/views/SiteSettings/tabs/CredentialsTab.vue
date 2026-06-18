@@ -1,5 +1,5 @@
 <script setup>
-// CredentialsTab — site API key + zero-touch provisioning toggle.
+// CredentialsTab — site API key + zero-touch provisioning toggle + public surveys toggle.
 import { ref } from 'vue'
 import api from '../../../services/api'
 
@@ -10,14 +10,23 @@ const emit = defineEmits(['error', 'success'])
 
 const apiKey = ref('')
 const autoAdopt = ref(false)
+const allowPublicSurveys = ref(false)
 const rotatingKey = ref(false)
 const togglingAdopt = ref(false)
+const togglingPublic = ref(false)
 
 const securityRes = await api.getSiteSettings(props.siteId)
 if (securityRes.data?.api_key) apiKey.value = securityRes.data.api_key
 const sitesRes = await api.getSites()
 const site = (sitesRes.data.data || []).find(s => s.id === props.siteId)
-if (site) autoAdopt.value = site.auto_adopt || false
+if (site) {
+  autoAdopt.value = site.auto_adopt || false
+}
+// Read site_config for allow_public_surveys (added in the survey feature).
+try {
+  const cfg = await api.getSiteConfig(props.siteId)
+  allowPublicSurveys.value = !!(cfg.data?.allow_public_surveys ?? cfg.allow_public_surveys)
+} catch {}
 
 async function rotateKey() {
   if (!confirm('Rotate API key? Existing agents will disconnect until updated.')) return
@@ -39,6 +48,22 @@ async function toggleAutoAdopt() {
     autoAdopt.value = !autoAdopt.value
   } catch {} finally {
     togglingAdopt.value = false
+  }
+}
+async function togglePublicSurveys() {
+  togglingPublic.value = true
+  try {
+    // Persist via the orchestrator site-config endpoint (PUT site-config).
+    const cur = await api.getSiteConfig(props.siteId)
+    const cfg = cur.data?.data ?? cur.data ?? {}
+    cfg.allow_public_surveys = !allowPublicSurveys.value
+    await api.putSiteConfig(props.siteId, cfg)
+    allowPublicSurveys.value = !allowPublicSurveys.value
+    emit('success', allowPublicSurveys.value ? 'Public surveys ENABLED for this site' : 'Public surveys DISABLED')
+  } catch (e) {
+    emit('error', 'Public-surveys toggle failed')
+  } finally {
+    togglingPublic.value = false
   }
 }
 </script>
@@ -73,6 +98,27 @@ async function toggleAutoAdopt() {
         <span v-if="togglingAdopt" class="text-amber-400 text-xs animate-pulse">UPDATING...</span>
         <span v-else-if="autoAdopt" class="text-amber-300 text-xs tracking-widest">ARMED</span>
         <span v-else class="text-gray-500 text-xs tracking-widest">SAFE</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel-section" style="border-color: rgba(57,255,20,0.2)">
+    <div class="panel-header" style="color: #39FF14">▸ PUBLIC WI-FI SURVEYS</div>
+    <div class="p-5 space-y-4">
+      <p class="text-[10px] text-gray-600 leading-relaxed">
+        When ENABLED, operators can create WiFi surveys that grant a single-use
+        <b>X-Survey-Token</b> QR code to anyone with the URL. The surveyor
+        uploads GPS samples from a phone without a dashboard login. A platform
+        lockdown in <i>Global Settings</i> overrides this toggle.
+      </p>
+      <div class="flex items-center gap-6">
+        <div class="flex border cursor-pointer select-none overflow-hidden rounded" :class="allowPublicSurveys ? 'border-[#39FF14]' : 'border-gray-600'" @click="togglePublicSurveys">
+          <div class="px-5 py-2.5 text-sm font-bold transition-colors" :class="!allowPublicSurveys ? 'bg-gray-700 text-black' : 'bg-transparent text-gray-500'">[ OFF ] RESTRICTED</div>
+          <div class="px-5 py-2.5 text-sm font-bold transition-colors" :class="allowPublicSurveys ? 'bg-[#39FF14] text-black shadow-[0_0_12px_rgba(57,255,20,0.4)]' : 'bg-transparent text-gray-500'">[ ON ] PUBLIC OK</div>
+        </div>
+        <span v-if="togglingPublic" class="text-[#39FF14] text-xs animate-pulse">UPDATING...</span>
+        <span v-else-if="allowPublicSurveys" class="text-[#39FF14] text-xs tracking-widest">PUBLIC_SURVEYS_ENABLED</span>
+        <span v-else class="text-gray-500 text-xs tracking-widest">PUBLIC_SURVEYS_DISABLED</span>
       </div>
     </div>
   </section>

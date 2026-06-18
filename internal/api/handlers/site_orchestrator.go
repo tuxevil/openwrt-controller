@@ -81,6 +81,7 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		SecureTunnelEnabled  bool            `json:"secure_tunnel_enabled"`
 		TailscaleEnabled     bool            `json:"tailscale_enabled"`
 		TailscaleAuthKey     string          `json:"tailscale_auth_key"`
+		AllowPublicSurveys   bool            `json:"allow_public_surveys"`
 	}
 	if !readBody(w, r, &dto) {
 		return
@@ -125,6 +126,7 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		DHCPReservations:     dhcpRes,
 		PortForwardingRules:  pfRules,
 		ThreatShieldEnabled:  dto.ThreatShieldEnabled,
+		AllowPublicSurveys:   dto.AllowPublicSurveys,
 	}
 
 	if err := services.UpsertSiteConfig(r.Context(), sc); err != nil {
