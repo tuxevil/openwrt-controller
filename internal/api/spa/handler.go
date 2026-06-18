@@ -89,6 +89,25 @@ func serveIndex(w http.ResponseWriter, body []byte) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Strict CSP. Defends against reverse-proxy shims (e.g. Coolify's
+	// wrs_env.js) that try to inject inline scripts into the SPA
+	// response — the page then throws before Vue can mount and the
+	// user sees a blank screen. Inline <script> is disallowed
+	// entirely; the production build only loads /assets/*.js from
+	// the same origin, which is covered by 'self'. We keep
+	// 'unsafe-inline' for style only because Vite's runtime CSS
+	// dev-shim uses it, and the harm surface is much smaller.
+	w.Header().Set("Content-Security-Policy",
+		"default-src 'self'; "+
+			"script-src 'self'; "+
+			"style-src 'self' 'unsafe-inline'; "+
+			"img-src 'self' data: https:; "+
+			"font-src 'self' data:; "+
+			"connect-src 'self'; "+
+			"worker-src 'self' blob:; "+
+			"frame-ancestors 'none'; "+
+			"base-uri 'self'; "+
+			"form-action 'self'")
 	_, _ = w.Write(body)
 }
 

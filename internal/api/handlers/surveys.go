@@ -9,6 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -91,7 +92,23 @@ func roleAtLeast(role, min string) bool {
 	return a >= b
 }
 
+// surveyBaseURL returns the absolute base URL to embed in survey
+// QR codes. The default uses r.Host (which the Go HTTP server sets
+// from the Host header), with X-Forwarded-Proto honoured when the
+// request came through a TLS-terminating reverse proxy.
+//
+// SURVEY_PUBLIC_URL overrides everything. Use it when the controller
+// is reached through a proxy (e.g. Coolify) that injects scripts
+// into responses — the proxy URL might be a hostname the phone
+// cannot reach from outside the LAN, or it might break the SPA
+// with environment shims. The override forces the QR to point at
+// a known-routable address (typically https://<lan-ip>:3000).
+//
+// Set in .env: SURVEY_PUBLIC_URL=https://10.128.128.6:3000
 func surveyBaseURL(r *http.Request) string {
+	if v := os.Getenv("SURVEY_PUBLIC_URL"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
 	scheme := "http"
 	if r.TLS != nil {
 		scheme = "https"
