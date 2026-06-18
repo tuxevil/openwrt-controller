@@ -13,9 +13,9 @@ const surveyId = computed(() => String(route.params.survey_id || ''))
 const token = computed(() => String(route.query.token || ''))
 
 // ─── State ──────────────────────────────────────────────────────────────────
-const state = ref('init') // init | requesting | running | stopped | error
+const state = ref('init') // init | ready | running | stopped | error
 const errorMessage = ref('')
-const errorCode = ref('') // PUBLIC_SURVEY_DISABLED | TOKEN_REVOKED | TOKEN_EXPIRED | SURVEY_ENDED | RATE_LIMITED | GPS_DENIED | GPS_UNAVAILABLE | INVALID
+const errorCode = ref('')
 const lastFix = ref(null) // { lat, lon, accuracy, ts }
 const sampleCount = ref(0)
 const lastError = ref('')
@@ -23,6 +23,20 @@ let watchId = null
 let map = null
 let marker = null
 let lastPostAt = 0
+
+// ─── Secure-context check ──────────────────────────────────────────────────
+// navigator.geolocation only works in a "secure context" (HTTPS, localhost
+// or file://). On a LAN IP over plain HTTP Chrome silently refuses the
+// permission prompt and the call rejects with code 2 (POSITION_UNAVAILABLE)
+// or never resolves. Detect it up front so the user knows to switch to
+// HTTPS or open the page via localhost.
+const isSecureContext = computed(() => {
+  if (typeof window === 'undefined') return false
+  if (window.isSecureContext) return true
+  // localhost / 127.0.0.1 are treated as secure even over HTTP
+  const h = window.location.hostname
+  return h === 'localhost' || h === '127.0.0.1' || h === '::1'
+})
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(() => {
@@ -34,8 +48,22 @@ onMounted(() => {
     setError('INVALID', 'Missing ?token= in URL. Ask the admin for a new QR code.')
     return
   }
+  if (!isSecureContext.value) {
+    setError(
+      'INSECURE_CONTEXT',
+      'GPS is blocked because this page is not HTTPS. Open it via the controller’s https:// URL (you may need to accept the self-signed cert warning on first visit) or via http://localhost:3000.'
+    )
+    return
+  }
+  if (!('geolocation' in navigator)) {
+    setError('GPS_UNAVAILABLE', 'This browser does not expose navigator.geolocation.')
+    return
+  }
   initMap()
-  requestPermission()
+  // Wait for an explicit user gesture (the START button). On mobile
+  // browsers will silently reject geolocation prompts that weren't
+  // triggered by a user interaction, so we don't auto-prompt here.
+  state.value = 'ready'
 })
 
 onUnmounted(() => {
@@ -49,7 +77,6 @@ onUnmounted(() => {
 })
 
 function initMap() {
-  // small, mobile-friendly map
   setTimeout(() => {
     if (!document.getElementById('pwa-map')) return
     map = L.map('pwa-map', {
@@ -75,24 +102,41 @@ function setError(code, msg) {
   state.value = 'error'
 }
 
-function requestPermission() {
-  state.value = 'requesting'
-  if (!navigator.geolocation) {
-    setError('GPS_UNAVAILABLE', 'This device does not support GPS in the browser.')
-    return
-  }
-  // Trigger permission prompt via a single getCurrentPosition; if granted
-  // we start watchPosition immediately. If denied, we surface GPS_DENIED.
+// Map GeolocationPositionError.code to a human label.
+function geoErrorCode(code) {
+  if (code === 1) return 'PERMISSION_DENIED'
+  if (code === 2) return 'POSITION_UNAVAILABLE'
+  if (code === 3) return 'TIMEOUT'
+  return 'UNKNOWN'
+}
+
+function startSurvey() {
+  if (state.value === 'running') return
+  state.value = 'running'
+  // One-shot to trigger the permission prompt under a user gesture.
+  // If granted we move to continuous watchPosition. If denied we
+  // surface PERMISSION_DENIED with a clear "open settings" hint.
   navigator.geolocation.getCurrentPosition(
     () => startWatching(),
     (err) => {
-      if (err.code === 1) {
-        setError('GPS_DENIED', 'Location permission denied. Enable it in browser settings to start the survey.')
+      const code = geoErrorCode(err.code)
+      if (code === 'PERMISSION_DENIED') {
+        setError(
+          'GPS_DENIED',
+          'Location permission denied. Tap the site settings (lock icon in the address bar) and allow Location, then tap START again.'
+        )
+      } else if (code === 'POSITION_UNAVAILABLE') {
+        setError(
+          'GPS_UNAVAILABLE',
+          'The device could not get a GPS fix. Step outside, wait a few seconds, and tap RESUME.'
+        )
+      } else if (code === 'TIMEOUT') {
+        setError('GPS_TIMEOUT', 'GPS request timed out. Tap RESUME to retry.')
       } else {
-        setError('GPS_UNAVAILABLE', 'GPS unavailable: ' + (err.message || err.code))
+        setError('GPS_ERROR', 'GPS error: ' + (err.message || code))
       }
     },
-    { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 }
+    { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }
   )
 }
 
@@ -101,14 +145,11 @@ function startWatching() {
   watchId = navigator.geolocation.watchPosition(
     (pos) => onFix(pos),
     (err) => {
-      if (err.code === 1) {
-        setError('GPS_DENIED', 'Location permission revoked. Re-enable and reload.')
-      } else {
-        // non-fatal: keep going
-        lastError.value = 'GPS jitter: ' + (err.message || err.code)
-      }
+      // Non-fatal: log only, keep the loop alive so a brief
+      // signal loss (e.g. entering a tunnel) doesn't kill the survey.
+      lastError.value = `gps: ${geoErrorCode(err.code)} ${err.message || ''}`
     },
-    { enableHighAccuracy: true, maximumAge: 500, timeout: 15000 }
+    { enableHighAccuracy: true, maximumAge: 1000, timeout: 30000 }
   )
 }
 
@@ -188,11 +229,14 @@ function stopSurvey() {
 
 function resume() {
   if (state.value === 'stopped' || state.value === 'error') {
-    if (errorCode.value === 'GPS_DENIED') {
-      requestPermission()
-    } else {
-      startWatching()
+    if (errorCode.value === 'INSECURE_CONTEXT' || errorCode.value === 'INVALID' || errorCode.value === 'GPS_UNAVAILABLE') {
+      // Cannot recover from these by retrying; user must change context
+      // or browser. The error UI already explains the next step.
+      return
     }
+    errorCode.value = ''
+    errorMessage.value = ''
+    startSurvey()
   }
 }
 </script>
@@ -206,8 +250,8 @@ function resume() {
         <div class="text-[11px] text-gray-400 mt-0.5">ID: <span class="text-[#39FF14]">{{ surveyId.slice(0, 8) }}…</span></div>
       </div>
       <div class="text-right">
-        <div class="text-[10px] tracking-widest" :class="state === 'running' ? 'text-[#39FF14] animate-pulse' : 'text-gray-500'">
-          {{ state === 'running' ? '● RECORDING' : state === 'stopped' ? '■ STOPPED' : state === 'error' ? '⚠ ERROR' : '◯ STANDBY' }}
+        <div class="text-[10px] tracking-widest" :class="state === 'running' ? 'text-[#39FF14] animate-pulse' : state === 'stopped' ? 'text-gray-500' : state === 'error' ? 'text-[#ff0055]' : 'text-yellow-400'">
+          {{ state === 'running' ? '● RECORDING' : state === 'stopped' ? '■ STOPPED' : state === 'error' ? '⚠ ERROR' : state === 'ready' ? '◯ READY' : '… INIT' }}
         </div>
         <div class="text-[10px] text-gray-500 mt-0.5">{{ sampleCount }} samples</div>
       </div>
@@ -237,32 +281,43 @@ function resume() {
     <!-- Footer / actions -->
     <footer class="px-4 py-4 border-t border-[#39FF14]/30 bg-black/90 space-y-2">
       <button
-        v-if="state === 'running'"
+        v-if="state === 'ready'"
+        @click="startSurvey"
+        class="w-full py-4 border-2 border-[#39FF14] text-[#39FF14] font-bold tracking-widest clip-chamfer active:scale-95 hover:bg-[#39FF14] hover:text-black transition-colors text-base"
+      >
+        ▶ START GPS SURVEY
+      </button>
+      <button
+        v-else-if="state === 'running'"
         @click="stopSurvey"
         class="w-full py-3 border-2 border-[#ff0055] text-[#ff0055] font-bold tracking-widest clip-chamfer active:scale-95 hover:bg-[#ff0055] hover:text-black transition-colors"
       >
         ■ STOP SURVEY
       </button>
       <button
-        v-else-if="state === 'stopped' || (state === 'error' && errorCode === 'GPS_DENIED')"
+        v-else-if="state === 'stopped' || (state === 'error' && errorCode === 'GPS_DENIED') || (state === 'error' && errorCode === 'GPS_TIMEOUT') || (state === 'error' && errorCode === 'GPS_ERROR')"
         @click="resume"
         class="w-full py-3 border-2 border-[#39FF14] text-[#39FF14] font-bold tracking-widest clip-chamfer active:scale-95 hover:bg-[#39FF14] hover:text-black transition-colors"
       >
         ▶ RESUME
       </button>
 
-      <div v-if="state === 'requesting'" class="text-center text-[11px] text-gray-400">
-        Waiting for location permission…
+      <div v-if="state === 'init'" class="text-center text-[11px] text-gray-400">
+        Loading…
       </div>
 
-      <div v-if="state === 'init'" class="text-center text-[11px] text-gray-400">
-        Initialising…
+      <div v-if="state === 'ready'" class="text-center text-[11px] text-gray-400">
+        Tap START. Your browser will ask for location permission.
       </div>
 
       <div v-if="state === 'error'" class="text-center text-xs space-y-1">
         <div class="text-[#ff0055] font-bold tracking-wider">{{ errorCode }}</div>
         <div class="text-gray-300">{{ errorMessage }}</div>
-        <div class="text-[10px] text-gray-500 mt-2">Ask the admin to scan a new QR or enable public surveys.</div>
+        <div v-if="errorCode === 'INSECURE_CONTEXT'" class="text-[10px] text-gray-500 mt-2">
+          On the phone, open <span class="text-white">https://{{ location.host }}</span> instead of http://,
+          and accept the self-signed certificate warning. Or run the controller on localhost
+          and visit <span class="text-white">http://localhost:3000</span>.
+        </div>
       </div>
 
       <div v-if="lastError && state === 'running'" class="text-[10px] text-yellow-500 text-center">
