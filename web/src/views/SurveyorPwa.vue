@@ -65,6 +65,18 @@ onMounted(async () => {
     if (fb) fb.remove()
   }
 
+  // Register the script-firewall service worker. It runs in the
+  // background and rejects any <script> the browser tries to fetch
+  // that isn't one of our /assets/*.js bundles. This stops a
+  // Chrome extension / captive portal / etc. from sneaking
+  // wrs_env.js or web-client-content-script.js in via DOM
+  // manipulation after the page is loaded.
+  if ('serviceWorker' in navigator && location.protocol === 'https:') {
+    navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(
+      (e) => log('sw.register failed: ' + e.message)
+    )
+  }
+
   log(`mounted: ${hostBadge.value} (${protocolBadge.value}, secure=${isSecureContext.value})`)
   log(`survey id: ${surveyId.value.slice(0, 8)}…`)
   log(`token: ${token.value ? token.value.slice(0, 8) + '…' : 'MISSING'}`)
