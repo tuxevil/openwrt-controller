@@ -54,6 +54,17 @@ const hostBadge = computed(() => {
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(async () => {
+  // Remove the boot-fallback element the SPA handler injects as a
+  // safety net. If Vue never mounts (e.g. because a third-party
+  // script extension broke the page or a proxy stripped the JS
+  // bundle) the CSS animation in the handler reveals the fallback
+  // div after 4 s. Reaching this line means we mounted cleanly, so
+  // it's safe to take the fallback down.
+  if (typeof document !== 'undefined') {
+    const fb = document.getElementById('boot-fallback')
+    if (fb) fb.remove()
+  }
+
   log(`mounted: ${hostBadge.value} (${protocolBadge.value}, secure=${isSecureContext.value})`)
   log(`survey id: ${surveyId.value.slice(0, 8)}…`)
   log(`token: ${token.value ? token.value.slice(0, 8) + '…' : 'MISSING'}`)

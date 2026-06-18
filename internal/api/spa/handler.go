@@ -6,6 +6,8 @@ import (
 	"strings"
 )
 
+// _ = strings.Contains // ensure import used (legacy, can remove if unused)
+
 // NewHandler returns an http.Handler that serves files from distDir.
 //
 // Behaviour:
@@ -108,7 +110,42 @@ func serveIndex(w http.ResponseWriter, body []byte) {
 			"frame-ancestors 'none'; "+
 			"base-uri 'self'; "+
 			"form-action 'self'")
-	_, _ = w.Write(body)
+	// Belt-and-suspenders: also write the same CSP as a <meta> tag
+	// inside the served HTML so the policy survives any reverse
+	// proxy that strips response headers but not the body. The
+	// meta tag is injected right after the <head> opening tag so
+	// the browser picks it up before evaluating any further
+	// markup.
+	_, _ = w.Write(injectCSPAndFallback(body))
+}
+
+// injectCSPAndFallback inserts (a) a <meta> CSP tag as the first
+// child of <head> and (b) a static <div id="boot-fallback"> that
+// shows "JavaScript is blocked or failed to load" if Vue never
+// mounts. The fallback uses a CSS animation with a 4-second delay
+// — no JavaScript needed. The Vue app's first action should remove
+// the element so it never shows during normal operation.
+//
+// We deliberately avoid an inline <script> for the reveal: the strict
+// CSP (script-src 'self') would block it anyway. The CSS animation
+// is the lowest-tech path that works even when all scripts are
+// blocked, which is exactly the situation we want to detect.
+func injectCSPAndFallback(body []byte) []byte {
+	csp := `<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'">`
+	fallback := `<style>@keyframes nc-boot-fallback-reveal{from{opacity:0}to{opacity:1}}#boot-fallback{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center;z-index:9999;opacity:0;animation:nc-boot-fallback-reveal .3s 4s forwards}#boot-fallback .icon{font-size:48px;margin-bottom:16px}#boot-fallback .title{font-size:18px;margin-bottom:12px;color:#39FF14}#boot-fallback .hint{font-size:12px;color:#888;max-width:340px;line-height:1.6}#boot-fallback code{color:#fff;background:#111;padding:2px 6px;border-radius:3px}</style><div id="boot-fallback"><div class="icon">⚠</div><div class="title">JavaScript failed to start</div><div class="hint">The dashboard did not load. This usually means a browser extension, MDM policy, captive portal, or reverse proxy is blocking scripts. Try <code>incognito mode</code> (Ctrl+Shift+N on desktop, ⋮ → New incognito on mobile) or open <code>/survey/&lt;id&gt;</code> in a different network.</div></div><noscript><div style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#000;color:#39FF14;font-family:monospace;padding:24px;text-align:center"><div><div style="font-size:18px;margin-bottom:12px">JavaScript is required</div><div style="font-size:12px;color:#888">Please enable JavaScript in your browser.</div></div></div></noscript>`
+
+	// Insert the CSP meta as the first child of <head>.
+	s := string(body)
+	if i := strings.Index(s, "<head>"); i >= 0 {
+		ins := i + len("<head>")
+		s = s[:ins] + csp + s[ins:]
+	}
+	// Insert the fallback block right after <body>.
+	if i := strings.Index(s, "<body>"); i >= 0 {
+		ins := i + len("<body>")
+		s = s[:ins] + fallback + s[ins:]
+	}
+	return []byte(s)
 }
 
 // fileExists reports whether p (interpreted relative to distDir) maps
