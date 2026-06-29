@@ -38,7 +38,8 @@ func main() {
 	log.Println(banner)
 
 	// CLI flags. Port value is normalised (":3000" or "3000" both work).
-	port := flag.String("port", envOr("PORT", ":3000"), "TCP port to listen on (e.g. :3000 or :8443)")
+	port := flag.String("port", envOr("PORT", ":3000"), "TCP port to listen on (e.g. :3000)")
+	httpsPort := flag.String("https-port", envOr("HTTPS_PORT", ":8443"), "TCP port to listen on for HTTPS")
 	tlsCert := flag.String("tls-cert", os.Getenv("TLS_CERT"), "Path to TLS certificate (PEM). Enables HTTPS if set together with --tls-key.")
 	tlsKey := flag.String("tls-key", os.Getenv("TLS_KEY"), "Path to TLS private key (PEM). Enables HTTPS if set together with --tls-cert.")
 	requireTLS := flag.Bool("require-tls", envBool("REQUIRE_TLS", false), "If true, refuse to start without --tls-cert and --tls-key. Recommended for production.")
@@ -58,6 +59,9 @@ func main() {
 	// new one (PORT=:3000). Override via --port=:3000 or -port :3000.
 	if !strings.HasPrefix(*port, ":") {
 		*port = ":" + *port
+	}
+	if !strings.HasPrefix(*httpsPort, ":") {
+		*httpsPort = ":" + *httpsPort
 	}
 
 	// Initialise the metrics registry and inject it into the api
@@ -125,9 +129,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Build the http.Server with timeouts. IdleTimeout=120s is the
-	// recommended value for keep-alive behind a reverse proxy
-	// (Traefik / Caddy) which already enforces its own timeout.
 	srv := &http.Server{
 		Addr:              *port,
 		Handler:           handler,
@@ -136,29 +137,42 @@ func main() {
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+
+	var srvHTTPS *http.Server
 	if tlsEnabled {
-		srv.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+		srvHTTPS = &http.Server{
+			Addr:              *httpsPort,
+			Handler:           handler,
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       30 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       120 * time.Second,
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
+		}
 	}
 
-	// Graceful shutdown on SIGTERM (Docker / k8s default) or SIGINT
-	// (Ctrl-C in dev). Drain for 15s before forcing a close.
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
 	go func() {
-		if tlsEnabled {
-			logger.Info("starting openwrt-controller (HTTPS)", "addr", *port)
-			if err := srv.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
-				logger.Error("server failed", "err", err)
-				os.Exit(1)
-			}
+		if *requireTLS {
 			return
 		}
-		logger.Info("starting openwrt-controller (HTTP)", "addr", *port, "hint", "set REQUIRE_TLS=true for production")
+		logger.Info("starting openwrt-controller (HTTP)", "addr", *port)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			logger.Error("server failed", "err", err)
 			os.Exit(1)
 		}
 	}()
+
+	if tlsEnabled {
+		go func() {
+			logger.Info("starting openwrt-controller (HTTPS)", "addr", *httpsPort)
+			if err := srvHTTPS.ListenAndServeTLS(*tlsCert, *tlsKey); err != nil && err != http.ErrServerClosed {
+				logger.Error("https server failed", "err", err)
+			}
+		}()
+	}
 
 	<-stop
 	logger.Info("shutdown signal received; draining")
@@ -166,6 +180,11 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
+	}
+	if srvHTTPS != nil {
+		if err := srvHTTPS.Shutdown(shutdownCtx); err != nil {
+			logger.Error("https graceful shutdown failed", "err", err)
+		}
 	}
 }
 
