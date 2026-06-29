@@ -97,7 +97,7 @@ func checkDownNodes() {
 		query := fmt.Sprintf(`
 			SELECT id, site_id 
 			FROM %s.devices 
-			WHERE extract(epoch from (CURRENT_TIMESTAMP - last_seen_at)) > 60
+			WHERE extract(epoch from (CURRENT_TIMESTAMP - last_seen_at)) > 600
 		`, schema)
 		rows, err := database.DB.Query(query)
 		if err != nil {
