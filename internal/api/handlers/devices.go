@@ -33,14 +33,19 @@ func GetDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	var devices []map[string]interface{}
 	for rows.Next() {
 		var id string
-		var siteID, name, model, status, lastSeen sql.NullString
+		var siteID, name, model, status sql.NullString
+		var lastSeen sql.NullTime
 		if err := rows.Scan(&id, &siteID, &name, &model, &status, &lastSeen); err == nil {
+			var lastSeenStr string
+			if lastSeen.Valid {
+				lastSeenStr = lastSeen.Time.Format(time.RFC3339)
+			}
 			dev := map[string]interface{}{
 				"id":           id,
 				"name":         name.String,
 				"model":        model.String,
 				"status":       status.String,
-				"last_seen_at": lastSeen.String,
+				"last_seen_at": lastSeenStr,
 			}
 			if siteID.Valid {
 				dev["site_id"] = siteID.String
@@ -85,9 +90,17 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	// refresh. We now do exactly one.
 	for rows.Next() {
 		var id string
-		var sID, name, model, status, lastSeen, lastPulled, lastIP, agentVersion sql.NullString
+		var sID, name, model, status, lastIP, agentVersion sql.NullString
+		var lastSeen, lastPulled sql.NullTime
 		var stateJSON []byte
 		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON); err == nil {
+			var lastSeenStr, lastPulledStr string
+			if lastSeen.Valid {
+				lastSeenStr = lastSeen.Time.Format(time.RFC3339)
+			}
+			if lastPulled.Valid {
+				lastPulledStr = lastPulled.Time.Format(time.RFC3339)
+			}
 			deviceIDs = append(deviceIDs, id)
 
 			dev := map[string]interface{}{
@@ -96,8 +109,8 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 				"name":                  name.String,
 				"model":                 model.String,
 				"status":                status.String,
-				"last_seen_at":          lastSeen.String,
-				"last_config_pulled_at": lastPulled.String,
+				"last_seen_at":          lastSeenStr,
+				"last_config_pulled_at": lastPulledStr,
 				"last_ip":               lastIP.String,
 				"agent_version":         agentVersion.String,
 				"open_incidents":        []map[string]string{},

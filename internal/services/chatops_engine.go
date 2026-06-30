@@ -140,14 +140,19 @@ func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 		var results []map[string]interface{}
 		for rows.Next() {
 			var id string
-			var name, model, status, lastSeen sql.NullString
+			var name, model, status sql.NullString
+			var lastSeen sql.NullTime
 			if err := rows.Scan(&id, &name, &model, &status, &lastSeen); err == nil {
+				var lastSeenStr string
+				if lastSeen.Valid {
+					lastSeenStr = lastSeen.Time.Format(time.RFC3339)
+				}
 				results = append(results, map[string]interface{}{
 					"id":           id,
 					"name":         name.String,
 					"model":        model.String,
 					"status":       status.String,
-					"last_seen_at": lastSeen.String,
+					"last_seen_at": lastSeenStr,
 				})
 			}
 		}
