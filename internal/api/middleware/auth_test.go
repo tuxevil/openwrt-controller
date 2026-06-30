@@ -18,8 +18,8 @@ func TestClaimsContext(t *testing.T) {
 	ctx := context.WithValue(context.Background(), k, want)
 
 	rec := httptest.NewRecorder()
-	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, _ := r.Context().Value(k).(string)
+	next := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		got, _ := req.Context().Value(k).(string)
 		if got != want {
 			t.Errorf("context value = %q, want %q", got, want)
 		}
@@ -59,10 +59,10 @@ func TestMissingTokenReturns401(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/api/sites", nil)
-	WithAuth(func(w http.ResponseWriter, r *http.Request) {
+	WithAuth(func(w http.ResponseWriter, req *http.Request) {
 		t.Error("next handler should NOT be called without a token")
 		w.WriteHeader(http.StatusOK)
-	})(rec, r)
+	}).ServeHTTP(rec, r)
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
