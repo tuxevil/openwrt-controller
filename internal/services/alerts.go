@@ -57,12 +57,12 @@ func ProcessTelemetry(schema, deviceID string, siteID string, metrics models.Dev
 		ResolveIncident(schema, "SIGNAL_CRITICAL", deviceID)
 	}
 
-	// 3. Evaluate CPU_OVERLOAD (Supera el 90% en DOS muestras consecutivas)
+	// 3. Evaluate CPU_OVERLOAD (Supera carga de 4.0 en DOS muestras consecutivas)
 	cpuMu.Lock()
 	lastCPU, exists := lastCPULoad[deviceID]
-	if exists && lastCPU.load > 0.90 && metrics.CPULoad > 0.90 {
+	if exists && lastCPU.load > 4.0 && metrics.CPULoad > 4.0 {
 		OpenIncident(schema, "CPU_OVERLOAD", deviceID, siteID, "WARNING")
-	} else if metrics.CPULoad <= 0.90 {
+	} else if metrics.CPULoad <= 4.0 {
 		ResolveIncident(schema, "CPU_OVERLOAD", deviceID)
 	}
 	lastCPULoad[deviceID] = cpuSample{load: metrics.CPULoad, recorded: time.Now()}
