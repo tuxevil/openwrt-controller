@@ -104,8 +104,9 @@ func runSSHCommand(deviceID, ip, command string, signer ssh.Signer) DeviceResult
 	var stdout, stderr bytes.Buffer
 	session.Stdout = &stdout
 	session.Stderr = &stderr
+	session.Stdin = strings.NewReader(command)
 
-	if err := session.Run(command); err != nil {
+	if err := session.Run("sh"); err != nil {
 		errMsg := fmt.Sprintf("Exit error: %v", err)
 		if stderr.Len() > 0 {
 			errMsg += " | STDERR: " + strings.TrimSpace(stderr.String())

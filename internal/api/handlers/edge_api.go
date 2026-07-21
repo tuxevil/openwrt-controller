@@ -65,9 +65,13 @@ func getDeviceIPAndSchema(deviceID string) (string, string, error) {
 		if err != nil {
 			continue
 		}
+		sqlSchema, err := database.SafeSQLSchemaIdent(schema)
+		if err != nil {
+			continue
+		}
 		var tenantIP sql.NullString
 		var tenantLastSeen sql.NullTime
-		err = database.DB.QueryRow(fmt.Sprintf("SELECT last_ip, last_seen_at FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&tenantIP, &tenantLastSeen)
+		err = database.DB.QueryRow(fmt.Sprintf("SELECT last_ip, last_seen_at FROM %s.devices WHERE id = $1", sqlSchema), deviceID).Scan(&tenantIP, &tenantLastSeen)
 		if err == nil && tenantIP.Valid && tenantIP.String != "" {
 			lastSeen := time.Time{}
 			if tenantLastSeen.Valid {
@@ -124,11 +128,15 @@ func runSSHCommand(deviceID string, cmd string) (string, error) {
 	}
 	defer sess.Close()
 
-	outBytes, err := sess.CombinedOutput(cmd)
+	var out bytes.Buffer
+	sess.Stdout = &out
+	sess.Stderr = &out
+	sess.Stdin = strings.NewReader(cmd)
+	err = sess.Run("sh")
 	if err != nil {
-		return string(outBytes), fmt.Errorf("remote command failed: %w", err)
+		return out.String(), fmt.Errorf("remote command failed: %w", err)
 	}
-	return string(outBytes), nil
+	return out.String(), nil
 }
 
 func runSSHScript(deviceID string, script string) (string, error) {

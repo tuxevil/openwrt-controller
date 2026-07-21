@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"strconv"
+	"strings"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/orchestrator"
@@ -88,7 +89,8 @@ func LimitBandwidth(deviceID, mac string, download, upload int) error {
 	}
 	defer session.Close()
 
-	if err := session.Run(cmd); err != nil {
+	session.Stdin = strings.NewReader(cmd)
+	if err := session.Run("sh"); err != nil {
 		return fmt.Errorf("failed to execute sqm config: %v", err)
 	}
 

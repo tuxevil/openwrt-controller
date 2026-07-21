@@ -1,8 +1,10 @@
 package orchestrator
 
 import (
+	"bytes"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"openwrt-controller/internal/database"
 
@@ -22,8 +24,12 @@ func getSigner() (ssh.Signer, error) {
 
 // ExecuteCommand runs a bash command over SSH on the target device
 func ExecuteCommand(schema, deviceID string, cmd string) error {
+	sqlSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return fmt.Errorf("invalid tenant schema: %w", err)
+	}
 	var targetIP sql.NullString
-	err := database.DB.QueryRow(fmt.Sprintf("SELECT last_ip FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&targetIP)
+	err = database.DB.QueryRow(fmt.Sprintf("SELECT last_ip FROM %s.devices WHERE id = $1", sqlSchema), deviceID).Scan(&targetIP)
 	if err != nil || !targetIP.Valid || targetIP.String == "" {
 		return fmt.Errorf("device ip not found")
 	}
@@ -53,15 +59,19 @@ func ExecuteCommand(schema, deviceID string, cmd string) error {
 	}
 	defer session.Close()
 
-	out, err := session.CombinedOutput(cmd)
+	var out bytes.Buffer
+	session.Stdout = &out
+	session.Stderr = &out
+	session.Stdin = strings.NewReader(cmd)
+	err = session.Run("sh")
 	if err != nil {
 		// Detect specifically if nftables is missing (exit code 127 or "command not found" string)
 		if e, ok := err.(*ssh.ExitError); ok {
-			if e.ExitStatus() == 127 || string(out) == "bash: nft: command not found\n" || string(out) == "ash: nft: not found\n" {
+			if e.ExitStatus() == 127 || out.String() == "bash: nft: command not found\n" || out.String() == "ash: nft: not found\n" {
 				return fmt.Errorf("Incompatible Engine: nftables not supported on this device")
 			}
 		}
-		return fmt.Errorf("command execution failed: %v, output: %s", err, string(out))
+		return fmt.Errorf("command execution failed: %v, output: %s", err, out.String())
 	}
 
 	return nil
@@ -69,8 +79,12 @@ func ExecuteCommand(schema, deviceID string, cmd string) error {
 
 // ExecuteCommandWithOutput runs a bash command over SSH and returns the stdout/stderr
 func ExecuteCommandWithOutput(schema, deviceID string, cmd string) (string, error) {
+	sqlSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return "", fmt.Errorf("invalid tenant schema: %w", err)
+	}
 	var targetIP sql.NullString
-	err := database.DB.QueryRow(fmt.Sprintf("SELECT last_ip FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&targetIP)
+	err = database.DB.QueryRow(fmt.Sprintf("SELECT last_ip FROM %s.devices WHERE id = $1", sqlSchema), deviceID).Scan(&targetIP)
 	if err != nil || !targetIP.Valid || targetIP.String == "" {
 		return "", fmt.Errorf("device ip not found")
 	}
@@ -100,9 +114,13 @@ func ExecuteCommandWithOutput(schema, deviceID string, cmd string) (string, erro
 	}
 	defer session.Close()
 
-	out, err := session.CombinedOutput(cmd)
+	var out bytes.Buffer
+	session.Stdout = &out
+	session.Stderr = &out
+	session.Stdin = strings.NewReader(cmd)
+	err = session.Run("sh")
 	if err != nil {
-		return string(out), fmt.Errorf("command execution failed: %v", err)
+		return out.String(), fmt.Errorf("command execution failed: %v", err)
 	}
-	return string(out), nil
+	return out.String(), nil
 }

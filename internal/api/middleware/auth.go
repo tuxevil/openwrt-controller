@@ -3,7 +3,6 @@ package middleware
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -139,9 +138,14 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 				w.Write([]byte(`{"error":"FORBIDDEN: inactive or unknown tenant"}`))
 				return
 			}
-			// Set LOCAL search_path for this request's transaction queries.
-			// fullSchema has passed SafeTenantSchema and cannot contain SQL syntax.
-			if _, spErr := tx.Exec(fmt.Sprintf("SET LOCAL search_path TO %s, public", fullSchema)); spErr != nil {
+			// Set LOCAL search_path for this request's transaction queries. A
+			// configuration function accepts the schema as a value, so the
+			// validated tenant name never becomes SQL syntax.
+			var configuredPath string
+			if spErr := tx.QueryRow(
+				"SELECT set_config('search_path', $1, true)",
+				fullSchema+", public",
+			).Scan(&configuredPath); spErr != nil {
 				log.Printf("[auth] SET LOCAL search_path failed for %q: %v", fullSchema, spErr)
 				w.WriteHeader(http.StatusInternalServerError)
 				return

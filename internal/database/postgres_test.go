@@ -60,6 +60,19 @@ func TestSafeSchemaIdent(t *testing.T) {
 	}
 }
 
+func TestSafeSQLSchemaIdent(t *testing.T) {
+	got, err := SafeSQLSchemaIdent("tenant_dragontec")
+	if err != nil {
+		t.Fatalf("SafeSQLSchemaIdent returned error: %v", err)
+	}
+	if got != `"tenant_dragontec"` {
+		t.Fatalf("SafeSQLSchemaIdent = %q, want quoted identifier", got)
+	}
+	if _, err := SafeSQLSchemaIdent(`tenant_evil"; DROP TABLE users;--`); err == nil {
+		t.Fatal("SafeSQLSchemaIdent accepted SQL syntax")
+	}
+}
+
 func TestIsValidSchemaName(t *testing.T) {
 	if !isValidSchemaName("tenant_dragontec") {
 		t.Error("expected tenant_dragontec to be valid")
