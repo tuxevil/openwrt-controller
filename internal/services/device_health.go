@@ -17,8 +17,10 @@ const (
 	// alert engine has not yet escalated to NODE_DOWN but the link is
 	// noticeably degraded.
 	HealthStale DeviceHealth = "STALE"
-	// HealthOffline: NODE_DOWN incident open OR no telemetry for
-	// offlineAfter OR no telemetry ever (NULL last_seen_at).
+	// HealthOffline: no telemetry ever (NULL last_seen_at) or no telemetry
+	// for offlineAfter. An open NODE_DOWN incident is not sufficient on its
+	// own because a fresh heartbeat proves that the node has recovered while
+	// incident resolution may still be in flight.
 	HealthOffline DeviceHealth = "OFFLINE"
 	// HealthDegraded: telemetry fresh but one or more non-fatal
 	// incidents open (CPU_OVERLOAD, SIGNAL_CRITICAL, …).
@@ -40,17 +42,11 @@ const (
 // last-seen timestamp and the slice of currently-open incidents. The now
 // parameter is injected so tests are deterministic.
 func ClassifyDeviceHealth(lastSeenAt sql.NullTime, openIncidents []IncidentSummary, now time.Time) DeviceHealth {
-	hasNodeDown := false
 	hasOther := false
 	for _, inc := range openIncidents {
-		if inc.IncidentType == "NODE_DOWN" {
-			hasNodeDown = true
-		} else {
+		if inc.IncidentType != "NODE_DOWN" {
 			hasOther = true
 		}
-	}
-	if hasNodeDown {
-		return HealthOffline
 	}
 	if !lastSeenAt.Valid {
 		return HealthOffline
