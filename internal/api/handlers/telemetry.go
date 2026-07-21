@@ -40,7 +40,9 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 
 	providedKey := r.Header.Get("X-Site-Key")
 
-	log.Printf("[DEBUG] Telemetry received from device_id=%s, IP=%s, X-Site-Key=%s", deviceID, r.RemoteAddr, providedKey)
+	// Never write the site key to logs: it authenticates every device in the
+	// site and is sufficient to pull the agent/config endpoints.
+	log.Printf("[DEBUG] Telemetry received from device_id=%s, IP=%s, site_key_present=%t", deviceID, r.RemoteAddr, providedKey != "")
 
 	if providedKey == "" {
 		http.Error(w, "Forbidden: missing site key", http.StatusForbidden)

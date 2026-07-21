@@ -9,7 +9,7 @@
 # upstream release notes; do not use `latest` / `alpine` rolling tags.
 
 # ── Stage 1: Frontend builder ────────────────────────────────────────────────
-FROM node:22.11.0-alpine AS frontend-builder
+FROM node:22.13.0-alpine AS frontend-builder
 WORKDIR /app/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
