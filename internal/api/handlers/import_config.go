@@ -37,7 +37,11 @@ func derivePublicKey(privBase64 string) (string, error) {
 // (wireless, network, dhcp, firewall, system, dropbear), parses them, and populates both the
 // site's SiteConfig template, active WLANs, and any active WireGuard/VPN configurations.
 func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
-	schema := getTenantSchema(r)
+	schema, schemaErr := getTenantSchema(r)
+	if schemaErr != nil {
+		http.Error(w, `{"error": "invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	username := GetUsernameFromReq(r)
 	deviceID := r.PathValue("device_id")
 

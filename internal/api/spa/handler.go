@@ -77,16 +77,44 @@ func serveIndex(w http.ResponseWriter, body []byte) {
 // FileServer so we can distinguish "file exists" from "directory
 // exists" without an extra round trip.
 func fileExists(distDir, urlPath string) bool {
-	clean := filepath.Clean(urlPath)
+	clean := filepath.Clean(strings.TrimLeft(urlPath, "/"))
 	if clean == "." || clean == "/" {
 		return false
 	}
-	// filepath.Join discards leading slash; that's what we want here.
-	full := filepath.Join(distDir, clean)
+
+	base, err := filepath.Abs(distDir)
+	if err != nil {
+		return false
+	}
+	full, err := filepath.Abs(filepath.Join(base, clean))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(base, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+
 	info, err := stat(full)
 	if err != nil {
 		return false
 	}
+
+	// Reject a file that is reachable through a symlink pointing outside the
+	// distribution tree, even when the lexical path itself is contained.
+	resolvedBase, err := filepath.EvalSymlinks(base)
+	if err != nil {
+		return false
+	}
+	resolvedFull, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		return false
+	}
+	resolvedRel, err := filepath.Rel(resolvedBase, resolvedFull)
+	if err != nil || resolvedRel == ".." || strings.HasPrefix(resolvedRel, ".."+string(filepath.Separator)) {
+		return false
+	}
+
 	return !info.IsDir()
 }
 

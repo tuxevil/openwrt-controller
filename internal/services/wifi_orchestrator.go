@@ -8,7 +8,13 @@ import (
 // AddWLANConfig injects the 802.11r parameters if roaming is enabled
 // and applies the configuration using RunMassCommand
 func AddWLANConfig(ctx context.Context, siteID, ssid, security, password string, roaming, k, v bool, ieee80211w, auth_server, auth_secret, dynamic_vlan string) []DeviceResult {
-	cmd := fmt.Sprintf("uci add wireless wifi-iface && uci set wireless.@wifi-iface[-1].device='radio0' && uci set wireless.@wifi-iface[-1].network='lan' && uci set wireless.@wifi-iface[-1].mode='ap' && uci set wireless.@wifi-iface[-1].ssid='%s' && uci set wireless.@wifi-iface[-1].encryption='%s' && uci set wireless.@wifi-iface[-1].key='%s' ", ssid, security, password)
+	cmd := buildWLANConfigCommand(ssid, security, password, roaming, k, v, ieee80211w, auth_server, auth_secret, dynamic_vlan)
+
+	return RunMassCommand(ctx, siteID, cmd)
+}
+
+func buildWLANConfigCommand(ssid, security, password string, roaming, k, v bool, ieee80211w, authServer, authSecret, dynamicVLAN string) string {
+	cmd := fmt.Sprintf("uci add wireless wifi-iface && uci set wireless.@wifi-iface[-1].device='radio0' && uci set wireless.@wifi-iface[-1].network='lan' && uci set wireless.@wifi-iface[-1].mode='ap' && uci set wireless.@wifi-iface[-1].ssid=%s && uci set wireless.@wifi-iface[-1].encryption=%s && uci set wireless.@wifi-iface[-1].key=%s ", shellQuote(ssid), shellQuote(security), shellQuote(password))
 
 	if roaming {
 		cmd += "&& uci set wireless.@wifi-iface[-1].ieee80211r='1' "
@@ -18,13 +24,13 @@ func AddWLANConfig(ctx context.Context, siteID, ssid, security, password string,
 	}
 
 	if ieee80211w != "" && ieee80211w != "0" {
-		cmd += fmt.Sprintf("&& uci set wireless.@wifi-iface[-1].ieee80211w='%s' ", ieee80211w)
+		cmd += fmt.Sprintf("&& uci set wireless.@wifi-iface[-1].ieee80211w=%s ", shellQuote(ieee80211w))
 	}
-	if auth_server != "" {
-		cmd += fmt.Sprintf("&& uci set wireless.@wifi-iface[-1].auth_server='%s' && uci set wireless.@wifi-iface[-1].auth_secret='%s' ", auth_server, auth_secret)
+	if authServer != "" {
+		cmd += fmt.Sprintf("&& uci set wireless.@wifi-iface[-1].auth_server=%s && uci set wireless.@wifi-iface[-1].auth_secret=%s ", shellQuote(authServer), shellQuote(authSecret))
 	}
-	if dynamic_vlan == "1" || dynamic_vlan == "2" {
-		cmd += fmt.Sprintf("&& uci set wireless.@wifi-iface[-1].dynamic_vlan='%s' && uci set wireless.@wifi-iface[-1].vlan_naming='1' && uci set wireless.@wifi-iface[-1].vlan_bridge='br-vlan' ", dynamic_vlan)
+	if dynamicVLAN == "1" || dynamicVLAN == "2" {
+		cmd += fmt.Sprintf("&& uci set wireless.@wifi-iface[-1].dynamic_vlan=%s && uci set wireless.@wifi-iface[-1].vlan_naming='1' && uci set wireless.@wifi-iface[-1].vlan_bridge='br-vlan' ", shellQuote(dynamicVLAN))
 	}
 
 	if k {
@@ -40,6 +46,5 @@ func AddWLANConfig(ctx context.Context, siteID, ssid, security, password string,
 	}
 
 	cmd += "&& uci commit wireless && /sbin/wifi reload"
-
-	return RunMassCommand(ctx, siteID, cmd)
+	return cmd
 }

@@ -138,7 +138,11 @@ func DeleteSiteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	schema := getTenantSchema(r)
+	schema, schemaErr := getTenantSchema(r)
+	if schemaErr != nil {
+		http.Error(w, `{"error": "invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 
 	// Clean up related data manually since ON DELETE CASCADE is not ubiquitous.
 	// Each Exec is checked so a failure aborts the cascade and surfaces a 500

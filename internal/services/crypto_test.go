@@ -38,17 +38,43 @@ func TestOpen_WrongKeyFails(t *testing.T) {
 }
 
 func TestDeriveKeyFromPassphrase(t *testing.T) {
-	k1 := DeriveKeyFromPassphrase("hunter2")
+	salt := []byte("per-record-random-salt")
+	k1 := DeriveKeyFromPassphrase("hunter2", salt)
 	if len(k1) != 32 {
 		t.Errorf("DeriveKeyFromPassphrase returned %d bytes, want 32", len(k1))
 	}
-	k2 := DeriveKeyFromPassphrase("hunter2")
+	k2 := DeriveKeyFromPassphrase("hunter2", salt)
 	if string(k1) != string(k2) {
 		t.Error("derivation is not deterministic")
 	}
-	k3 := DeriveKeyFromPassphrase("hunter3")
+	k3 := DeriveKeyFromPassphrase("hunter3", salt)
 	if string(k1) == string(k3) {
 		t.Error("different passphrases produced the same key")
+	}
+}
+
+func TestSealOpenWithPassphraseUsesRandomSalt(t *testing.T) {
+	env1, err := SealWithPassphrase("payload", "strong passphrase")
+	if err != nil {
+		t.Fatalf("SealWithPassphrase: %v", err)
+	}
+	env2, err := SealWithPassphrase("payload", "strong passphrase")
+	if err != nil {
+		t.Fatalf("second SealWithPassphrase: %v", err)
+	}
+	if string(env1.FullBlob) == string(env2.FullBlob) {
+		t.Fatal("passphrase envelopes reused the same salt/nonce")
+	}
+
+	got, err := OpenWithPassphrase(env1, "strong passphrase")
+	if err != nil {
+		t.Fatalf("OpenWithPassphrase: %v", err)
+	}
+	if got != "payload" {
+		t.Fatalf("OpenWithPassphrase = %q, want payload", got)
+	}
+	if _, err := OpenWithPassphrase(env1, "wrong passphrase"); err == nil {
+		t.Fatal("wrong passphrase unexpectedly decrypted the envelope")
 	}
 }
 

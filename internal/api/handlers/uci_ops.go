@@ -91,10 +91,9 @@ func PutUciHandler(w http.ResponseWriter, r *http.Request) {
 
 	var sb strings.Builder
 	for _, c := range payload.Commands {
-		// Prevent dangerous injection by ensuring all begin with uci and single quotes
-		if !strings.HasPrefix(strings.TrimSpace(c), "uci ") {
-			// Skip or sanitize
-			continue
+		if !services.ValidRawUCICommand(c, config) {
+			http.Error(w, `{"error": "invalid UCI command"}`, http.StatusBadRequest)
+			return
 		}
 		sb.WriteString(c)
 		sb.WriteString("\n")

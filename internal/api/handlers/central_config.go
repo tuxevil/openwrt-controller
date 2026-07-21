@@ -6,12 +6,40 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"openwrt-controller/internal/api/middleware"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
+
+var uciPathSegmentPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_-]+|@[A-Za-z0-9_-]+(?:\[-?[0-9]+\])?)$`)
+
+func buildCentralConfigCommand(config, path string) (string, error) {
+	if !isAllowedUciConfig(config) {
+		return "", fmt.Errorf("config namespace not allowed")
+	}
+
+	target := config
+	if path != "" {
+		if len(path) > 128 || strings.TrimSpace(path) != path {
+			return "", fmt.Errorf("invalid UCI path")
+		}
+		parts := strings.Split(path, ".")
+		if len(parts) < 1 || len(parts) > 3 || parts[0] != config {
+			return "", fmt.Errorf("UCI path must stay inside the selected config")
+		}
+		for _, part := range parts {
+			if !uciPathSegmentPattern.MatchString(part) {
+				return "", fmt.Errorf("invalid UCI path segment")
+			}
+		}
+		target = path
+	}
+
+	return fmt.Sprintf("uci show %s 2>&1", target), nil
+}
 
 // ─── CENTRAL_LUCI Handlers ───────────────────────────────────────────────────
 // Centralised LuCI-grade configuration management for distributed OpenWrt fleets.
@@ -32,13 +60,15 @@ func GetCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing 'config' parameter"}`, http.StatusBadRequest)
 		return
 	}
+	if !isAllowedUciConfig(config) {
+		http.Error(w, `{"error":"config namespace not allowed"}`, http.StatusBadRequest)
+		return
+	}
 
-	// If specific UCI path provided, return just that
-	var cmd string
-	if path != "" {
-		cmd = fmt.Sprintf("uci show %s 2>&1", path)
-	} else {
-		cmd = fmt.Sprintf("uci show %s 2>&1", config)
+	cmd, err := buildCentralConfigCommand(config, path)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
 	}
 
 	out, err := runSSHCommand(deviceID, cmd)
@@ -122,6 +152,10 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"missing 'config' parameter"}`, http.StatusBadRequest)
 		return
 	}
+	if !isAllowedUciConfig(config) {
+		http.Error(w, `{"error":"config namespace not allowed"}`, http.StatusBadRequest)
+		return
+	}
 
 	var payload struct {
 		Commands []services.UciCommand `json:"commands"`
@@ -149,6 +183,10 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	// ── Build & execute batch script via UCI Bridge ──────────────────────
 	script := services.BuildBatchScript(config, payload.Commands)
+	if script == "" {
+		http.Error(w, `{"error":"invalid UCI command or config"}`, http.StatusBadRequest)
+		return
+	}
 	out, err := runSSHScript(deviceID, script)
 
 	if err != nil {

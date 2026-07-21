@@ -56,6 +56,33 @@ type EdgeNetworkConfig struct {
 	PortForward []PortForwardRule  `json:"port_forwarding"`
 }
 
+// ValidateNetworkInterfaces validates identifiers before they are used as UCI
+// section names in an SSH-backed script.
+func ValidateNetworkInterfaces(ifaces []NetworkInterface) error {
+	for i, iface := range ifaces {
+		if !validUCIName(iface.Name) {
+			return fmt.Errorf("interfaces[%d].name is not a valid UCI identifier", i)
+		}
+		switch iface.Proto {
+		case "static", "dhcp", "dhcpv6", "wireguard":
+		default:
+			return fmt.Errorf("interfaces[%d].proto is not supported", i)
+		}
+	}
+	return nil
+}
+
+// ValidateDHCPInterfaces validates identifiers before they are used as UCI
+// section names in an SSH-backed script.
+func ValidateDHCPInterfaces(dhcpList []DHCPInterface) error {
+	for i, dhcp := range dhcpList {
+		if !validUCIName(dhcp.Interface) {
+			return fmt.Errorf("dhcp[%d].interface is not a valid UCI identifier", i)
+		}
+	}
+	return nil
+}
+
 // ─── UCI Serialisers ─────────────────────────────────────────────────────────
 
 // BuildNetworkUCI serialises the Interfaces slice into OpenWrt UCI text commands
@@ -64,6 +91,9 @@ func BuildNetworkUCI(ifaces []NetworkInterface) string {
 	var sb strings.Builder
 	for _, i := range ifaces {
 		n := i.Name
+		if !validUCIName(n) {
+			continue
+		}
 		sb.WriteString(fmt.Sprintf("uci set network.%s=interface\n", n))
 		sb.WriteString(fmt.Sprintf("uci set network.%s.proto='%s'\n", n, escapeVal(i.Proto)))
 		if i.Device != "" {
@@ -93,6 +123,9 @@ func BuildDHCPUCI(dhcpList []DHCPInterface) string {
 	var sb strings.Builder
 	for _, d := range dhcpList {
 		n := d.Interface
+		if !validUCIName(n) {
+			continue
+		}
 		sb.WriteString(fmt.Sprintf("uci set dhcp.%s=dhcp\n", n))
 		sb.WriteString(fmt.Sprintf("uci set dhcp.%s.interface='%s'\n", n, escapeVal(n)))
 		if !d.Enabled {

@@ -3,11 +3,24 @@ package services
 import (
 	"fmt"
 	"log"
+	"regexp"
 	"time"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/orchestrator"
 )
+
+var macAddressPattern = regexp.MustCompile(`^(?i:[0-9a-f]{2}:){5}[0-9a-f]{2}$`)
+
+func validMACAddress(mac string) bool {
+	return macAddressPattern.MatchString(mac)
+}
+
+// ValidMACAddress reports whether mac is a canonical six-octet MAC address.
+// It is shared by HTTP handlers before values reach shell-backed services.
+func ValidMACAddress(mac string) bool {
+	return validMACAddress(mac)
+}
 
 // StartSniperReaper starts a background routine to revoke expired sniper rules
 func StartSniperReaper() {
@@ -51,31 +64,23 @@ func reapExpiredRules() {
 
 // ApplySniperShaping creates or overrides a shaping rule for a specific MAC
 func ApplySniperShaping(schema, deviceID, mac string, rateMbytes int, durationMinutes int) error {
+	if !validMACAddress(mac) {
+		return fmt.Errorf("invalid MAC address")
+	}
+	if rateMbytes <= 0 || rateMbytes > 1_000_000 {
+		return fmt.Errorf("rate must be between 1 and 1000000 kbytes/second")
+	}
+	if durationMinutes < 0 || durationMinutes > 24*60 {
+		return fmt.Errorf("duration must be between 0 and 1440 minutes")
+	}
+
 	// First execute the SSH command
 	// nft add table inet sentinel_shaping
 	// nft add chain inet sentinel_shaping forward { type filter hook forward priority 0; }
 	// The prompt specified limiting rx and tx identically via the forward chain.
 	// Since we need to replace or add, we'll flush the specific rule if it exists? We can handle it via handles or just simple filter.
 	// nftables allows naming sets or doing inline drops. We can do:
-	cmd := fmt.Sprintf(`
-		# Ensure the table and chain exist
-		nft list table inet sentinel_shaping >/dev/null 2>&1 || {
-			nft add table inet sentinel_shaping
-			nft add chain inet sentinel_shaping forward '{ type filter hook forward priority 0; }'
-		}
-		
-		# Define MAC variable and remove old rules for this MAC to remain idempotent
-		MAC="%s"
-		# List table with handles, grep the mac, awk the handle, execute delete
-		HANDLES=$(nft -a list table inet sentinel_shaping | awk -v m="$MAC" '$0 ~ m {print $NF}')
-		for h in $HANDLES; do
-			nft delete rule inet sentinel_shaping forward handle $h
-		done
-		
-		# Now add the new rate limit
-		nft add rule inet sentinel_shaping forward ether saddr $MAC limit rate over %d kbytes/second drop
-		nft add rule inet sentinel_shaping forward ether daddr $MAC limit rate over %d kbytes/second drop
-	`, mac, rateMbytes, rateMbytes)
+	cmd := buildSniperShapingCommand(mac, rateMbytes)
 
 	err := orchestrator.ExecuteCommand(schema, deviceID, cmd)
 	if err != nil {
@@ -101,16 +106,42 @@ func ApplySniperShaping(schema, deviceID, mac string, rateMbytes int, durationMi
 	return err
 }
 
+func buildSniperShapingCommand(mac string, rateMbytes int) string {
+	return fmt.Sprintf(`
+		# Ensure the table and chain exist
+		nft list table inet sentinel_shaping >/dev/null 2>&1 || {
+			nft add table inet sentinel_shaping
+			nft add chain inet sentinel_shaping forward '{ type filter hook forward priority 0; }'
+		}
+
+		# Define MAC variable and remove old rules for this MAC to remain idempotent
+		MAC=%s
+		# List table with handles, grep the mac, awk the handle, execute delete
+		HANDLES=$(nft -a list table inet sentinel_shaping | awk -v m="$MAC" '$0 ~ m {print $NF}')
+		for h in $HANDLES; do
+			nft delete rule inet sentinel_shaping forward handle "$h"
+		done
+
+		# Now add the new rate limit
+		nft add rule inet sentinel_shaping forward ether saddr "$MAC" limit rate over %d kbytes/second drop
+		nft add rule inet sentinel_shaping forward ether daddr "$MAC" limit rate over %d kbytes/second drop
+	`, shellQuote(mac), rateMbytes, rateMbytes)
+}
+
 // ClearShaping removes the shaping for a specific MAC
 func ClearShaping(schema, deviceID, mac string) error {
+	if !validMACAddress(mac) {
+		return fmt.Errorf("invalid MAC address")
+	}
+
 	cmd := fmt.Sprintf(`
-		MAC="%s"
+		MAC=%s
 		nft list table inet sentinel_shaping >/dev/null 2>&1 || exit 0
 		HANDLES=$(nft -a list table inet sentinel_shaping | awk -v m="$MAC" '$0 ~ m {print $NF}')
 		for h in $HANDLES; do
-			nft delete rule inet sentinel_shaping forward handle $h
+			nft delete rule inet sentinel_shaping forward handle "$h"
 		done
-	`, mac)
+	`, shellQuote(mac))
 
 	err := orchestrator.ExecuteCommand(schema, deviceID, cmd)
 	if err != nil {

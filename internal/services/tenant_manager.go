@@ -15,7 +15,7 @@ import (
 // Provisioning engine for MSP multi-tenant architecture.
 // Handles tenant lifecycle: registration, schema creation, stats aggregation.
 
-var validAliasRegex = regexp.MustCompile(`^[a-z][a-z0-9_]{1,60}$`)
+var validAliasRegex = regexp.MustCompile(`^[a-z][a-z0-9_]{1,54}$`)
 
 // RegisterTenant creates a new tenant: inserts into public.tenants, creates the
 // PostgreSQL schema, and runs all operational table migrations inside it.
@@ -26,7 +26,7 @@ func RegisterTenant(name, schemaAlias string) (*models.Tenant, error) {
 	alias = strings.ReplaceAll(alias, "-", "_")
 
 	if !validAliasRegex.MatchString(alias) {
-		return nil, fmt.Errorf("invalid schema alias '%s': must be lowercase alphanumeric with underscores, 2-61 chars, starting with a letter", alias)
+		return nil, fmt.Errorf("invalid schema alias '%s': must be lowercase alphanumeric with underscores, 2-55 chars, starting with a letter", alias)
 	}
 
 	// Check uniqueness
@@ -94,7 +94,11 @@ func ListTenants() ([]models.Tenant, error) {
 		}
 
 		// Aggregate stats from tenant schema
-		schema := "tenant_" + t.SchemaAlias
+		schema, schemaErr := database.SafeTenantSchema(t.SchemaAlias)
+		if schemaErr != nil {
+			log.Printf("[TENANT_MANAGER] skipping invalid schema alias %q: %v", t.SchemaAlias, schemaErr)
+			continue
+		}
 		database.DB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s.sites", schema)).Scan(&t.SiteCount)
 		database.DB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s.devices", schema)).Scan(&t.DeviceCount)
 
@@ -141,7 +145,10 @@ func GetTenantStats(tenantID string) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("tenant not found: %s", tenantID)
 	}
 
-	schema := "tenant_" + alias
+	schema, schemaErr := database.SafeTenantSchema(alias)
+	if schemaErr != nil {
+		return nil, fmt.Errorf("invalid tenant schema: %w", schemaErr)
+	}
 	stats := map[string]interface{}{
 		"tenant_id":    tenantID,
 		"schema_alias": alias,

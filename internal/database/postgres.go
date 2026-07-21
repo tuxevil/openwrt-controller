@@ -147,12 +147,14 @@ func createLandlordTables() error {
 // RunTenantMigrations creates all operational tables inside the given schema.
 // schemaAlias should be the full schema name (e.g., "tenant_example").
 func RunTenantMigrations(schemaAlias string) error {
-	if !isValidSchemaName(schemaAlias) {
+	safeSchema, err := SafeSchemaIdent(schemaAlias)
+	if err != nil {
 		return fmt.Errorf("invalid schema alias: %s", schemaAlias)
 	}
+	schemaAlias = safeSchema
 
 	// Create the schema
-	_, err := DB.Exec(fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", schemaAlias))
+	_, err = DB.Exec(fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", schemaAlias))
 	if err != nil {
 		return fmt.Errorf("failed to create schema %s: %w", schemaAlias, err)
 	}
@@ -161,6 +163,12 @@ func RunTenantMigrations(schemaAlias string) error {
 }
 
 func createTenantTables(schema string) error {
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return fmt.Errorf("invalid tenant schema: %s", schema)
+	}
+	schema = safeSchema
+
 	// Prefix all table names with the schema
 	s := schema
 
@@ -494,7 +502,7 @@ func createTenantTables(schema string) error {
 		ON %[1]s.wifi_survey_points(survey_id, captured_at);
 	`, s)
 
-	_, err := DB.Exec(query)
+	_, err = DB.Exec(query)
 	if err != nil {
 		return fmt.Errorf("failed to create tenant tables in %s: %w", schema, err)
 	}
@@ -557,7 +565,11 @@ func runMigrationsForAllTenants() error {
 			log.Printf("Warning: failed to scan tenant schema alias: %v", err)
 			continue
 		}
-		schemaAlias := "tenant_" + alias
+		schemaAlias, err := SafeTenantSchema(alias)
+		if err != nil {
+			log.Printf("Warning: invalid tenant alias %q: %v", alias, err)
+			continue
+		}
 		log.Printf("[LANDLORD] Running migrations for tenant: %s", schemaAlias)
 		if err := RunTenantMigrations(schemaAlias); err != nil {
 			log.Printf("Error running migrations for tenant %s: %v", schemaAlias, err)
@@ -616,7 +628,12 @@ func seedSuperAdminUser() error {
 }
 
 func seedTenantSiteAPIKeys(schema string) {
-	rows, err := DB.Query(fmt.Sprintf("SELECT id, name FROM %s.sites WHERE api_key IS NULL OR api_key = ''", schema))
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		log.Printf("[LANDLORD] refusing to seed API keys for invalid schema %q", schema)
+		return
+	}
+	rows, err := DB.Query(fmt.Sprintf("SELECT id, name FROM %s.sites WHERE api_key IS NULL OR api_key = ''", safeSchema))
 	if err != nil {
 		return
 	}
@@ -635,11 +652,11 @@ func seedTenantSiteAPIKeys(schema string) {
 	}
 
 	for _, u := range updates {
-		_, err := DB.Exec(fmt.Sprintf("UPDATE %s.sites SET api_key = $1 WHERE id = $2", schema), u.key, u.id)
+		_, err := DB.Exec(fmt.Sprintf("UPDATE %s.sites SET api_key = $1 WHERE id = $2", safeSchema), u.key, u.id)
 		if err != nil {
 			continue
 		}
-		fmt.Printf("SITIO [%s]: [%s] | API_KEY: [%s...]\n", schema, u.name, maskAPIKey(u.key))
+		fmt.Printf("SITIO [%s]: [%s] | API_KEY: [%s...]\n", safeSchema, u.name, maskAPIKey(u.key))
 	}
 }
 
@@ -649,11 +666,11 @@ func seedTenantSiteAPIKeys(schema string) {
 // the tenant schema first, then public. This allows unqualified queries to resolve
 // to the tenant schema while still accessing public (landlord) tables.
 func SetTenantSearchPath(tx *sql.Tx, schemaAlias string) error {
-	fullSchema := "tenant_" + schemaAlias
-	if !isValidSchemaName(fullSchema) {
+	fullSchema, err := SafeTenantSchema(schemaAlias)
+	if err != nil {
 		return fmt.Errorf("invalid schema alias: %s", schemaAlias)
 	}
-	_, err := tx.Exec(fmt.Sprintf("SET search_path TO %s, public", fullSchema))
+	_, err = tx.Exec(fmt.Sprintf("SET search_path TO %s, public", fullSchema))
 	return err
 }
 
@@ -885,7 +902,10 @@ func GetTenantSchemaForSiteKey(siteKey string) (string, error) {
 		if err := rows.Scan(&alias); err != nil {
 			continue
 		}
-		schema := "tenant_" + alias
+		schema, schemaErr := SafeTenantSchema(alias)
+		if schemaErr != nil {
+			continue
+		}
 		var count int
 		err := DB.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM %s.sites WHERE api_key = $1", schema), siteKey).Scan(&count)
 		if err == nil && count > 0 {

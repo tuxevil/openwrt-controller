@@ -153,7 +153,11 @@ func DeployAgentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	schema := getTenantSchema(r)
+	schema, schemaErr := getTenantSchema(r)
+	if schemaErr != nil {
+		http.Error(w, "invalid tenant context", http.StatusInternalServerError)
+		return
+	}
 
 	// Validate that the site exists
 	var exists bool
@@ -224,7 +228,11 @@ func GetAgentVersionsStatusHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	schema := getTenantSchema(r)
+	schema, schemaErr := getTenantSchema(r)
+	if schemaErr != nil {
+		http.Error(w, "invalid tenant context", http.StatusInternalServerError)
+		return
+	}
 
 	// Per-site active hashes
 	siteHashRows, err := database.DB.Query(`
@@ -307,7 +315,11 @@ func GetSiteAgentRawHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	schema := getTenantSchema(r)
+	schema, schemaErr := getTenantSchema(r)
+	if schemaErr != nil {
+		http.Error(w, "invalid tenant context", http.StatusInternalServerError)
+		return
+	}
 
 	var scriptContent string
 	err := database.DB.QueryRow(`

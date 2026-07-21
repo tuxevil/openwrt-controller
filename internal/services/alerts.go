@@ -197,25 +197,17 @@ func decryptIfSealed(raw string) string {
 	if raw == "" {
 		return ""
 	}
-	key, err := telegramEncryptionKey()
-	if err != nil {
+	passphrase := os.Getenv("TELEGRAM_ENCRYPTION_KEY")
+	if passphrase == "" {
 		return raw
 	}
 	env, err := DecodeEnvelope(raw)
 	if err != nil {
 		return raw // legacy plaintext
 	}
-	pt, err := Open(env, key)
+	pt, err := OpenWithPassphrase(env, passphrase)
 	if err != nil {
 		return raw
 	}
 	return pt
-}
-
-func telegramEncryptionKey() ([]byte, error) {
-	p := os.Getenv("TELEGRAM_ENCRYPTION_KEY")
-	if p == "" {
-		return nil, ErrSecretKeyMissing
-	}
-	return DeriveKeyFromPassphrase(p), nil
 }

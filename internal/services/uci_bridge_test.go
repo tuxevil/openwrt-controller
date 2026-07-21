@@ -44,6 +44,59 @@ func TestBuildBatchScript_ValidatesConfig(t *testing.T) {
 	}
 }
 
+func TestUCIBuilderRejectsUnsafeIdentifiers(t *testing.T) {
+	unsafe := UciCommand{
+		Action:  "set",
+		Config:  "wireless; reboot",
+		Section: "wifi0",
+		Option:  "ssid",
+		Value:   "safe",
+	}
+	if got := BuildBatchScript("wireless; reboot", []UciCommand{unsafe}); got != "" {
+		t.Fatalf("unsafe config produced an executable script:\n%s", got)
+	}
+	if got := PreviewCommands([]UciCommand{unsafe}); len(got) != 0 {
+		t.Fatalf("unsafe config produced preview commands: %#v", got)
+	}
+
+	unsafeSection := UciCommand{
+		Action:  "set",
+		Config:  "wireless",
+		Section: "wifi0; reboot",
+		Option:  "ssid",
+		Value:   "safe",
+	}
+	if got := PreviewCommands([]UciCommand{unsafeSection}); len(got) != 0 {
+		t.Fatalf("unsafe section produced preview commands: %#v", got)
+	}
+}
+
+func TestValidRawUCICommandRejectsShellFragments(t *testing.T) {
+	valid := []string{
+		"uci set wireless.radio0.ssid='Guest WiFi'",
+		"uci add_list wireless.@wifi-iface[-1].dns='1.1.1.1'",
+		"uci -q delete wireless.radio0.channel",
+		"uci add wireless wifi-iface",
+	}
+	for _, command := range valid {
+		if !ValidRawUCICommand(command, "wireless") {
+			t.Errorf("rejected valid UCI command %q", command)
+		}
+	}
+
+	unsafe := []string{
+		"uci set wireless.radio0.ssid='guest'; reboot",
+		"uci set wireless.radio0.ssid='$(id)'",
+		"uci show wireless",
+		"uci set network.lan.ssid='wrong namespace'",
+	}
+	for _, command := range unsafe {
+		if ValidRawUCICommand(command, "wireless") {
+			t.Errorf("accepted unsafe UCI command %q", command)
+		}
+	}
+}
+
 func contains(haystack, needle string) bool {
 	return len(haystack) >= len(needle) && (haystack == needle || indexOf(haystack, needle) >= 0)
 }

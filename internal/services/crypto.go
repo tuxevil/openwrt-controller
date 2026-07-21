@@ -4,15 +4,17 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+
+	"golang.org/x/crypto/argon2"
 )
 
-// SealedEnvelope is the on-disk format for at-rest secrets. The first
-// 12 bytes are the nonce; the rest is AES-GCM ciphertext + tag.
+// SealedEnvelope is the on-disk format for at-rest secrets. Seal stores the
+// legacy nonce||ciphertext form; SealWithPassphrase stores version||salt||
+// nonce||ciphertext so the KDF salt is persisted with each record.
 type SealedEnvelope struct {
 	Nonce    []byte
 	Cipher   []byte
@@ -21,6 +23,15 @@ type SealedEnvelope struct {
 
 // ErrSecretKeyMissing is returned when no encryption key is configured.
 var ErrSecretKeyMissing = errors.New("TELEGRAM_ENCRYPTION_KEY is not set")
+
+const (
+	passphraseEnvelopeVersion byte = 2
+	passphraseSaltSize             = 16
+	argon2MemoryKiB                = 64 * 1024
+	argon2Iterations               = 3
+	argon2Threads                  = 4
+	argon2KeySize                  = 32
+)
 
 // Seal encrypts plaintext with AES-256-GCM under the supplied 32-byte key.
 // Returns a SealedEnvelope whose FullBlob is the concatenation (nonce ||
@@ -71,13 +82,47 @@ func Open(env SealedEnvelope, key []byte) (string, error) {
 	return string(pt), nil
 }
 
-// DeriveKeyFromPassphrase returns a 32-byte AES key from a user-supplied
-// passphrase. The derivation uses SHA-256; for stronger keys use
-// scrypt/argon2 in a future iteration. The current scheme is sufficient
-// to protect at-rest secrets against casual DB dumps.
-func DeriveKeyFromPassphrase(passphrase string) []byte {
-	sum := sha256.Sum256([]byte(passphrase))
-	return sum[:]
+// DeriveKeyFromPassphrase returns a 32-byte AES key using Argon2id and the
+// caller-provided salt. Callers must generate and persist a random salt with
+// the encrypted envelope; SealWithPassphrase handles that correctly.
+func DeriveKeyFromPassphrase(passphrase string, salt []byte) []byte {
+	return argon2.IDKey([]byte(passphrase), salt, argon2Iterations, argon2MemoryKiB, argon2Threads, argon2KeySize)
+}
+
+// SealWithPassphrase derives a key with a per-envelope random salt and stores
+// the version and salt before the existing nonce||ciphertext payload.
+func SealWithPassphrase(plaintext, passphrase string) (SealedEnvelope, error) {
+	salt := make([]byte, passphraseSaltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return SealedEnvelope{}, fmt.Errorf("passphrase salt: %w", err)
+	}
+
+	key := DeriveKeyFromPassphrase(passphrase, salt)
+	inner, err := Seal(plaintext, key)
+	if err != nil {
+		return SealedEnvelope{}, err
+	}
+
+	fullBlob := make([]byte, 1+len(salt)+len(inner.FullBlob))
+	fullBlob[0] = passphraseEnvelopeVersion
+	copy(fullBlob[1:], salt)
+	copy(fullBlob[1+len(salt):], inner.FullBlob)
+	inner.FullBlob = fullBlob
+	return inner, nil
+}
+
+// OpenWithPassphrase opens an envelope produced by SealWithPassphrase.
+func OpenWithPassphrase(env SealedEnvelope, passphrase string) (string, error) {
+	minimum := 1 + passphraseSaltSize + 12
+	if len(env.FullBlob) < minimum || env.FullBlob[0] != passphraseEnvelopeVersion {
+		return "", errors.New("unsupported passphrase envelope")
+	}
+
+	saltStart := 1
+	saltEnd := saltStart + passphraseSaltSize
+	salt := env.FullBlob[saltStart:saltEnd]
+	key := DeriveKeyFromPassphrase(passphrase, salt)
+	return Open(SealedEnvelope{FullBlob: env.FullBlob[saltEnd:]}, key)
 }
 
 // DecodeEnvelope parses a base64-encoded envelope as produced by Seal + base64.

@@ -20,6 +20,11 @@ type contextKey string
 const claimsKey = contextKey("jwt_claims")
 const tenantSchemaKey = contextKey("tenant_schema")
 
+func tenantHeaderAllowed(claims jwt.MapClaims) bool {
+	role, _ := claims["role"].(string)
+	return strings.EqualFold(role, "SUPERADMIN")
+}
+
 // WithAuth wraps a handler requiring a valid JWT Bearer token
 func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -69,12 +74,18 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
 
 		// ── Tenant Schema Resolution ─────────────────────────────────
-		// Priority: 1) X-Tenant-Schema header (SuperAdmin assuming identity)
-		//           2) schema_alias from JWT claims (tenant-scoped user)
-		tenantSchema := r.Header.Get("X-Tenant-Schema")
+		// Only SUPERADMIN may assume a tenant through the header. Tenant-scoped
+		// users are bound to the schema in their signed claims.
+		tenantSchema := strings.TrimSpace(r.Header.Get("X-Tenant-Schema"))
+		if tenantSchema != "" && !tenantHeaderAllowed(claims) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			w.Write([]byte(`{"error":"FORBIDDEN: tenant assumption requires SUPERADMIN"}`))
+			return
+		}
 		if tenantSchema == "" {
 			if sa, ok := claims["schema_alias"].(string); ok && sa != "" {
-				tenantSchema = sa
+				tenantSchema = strings.TrimSpace(sa)
 			}
 		}
 
@@ -88,6 +99,18 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 			).Scan(&defaultAlias)
 			if err == nil && defaultAlias != "" {
 				tenantSchema = defaultAlias
+			}
+		}
+
+		fullSchema := ""
+		if tenantSchema != "" {
+			var schemaErr error
+			fullSchema, schemaErr = database.SafeTenantSchema(tenantSchema)
+			if schemaErr != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":"invalid tenant schema"}`))
+				return
 			}
 		}
 
@@ -105,19 +128,25 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 				"SELECT COUNT(*) FROM tenants WHERE schema_alias = $1 AND is_active = true",
 				tenantSchema,
 			).Scan(&count)
-			if err == nil && count > 0 {
-				fullSchema := "tenant_" + tenantSchema
-				// Set LOCAL search_path for this request's transaction queries.
-				// We check the error here so a SET failure surfaces as a 500
-				// rather than silently targeting the public schema (which
-				// would leak data across tenants).
-				if _, spErr := tx.Exec(fmt.Sprintf("SET LOCAL search_path TO %s, public", fullSchema)); spErr != nil {
-					log.Printf("[auth] SET LOCAL search_path failed for %q: %v", fullSchema, spErr)
-					w.WriteHeader(http.StatusInternalServerError)
-					return
-				}
-				ctx = context.WithValue(ctx, tenantSchemaKey, fullSchema)
+			if err != nil {
+				log.Printf("[auth] tenant lookup failed for %q: %v", tenantSchema, err)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
 			}
+			if count == 0 {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"error":"FORBIDDEN: inactive or unknown tenant"}`))
+				return
+			}
+			// Set LOCAL search_path for this request's transaction queries.
+			// fullSchema has passed SafeTenantSchema and cannot contain SQL syntax.
+			if _, spErr := tx.Exec(fmt.Sprintf("SET LOCAL search_path TO %s, public", fullSchema)); spErr != nil {
+				log.Printf("[auth] SET LOCAL search_path failed for %q: %v", fullSchema, spErr)
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			ctx = context.WithValue(ctx, tenantSchemaKey, fullSchema)
 		} else {
 			if _, spErr := tx.Exec("SET LOCAL search_path TO public"); spErr != nil {
 				log.Printf("[auth] SET LOCAL search_path public failed: %v", spErr)

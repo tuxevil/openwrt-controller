@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	jwt "github.com/golang-jwt/jwt/v5"
-
+	"openwrt-controller/internal/api/middleware"
 	"openwrt-controller/internal/database"
 )
 
@@ -19,31 +18,20 @@ type migrateRequest struct {
 	SiteID string `json:"site_id"`
 }
 
-func getTenantSchema(r *http.Request) string {
-	schema := r.Header.Get("X-Tenant-Schema")
-	if schema != "" {
-		return "tenant_" + schema
+func getTenantSchema(r *http.Request) (string, error) {
+	schema := middleware.GetTenantSchema(r)
+	if schema == "" {
+		schema = "public"
 	}
-
-	authHeader := r.Header.Get("Authorization")
-	if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-		tokenStr := authHeader[7:]
-		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-			return JWTSecret(), nil
-		})
-		if err == nil && token.Valid {
-			if claims, ok := token.Claims.(jwt.MapClaims); ok {
-				if sa, ok := claims["schema_alias"].(string); ok && sa != "" {
-					return "tenant_" + sa
-				}
-			}
-		}
-	}
-	return "public"
+	return database.SafeSchemaIdent(schema)
 }
 
 func AdoptDeviceHandler(w http.ResponseWriter, r *http.Request) {
-	schema := getTenantSchema(r)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error": "invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	deviceID := r.PathValue("device_id")
 	if deviceID == "" {
 		http.Error(w, `{"error": "device_id is required"}`, http.StatusBadRequest)
@@ -62,7 +50,7 @@ func AdoptDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var exists bool
-	err := database.Tx(r.Context()).QueryRow("SELECT EXISTS(SELECT 1 FROM "+schema+".devices WHERE id = $1)", deviceID).Scan(&exists)
+	err = database.Tx(r.Context()).QueryRow("SELECT EXISTS(SELECT 1 FROM "+schema+".devices WHERE id = $1)", deviceID).Scan(&exists)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -94,7 +82,11 @@ func AdoptDeviceHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func MigrateDeviceHandler(w http.ResponseWriter, r *http.Request) {
-	schema := getTenantSchema(r)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error": "invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	username := GetUsernameFromReq(r)
 	deviceID := r.PathValue("device_id")
 	if deviceID == "" {
@@ -114,7 +106,7 @@ func MigrateDeviceHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var currentSiteID sql.NullString
-	err := database.Tx(r.Context()).QueryRow("SELECT site_id FROM "+schema+".devices WHERE id = $1", deviceID).Scan(&currentSiteID)
+	err = database.Tx(r.Context()).QueryRow("SELECT site_id FROM "+schema+".devices WHERE id = $1", deviceID).Scan(&currentSiteID)
 	if err == sql.ErrNoRows {
 		http.Error(w, `{"error": "device not found"}`, http.StatusNotFound)
 		return

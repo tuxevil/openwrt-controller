@@ -1,13 +1,79 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"html/template"
 	"log"
 	"net/http"
+	"regexp"
+	"strings"
 
 	"openwrt-controller/internal/services"
 )
+
+var (
+	portalColorPattern = regexp.MustCompile(`^#[0-9a-fA-F]{3,8}$`)
+	portalSitePattern  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	portalAuthTemplate = template.Must(template.New("portal-auth").Parse(`<!DOCTYPE html>
+<html>
+<head>
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<style>
+		body { background-color: {{.BgColor}}; color: white; font-family: monospace; text-align: center; padding: 2rem; }
+		.container { max-width: 400px; margin: 0 auto; background: rgba(255,255,255,0.05); padding: 2rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); }
+		input { width: 100%; padding: 10px; margin: 15px 0; border-radius: 4px; border: 1px solid #333; background: #000; color: #0f0; text-align: center; font-size: 1.2rem; box-sizing: border-box; }
+		button { width: 100%; padding: 12px; background: #ec4899; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
+		button:hover { background: #db2777; }
+	</style>
+</head>
+<body>
+	<div class="container">
+		<h2>{{.WelcomeText}}</h2>
+		<p>{{.TermsText}}</p>
+		<form method="POST" action="/api/public/portal/{{.SiteID}}/validate">
+			<input type="hidden" name="fas" value="{{.FAS}}">
+			<input type="text" name="code" placeholder="ENTER 6-DIGIT VOUCHER" required maxlength="10">
+			<button type="submit">CONNECT</button>
+		</form>
+	</div>
+</body>
+</html>`))
+)
+
+type portalAuthView struct {
+	BgColor     template.CSS
+	WelcomeText string
+	TermsText   string
+	SiteID      string
+	FAS         string
+}
+
+func renderPortalAuthHTML(settings *services.PortalSettings, siteID, fas string) (string, error) {
+	if settings == nil || !portalSitePattern.MatchString(siteID) {
+		return "", errors.New("invalid portal view data")
+	}
+
+	bgColor := strings.TrimSpace(settings.BgColor)
+	if !portalColorPattern.MatchString(bgColor) {
+		bgColor = "#0a0a0a"
+	}
+
+	var body bytes.Buffer
+	err := portalAuthTemplate.Execute(&body, portalAuthView{
+		BgColor:     template.CSS(bgColor),
+		WelcomeText: settings.WelcomeText,
+		TermsText:   settings.TermsText,
+		SiteID:      siteID,
+		FAS:         fas,
+	})
+	if err != nil {
+		return "", fmt.Errorf("render portal auth page: %w", err)
+	}
+	return body.String(), nil
+}
 
 // ─── PUBLIC ENDPOINTS ────────────────────────────────────────────────────────
 
@@ -45,30 +111,11 @@ func GetPortalAuthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	html := fmt.Sprintf(`<!DOCTYPE html>
-<html>
-<head>
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<style>
-		body { background-color: %s; color: white; font-family: monospace; text-align: center; padding: 2rem; }
-		.container { max-width: 400px; margin: 0 auto; background: rgba(255,255,255,0.05); padding: 2rem; border-radius: 8px; border: 1px solid rgba(255,255,255,0.1); }
-		input { width: 100%%; padding: 10px; margin: 15px 0; border-radius: 4px; border: 1px solid #333; background: #000; color: #0f0; text-align: center; font-size: 1.2rem; box-sizing: border-box; }
-		button { width: 100%%; padding: 12px; background: #ec4899; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; }
-		button:hover { background: #db2777; }
-	</style>
-</head>
-<body>
-	<div class="container">
-		<h2>%s</h2>
-		<p>%s</p>
-		<form method="POST" action="/api/public/portal/%s/validate">
-			<input type="hidden" name="fas" value="%s">
-			<input type="text" name="code" placeholder="ENTER 6-DIGIT VOUCHER" required maxlength="10">
-			<button type="submit">CONNECT</button>
-		</form>
-	</div>
-</body>
-</html>`, settings.BgColor, settings.WelcomeText, settings.TermsText, siteID, fas)
+	html, err := renderPortalAuthHTML(settings, siteID, fas)
+	if err != nil {
+		http.Error(w, "invalid portal settings", http.StatusInternalServerError)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/html")
 	w.Write([]byte(html))

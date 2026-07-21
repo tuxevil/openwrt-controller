@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -19,12 +20,79 @@ type UciCommand struct {
 	Value   string `json:"value"`   // value to set (empty for delete)
 }
 
+var (
+	uciNamePattern    = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	uciSectionPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_-]+|@[A-Za-z0-9_-]+(?:\[-?[0-9]+\])?)$`)
+)
+
+func validUCIName(value string) bool {
+	return uciNamePattern.MatchString(value)
+}
+
+func validUCISection(value string) bool {
+	return uciSectionPattern.MatchString(value)
+}
+
+func validUCIPath(path, config string, minParts, maxParts int) bool {
+	parts := strings.Split(path, ".")
+	if len(parts) < minParts || len(parts) > maxParts || parts[0] != config {
+		return false
+	}
+	for _, part := range parts[1:] {
+		if !validUCISection(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func validUCIValueToken(value string) bool {
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+		return !strings.ContainsAny(value[1:len(value)-1], "'\r\n")
+	}
+	return validUCIName(value)
+}
+
+// ValidRawUCICommand accepts only the small command grammar emitted by the
+// legacy UCI editor. It deliberately rejects shell syntax instead of trying
+// to parse arbitrary shell input.
+func ValidRawUCICommand(command, config string) bool {
+	if !validUCIName(config) || strings.TrimSpace(command) != command ||
+		strings.ContainsAny(command, "\r\n;|&$`()<>\\") {
+		return false
+	}
+
+	for _, prefix := range []string{"uci set ", "uci add_list ", "uci del_list "} {
+		if strings.HasPrefix(command, prefix) {
+			body := strings.TrimPrefix(command, prefix)
+			path, value, ok := strings.Cut(body, "=")
+			return ok && validUCIPath(path, config, 2, 3) && validUCIValueToken(value)
+		}
+	}
+
+	for _, prefix := range []string{"uci delete ", "uci -q delete "} {
+		if strings.HasPrefix(command, prefix) {
+			return validUCIPath(strings.TrimPrefix(command, prefix), config, 2, 3)
+		}
+	}
+
+	if strings.HasPrefix(command, "uci add ") {
+		fields := strings.Fields(strings.TrimPrefix(command, "uci add "))
+		return len(fields) == 2 && fields[0] == config && validUCIName(fields[1])
+	}
+
+	return false
+}
+
 // ServiceRestartMap is defined in uci_restart_map.go to keep a single
 // source of truth shared with api/handlers/uci_ops.go.
 
 // SetOption generates: uci set <config>.<section>.<option>='<value>'
 // If option is empty, creates/types a section: uci set <config>.<section>=<value>
 func SetOption(config, section, option, value string) string {
+	if !validUCIName(config) || !validUCISection(section) || (option != "" && !validUCIName(option)) {
+		return ""
+	}
 	if option == "" {
 		// Section-level: set type — ref: uci.md "Creating a named section"
 		// Example: uci set playapp.myname=mysectiontype
@@ -36,33 +104,51 @@ func SetOption(config, section, option, value string) string {
 // AddList generates: uci add_list <config>.<section>.<option>='<value>'
 // Ref: uci.md — "append an entry to a list"
 func AddList(config, section, option, value string) string {
+	if !validUCIName(config) || !validUCISection(section) || !validUCIName(option) {
+		return ""
+	}
 	return fmt.Sprintf("uci add_list %s.%s.%s='%s'", config, section, option, escapeVal(value))
 }
 
 // DelList generates: uci del_list <config>.<section>.<option>='<value>'
 func DelList(config, section, option, value string) string {
+	if !validUCIName(config) || !validUCISection(section) || !validUCIName(option) {
+		return ""
+	}
 	return fmt.Sprintf("uci del_list %s.%s.%s='%s'", config, section, option, escapeVal(value))
 }
 
 // Delete generates: uci delete <config>.<section>[.<option>]
 // Ref: uci.md — "Delete the given section or option"
 func Delete(config, section string) string {
+	if !validUCIName(config) || !validUCISection(section) {
+		return ""
+	}
 	return fmt.Sprintf("uci -q delete %s.%s", config, section)
 }
 
 // DeleteOption generates: uci delete <config>.<section>.<option>
 func DeleteOption(config, section, option string) string {
+	if !validUCIName(config) || !validUCISection(section) || !validUCIName(option) {
+		return ""
+	}
 	return fmt.Sprintf("uci -q delete %s.%s.%s", config, section, option)
 }
 
 // AddAnonymousSection generates: uci add <config> <section-type>
 // Returns the generated CFGID to stdout. Ref: uci.md "Add an anonymous section"
 func AddAnonymousSection(config, sectionType string) string {
+	if !validUCIName(config) || !validUCIName(sectionType) {
+		return ""
+	}
 	return fmt.Sprintf("uci add %s %s", config, sectionType)
 }
 
 // Rename generates: uci rename <config>.<section>[.<option>]=<name>
 func Rename(config, section, option, newName string) string {
+	if !validUCIName(config) || !validUCISection(section) || (option != "" && !validUCIName(option)) {
+		return ""
+	}
 	if option == "" {
 		return fmt.Sprintf("uci rename %s.%s='%s'", config, section, escapeVal(newName))
 	}
@@ -71,6 +157,9 @@ func Rename(config, section, option, newName string) string {
 
 // Reorder generates: uci reorder <config>.<section>=<position>
 func Reorder(config, section string, position int) string {
+	if !validUCIName(config) || !validUCISection(section) {
+		return ""
+	}
 	return fmt.Sprintf("uci reorder %s.%s=%d", config, section, position)
 }
 
@@ -87,15 +176,23 @@ func Reorder(config, section string, position int) string {
 //
 // This matches the "batch execution" paradigm from uci.md.
 func BuildBatchScript(config string, commands []UciCommand) string {
+	if !validUCIName(config) {
+		return ""
+	}
+
 	var sb strings.Builder
 
 	// Translate each UciCommand into a shell line
 	for _, cmd := range commands {
-		line := translateCommand(cmd)
-		if line != "" {
-			sb.WriteString(line)
-			sb.WriteString("\n")
+		if cmd.Config != config {
+			return ""
 		}
+		line := translateCommand(cmd)
+		if line == "" {
+			return ""
+		}
+		sb.WriteString(line)
+		sb.WriteString("\n")
 	}
 
 	restartCmd := ""
@@ -171,6 +268,12 @@ func translateCommand(cmd UciCommand) string {
 // escapeVal prevents single-quote injection in UCI values.
 func escapeVal(s string) string {
 	return strings.ReplaceAll(s, "'", "'\\''")
+}
+
+// shellQuote returns one POSIX shell word containing s. Values that cross the
+// SSH boundary must use this helper; fmt.Sprintf alone is not a shell escape.
+func shellQuote(s string) string {
+	return "'" + escapeVal(s) + "'"
 }
 
 // PreviewCommands returns the list of shell-safe UCI command strings

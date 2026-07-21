@@ -29,8 +29,12 @@ func LimitBandwidthHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.DeviceID == "" || req.Download <= 0 || req.Upload <= 0 {
+	if req.DeviceID == "" {
 		http.Error(w, `{"error": "invalid parameters"}`, http.StatusBadRequest)
+		return
+	}
+	if err := services.ValidateBandwidth(req.Download, req.Upload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -62,6 +66,10 @@ func SniperBandwidthHandler(w http.ResponseWriter, r *http.Request) {
 
 	if req.DeviceID == "" || req.MAC == "" {
 		http.Error(w, "device_id and mac are required", http.StatusBadRequest)
+		return
+	}
+	if !services.ValidMACAddress(req.MAC) {
+		http.Error(w, "mac must be a valid six-octet address", http.StatusBadRequest)
 		return
 	}
 

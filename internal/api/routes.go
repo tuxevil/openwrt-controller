@@ -221,7 +221,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)
 	mux.HandleFunc("GET /api/agent/latest/raw", handlers.GetLatestAgentRawHandler)
 	// Dashboard-facing: JWT required
-	mux.HandleFunc("POST /api/agent/deploy", middleware.WithAuth(handlers.DeployAgentHandler))
+	mux.HandleFunc("POST /api/agent/deploy", middleware.WithAuth(middleware.RequireAdmin(handlers.DeployAgentHandler)))
 	mux.HandleFunc("GET /api/agent/status", middleware.WithAuth(handlers.GetAgentVersionsStatusHandler))
 	mux.HandleFunc("GET /api/agent/site/raw", middleware.WithAuth(handlers.GetSiteAgentRawHandler))
 
@@ -238,4 +238,3 @@ func SetupRoutes() *http.ServeMux {
 
 	return mux
 }
-

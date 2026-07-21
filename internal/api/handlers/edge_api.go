@@ -61,10 +61,13 @@ func getDeviceIPAndSchema(deviceID string) (string, string, error) {
 		if err := rows.Scan(&alias); err != nil {
 			continue
 		}
-		schema := "tenant_" + alias
+		schema, err := database.SafeTenantSchema(alias)
+		if err != nil {
+			continue
+		}
 		var tenantIP sql.NullString
 		var tenantLastSeen sql.NullTime
-		err := database.DB.QueryRow(fmt.Sprintf("SELECT last_ip, last_seen_at FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&tenantIP, &tenantLastSeen)
+		err = database.DB.QueryRow(fmt.Sprintf("SELECT last_ip, last_seen_at FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&tenantIP, &tenantLastSeen)
 		if err == nil && tenantIP.Valid && tenantIP.String != "" {
 			lastSeen := time.Time{}
 			if tenantLastSeen.Valid {
@@ -222,6 +225,10 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	if !readBody(w, r, &payload) {
 		return
 	}
+	if err := services.ValidateNetworkInterfaces(payload.Interfaces); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	uciCmds := services.BuildNetworkUCI(payload.Interfaces)
 	script := services.BuildValidatedReloadScript(uciCmds, "", "")
@@ -276,6 +283,10 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 		DHCP []services.DHCPInterface `json:"dhcp"`
 	}
 	if !readBody(w, r, &payload) {
+		return
+	}
+	if err := services.ValidateDHCPInterfaces(payload.DHCP); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
