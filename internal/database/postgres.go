@@ -508,6 +508,10 @@ func createTenantTables(schema string) error {
 		ON %[2]s.wifi_survey_points(survey_id, captured_at);
 	`, s, quotedSchema)
 
+	// The DDL template contains only static SQL; its sole dynamic identifier is
+	// produced by pgx.Identifier.Sanitize after SafeSchemaIdent validation.
+	//
+	// codeql[go/sql-injection]
 	_, err = DB.Exec(query)
 	if err != nil {
 		return fmt.Errorf("failed to create tenant tables in %s: %w", schema, err)
