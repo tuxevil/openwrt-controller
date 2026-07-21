@@ -173,13 +173,12 @@ func createTenantTables(schema string) error {
 	}
 	schema = safeSchema
 
-	// Prefix all table names with the quoted schema. Keep the plain validated
-	// name separately for index names, which are intentionally schema-local.
-	s := schema
+	// The DDL below runs with the validated tenant schema as the transaction's
+	// search_path, so the SQL template itself contains no dynamic identifiers.
 	quotedSchema := pgx.Identifier{schema}.Sanitize()
 
-	query := fmt.Sprintf(`
-	CREATE TABLE IF NOT EXISTS %[2]s.controllers (
+	query := `
+	CREATE TABLE IF NOT EXISTS controllers (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(255) NOT NULL,
 		latitude NUMERIC(10, 6),
@@ -189,9 +188,9 @@ func createTenantTables(schema string) error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.sites (
+	CREATE TABLE IF NOT EXISTS sites (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		controller_id UUID REFERENCES %[2]s.controllers(id),
+		controller_id UUID REFERENCES controllers(id),
 		name VARCHAR(255) NOT NULL,
 		latitude NUMERIC(10, 6),
 		longitude NUMERIC(10, 6),
@@ -199,9 +198,9 @@ func createTenantTables(schema string) error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.devices (
+	CREATE TABLE IF NOT EXISTS devices (
 		id VARCHAR(50) PRIMARY KEY,
-		site_id UUID REFERENCES %[2]s.sites(id),
+		site_id UUID REFERENCES sites(id),
 		name VARCHAR(255),
 		latitude NUMERIC(10, 6),
 		longitude NUMERIC(10, 6),
@@ -215,9 +214,9 @@ func createTenantTables(schema string) error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.wlans (
+	CREATE TABLE IF NOT EXISTS wlans (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		site_id UUID REFERENCES %[2]s.sites(id),
+		site_id UUID REFERENCES sites(id),
 		ssid VARCHAR(255) NOT NULL,
 		security VARCHAR(50) NOT NULL,
 		password VARCHAR(255),
@@ -235,27 +234,27 @@ func createTenantTables(schema string) error {
 		ieee80211v BOOLEAN DEFAULT false
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.device_wlans (
+	CREATE TABLE IF NOT EXISTS device_wlans (
 
-		wlan_id UUID REFERENCES %[2]s.wlans(id) ON DELETE CASCADE,
+		wlan_id UUID REFERENCES wlans(id) ON DELETE CASCADE,
 
-		device_id VARCHAR(50) REFERENCES %[2]s.devices(id) ON DELETE CASCADE,
+		device_id VARCHAR(50) REFERENCES devices(id) ON DELETE CASCADE,
 
 		PRIMARY KEY (wlan_id, device_id)
 
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.site_settings (
-		site_id UUID PRIMARY KEY REFERENCES %[2]s.sites(id),
+	CREATE TABLE IF NOT EXISTS site_settings (
+		site_id UUID PRIMARY KEY REFERENCES sites(id),
 		dns_servers VARCHAR(255) DEFAULT '9.9.9.9,1.1.1.1',
 		dhcp_server BOOLEAN DEFAULT true,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.incidents (
+	CREATE TABLE IF NOT EXISTS incidents (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		site_id UUID REFERENCES %[2]s.sites(id),
-		device_id VARCHAR(50) REFERENCES %[2]s.devices(id),
+		site_id UUID REFERENCES sites(id),
+		device_id VARCHAR(50) REFERENCES devices(id),
 		incident_type VARCHAR(50) NOT NULL,
 		severity VARCHAR(20) NOT NULL,
 		status VARCHAR(20) DEFAULT 'OPEN',
@@ -263,21 +262,21 @@ func createTenantTables(schema string) error {
 		resolved_at TIMESTAMP WITH TIME ZONE
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.vpn_meshes (
+	CREATE TABLE IF NOT EXISTS vpn_meshes (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(255) NOT NULL,
 		latitude NUMERIC(10, 6),
 		longitude NUMERIC(10, 6),
 		topology VARCHAR(50) DEFAULT 'hub_and_spoke',
-		hub_device_id VARCHAR(50) REFERENCES %[2]s.devices(id),
+		hub_device_id VARCHAR(50) REFERENCES devices(id),
 		subnet VARCHAR(50) DEFAULT '10.9.0.0/24',
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.vpn_mesh_nodes (
+	CREATE TABLE IF NOT EXISTS vpn_mesh_nodes (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		mesh_id UUID REFERENCES %[2]s.vpn_meshes(id) ON DELETE CASCADE,
-		device_id VARCHAR(50) REFERENCES %[2]s.devices(id),
+		mesh_id UUID REFERENCES vpn_meshes(id) ON DELETE CASCADE,
+		device_id VARCHAR(50) REFERENCES devices(id),
 		role VARCHAR(50) DEFAULT 'spoke',
 		private_key VARCHAR(255) NOT NULL,
 		public_key VARCHAR(255) NOT NULL,
@@ -288,7 +287,7 @@ func createTenantTables(schema string) error {
 		UNIQUE (mesh_id, internal_ip)
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.profiles (
+	CREATE TABLE IF NOT EXISTS profiles (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		name VARCHAR(255) NOT NULL,
 		latitude NUMERIC(10, 6),
@@ -299,15 +298,15 @@ func createTenantTables(schema string) error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.backups (
+	CREATE TABLE IF NOT EXISTS backups (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		device_id VARCHAR(50) REFERENCES %[2]s.devices(id),
+		device_id VARCHAR(50) REFERENCES devices(id),
 		checksum VARCHAR(64) NOT NULL,
 		content BYTEA,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.firmwares (
+	CREATE TABLE IF NOT EXISTS firmwares (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		filename VARCHAR(255) NOT NULL,
 		latitude NUMERIC(10, 6),
@@ -318,7 +317,7 @@ func createTenantTables(schema string) error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.agent_versions (
+	CREATE TABLE IF NOT EXISTS agent_versions (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		version_hash VARCHAR(64) UNIQUE NOT NULL,
 		script_content TEXT NOT NULL,
@@ -326,9 +325,9 @@ func createTenantTables(schema string) error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.system_logs (
+	CREATE TABLE IF NOT EXISTS system_logs (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		device_id VARCHAR(50) REFERENCES %[2]s.devices(id) ON DELETE CASCADE,
+		device_id VARCHAR(50) REFERENCES devices(id) ON DELETE CASCADE,
 		log_timestamp TIMESTAMP WITH TIME ZONE NOT NULL,
 		severity VARCHAR(20) NOT NULL,
 		message TEXT NOT NULL,
@@ -337,42 +336,42 @@ func createTenantTables(schema string) error {
 	);
 
 	CREATE EXTENSION IF NOT EXISTS pg_trgm;
-	CREATE INDEX IF NOT EXISTS trgm_idx_%[1]s_system_logs_message ON %[2]s.system_logs USING gin (message gin_trgm_ops);
+	CREATE INDEX IF NOT EXISTS trgm_idx_system_logs_message ON system_logs USING gin (message gin_trgm_ops);
 	-- Composite B-tree for the dedup check in InsertDeviceLogs
 	-- (WHERE NOT EXISTS (... device_id, log_timestamp, message)).
 	-- Without this index, every telemetry POST triggers a full table
 	-- scan on system_logs and pegs CPU once the table grows past a
 	-- few hundred thousand rows. Index-only lookups collapse the
 	-- dedup to O(log n).
-	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_dedup
-		ON %[2]s.system_logs (device_id, log_timestamp, message);
+	CREATE INDEX IF NOT EXISTS idx_system_logs_dedup
+		ON system_logs (device_id, log_timestamp, message);
 	-- btree on created_at so the retention sweep (DELETE older than N days)
 	-- can range-scan instead of seq-scanning the whole table.
-	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_created_at
-		ON %[2]s.system_logs (created_at);
+	CREATE INDEX IF NOT EXISTS idx_system_logs_created_at
+		ON system_logs (created_at);
 	-- Composite B-tree for the dedup check in InsertDeviceLogs
 	-- (WHERE NOT EXISTS (... device_id, log_timestamp, message)).
 	-- Without this index, every telemetry POST triggers a full table
 	-- scan on system_logs and pegs CPU once the table grows past a
 	-- few hundred thousand rows. Index-only lookups collapse the
 	-- dedup to O(log n).
-	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_dedup
-		ON %[2]s.system_logs (device_id, log_timestamp, message);
+	CREATE INDEX IF NOT EXISTS idx_system_logs_dedup
+		ON system_logs (device_id, log_timestamp, message);
 	-- btree on created_at so the retention sweep (DELETE older than N days)
 	-- can range-scan instead of seq-scanning the whole table.
-	CREATE INDEX IF NOT EXISTS idx_%[1]s_system_logs_created_at
-		ON %[2]s.system_logs (created_at);
+	CREATE INDEX IF NOT EXISTS idx_system_logs_created_at
+		ON system_logs (created_at);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.client_hostnames (
+	CREATE TABLE IF NOT EXISTS client_hostnames (
 		mac VARCHAR(50) PRIMARY KEY,
-		site_id UUID REFERENCES %[2]s.sites(id),
+		site_id UUID REFERENCES sites(id),
 		hostname VARCHAR(255) NOT NULL,
 		latitude NUMERIC(10, 6),
 		longitude NUMERIC(10, 6),
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.ai_insights (
+	CREATE TABLE IF NOT EXISTS ai_insights (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		correlation_id VARCHAR(100),
 		diagnosis TEXT,
@@ -381,9 +380,9 @@ func createTenantTables(schema string) error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.shaping_rules (
+	CREATE TABLE IF NOT EXISTS shaping_rules (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		device_id VARCHAR(50) REFERENCES %[2]s.devices(id) ON DELETE CASCADE,
+		device_id VARCHAR(50) REFERENCES devices(id) ON DELETE CASCADE,
 		mac VARCHAR(50) NOT NULL,
 		rate_mbytes INT NOT NULL,
 		expires_at TIMESTAMP WITH TIME ZONE,
@@ -391,16 +390,16 @@ func createTenantTables(schema string) error {
 		UNIQUE(device_id, mac)
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.threat_intel_meta (
+	CREATE TABLE IF NOT EXISTS threat_intel_meta (
 		id SERIAL PRIMARY KEY,
 		fetched_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		ip_count INTEGER NOT NULL DEFAULT 0,
 		sources_count INTEGER NOT NULL DEFAULT 0
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.site_configs (
+	CREATE TABLE IF NOT EXISTS site_configs (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		site_id UUID REFERENCES %[2]s.sites(id) ON DELETE CASCADE UNIQUE,
+		site_id UUID REFERENCES sites(id) ON DELETE CASCADE UNIQUE,
 		enable_global_ssid BOOLEAN DEFAULT true,
 		sqm_cake_enabled BOOLEAN DEFAULT false,
 		sqm_download INTEGER DEFAULT 0,
@@ -435,9 +434,9 @@ func createTenantTables(schema string) error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.guest_vouchers (
+	CREATE TABLE IF NOT EXISTS guest_vouchers (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		site_id UUID REFERENCES %[2]s.sites(id),
+		site_id UUID REFERENCES sites(id),
 		code VARCHAR(10) UNIQUE NOT NULL,
 		duration_minutes INT NOT NULL,
 		quota_mb INT,
@@ -448,8 +447,8 @@ func createTenantTables(schema string) error {
 		used_at TIMESTAMP WITH TIME ZONE
 	);
 
-	CREATE TABLE IF NOT EXISTS %[2]s.portal_settings (
-		site_id UUID PRIMARY KEY REFERENCES %[2]s.sites(id),
+	CREATE TABLE IF NOT EXISTS portal_settings (
+		site_id UUID PRIMARY KEY REFERENCES sites(id),
 		enabled BOOLEAN DEFAULT false,
 		welcome_text TEXT,
 		terms_text TEXT,
@@ -463,9 +462,9 @@ func createTenantTables(schema string) error {
 	-- One row per survey. Tokens are stored hashed; the raw token is
 	-- only returned ONCE at survey creation. The surveyor cell phone
 	-- authenticates with X-Survey-Token (constant-time compared).
-	CREATE TABLE IF NOT EXISTS %[2]s.wifi_surveys (
+	CREATE TABLE IF NOT EXISTS wifi_surveys (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-		site_id UUID NOT NULL REFERENCES %[2]s.sites(id) ON DELETE CASCADE,
+		site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
 		name TEXT NOT NULL DEFAULT '',
 		surveyor_mac VARCHAR(50),
 		surveyor_label TEXT,
@@ -484,15 +483,15 @@ func createTenantTables(schema string) error {
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
-	CREATE INDEX IF NOT EXISTS idx_%[1]s_wifi_surveys_site ON %[2]s.wifi_surveys(site_id);
-	CREATE INDEX IF NOT EXISTS idx_%[1]s_wifi_surveys_status ON %[2]s.wifi_surveys(status);
+	CREATE INDEX IF NOT EXISTS idx_wifi_surveys_site ON wifi_surveys(site_id);
+	CREATE INDEX IF NOT EXISTS idx_wifi_surveys_status ON wifi_surveys(status);
 
 	-- Correlated samples: (GPS from cell phone) + (signal from AP at that time).
 	-- Written by the survey_worker after pairing GPS samples with the most
 	-- recent client_signal InfluxDB point for the surveyor MAC.
-	CREATE TABLE IF NOT EXISTS %[2]s.wifi_survey_points (
+	CREATE TABLE IF NOT EXISTS wifi_survey_points (
 		id BIGSERIAL PRIMARY KEY,
-		survey_id UUID NOT NULL REFERENCES %[2]s.wifi_surveys(id) ON DELETE CASCADE,
+		survey_id UUID NOT NULL REFERENCES wifi_surveys(id) ON DELETE CASCADE,
 		ap_id VARCHAR(50) NOT NULL,
 		lat DOUBLE PRECISION,
 		lon DOUBLE PRECISION,
@@ -504,17 +503,26 @@ func createTenantTables(schema string) error {
 		neighbor_aps JSONB DEFAULT '[]',
 		captured_at TIMESTAMP WITH TIME ZONE NOT NULL
 	);
-	CREATE INDEX IF NOT EXISTS idx_%[1]s_wifi_survey_points_survey_captured
-		ON %[2]s.wifi_survey_points(survey_id, captured_at);
-	`, s, quotedSchema)
+	CREATE INDEX IF NOT EXISTS idx_wifi_survey_points_survey_captured
+		ON wifi_survey_points(survey_id, captured_at);
+	`
 
-	// The DDL template contains only static SQL; its sole dynamic identifier is
-	// produced by pgx.Identifier.Sanitize after SafeSchemaIdent validation.
-	//
-	// codeql[go/sql-injection]
-	_, err = DB.Exec(query)
+	tx, err := DB.Begin()
+	if err != nil {
+		return fmt.Errorf("failed to begin tenant table migration in %s: %w", schema, err)
+	}
+	defer tx.Rollback()
+
+	var configuredPath string
+	if err := tx.QueryRow("SELECT set_config('search_path', $1, true)", schema+", public").Scan(&configuredPath); err != nil {
+		return fmt.Errorf("failed to set tenant search_path for %s: %w", schema, err)
+	}
+	_, err = tx.Exec(query)
 	if err != nil {
 		return fmt.Errorf("failed to create tenant tables in %s: %w", schema, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit tenant table migration in %s: %w", schema, err)
 	}
 
 	// Idempotent tenant-schema migrations
@@ -555,7 +563,7 @@ func createTenantTables(schema string) error {
 	}
 
 	// Seed API keys for sites without one
-	seedTenantSiteAPIKeys(s)
+	seedTenantSiteAPIKeys(safeSchema)
 
 	return nil
 }
