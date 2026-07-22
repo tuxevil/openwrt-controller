@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
 )
@@ -30,35 +31,73 @@ func main() {
 		log.Fatal(err)
 	}
 
-	rows, err := db.Query("SELECT id FROM sites")
+	schemaRows, err := db.Query(`
+		SELECT nspname
+		FROM pg_namespace
+		WHERE nspname = 'public' OR nspname LIKE 'tenant_%'
+		ORDER BY nspname
+	`)
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer rows.Close()
+	defer schemaRows.Close()
 
-	for rows.Next() {
-		var siteID string
-		if err := rows.Scan(&siteID); err != nil {
+	for schemaRows.Next() {
+		var schema string
+		if err := schemaRows.Scan(&schema); err != nil {
 			log.Fatal(err)
 		}
 
-		siteContent := append(content, []byte("\n# SITE: "+siteID)...)
-		siteHash := sha256.Sum256(siteContent)
-		siteHashStr := hex.EncodeToString(siteHash[:])
+		sitesTable := quoteIdentifier(schema) + ".sites"
+		versionsTable := quoteIdentifier(schema) + ".agent_versions"
+		siteRows, err := db.Query("SELECT id::text FROM " + sitesTable + " ORDER BY id")
+		if err != nil {
+			log.Printf("Schema %s skipped: cannot read sites: %v", schema, err)
+			continue
+		}
 
-		// Disable active versions and insert/update for all schemas:
-		schemas := []string{"public", "tenant_example"}
-		for _, schema := range schemas {
-			db.Exec(fmt.Sprintf("UPDATE %s.agent_versions SET is_active = false WHERE site_id = $1", schema), siteID)
+		for siteRows.Next() {
+			var siteID string
+			if err := siteRows.Scan(&siteID); err != nil {
+				log.Printf("Schema %s skipped site: %v", schema, err)
+				continue
+			}
+
+			siteContent := make([]byte, 0, len(content)+len(siteID)+8)
+			siteContent = append(siteContent, content...)
+			siteContent = append(siteContent, []byte("\n# SITE: "+siteID)...)
+			siteHash := sha256.Sum256(siteContent)
+			siteHashStr := hex.EncodeToString(siteHash[:])
+
+			if _, err := db.Exec("UPDATE "+versionsTable+" SET is_active = false WHERE site_id = $1", siteID); err != nil {
+				log.Printf("Schema %s site %s deactivate warning/error: %v", schema, siteID, err)
+				continue
+			}
+
 			_, err = db.Exec(fmt.Sprintf(`
-				INSERT INTO %s.agent_versions (version_hash, script_content, is_active, site_id) 
+				INSERT INTO %s (version_hash, script_content, is_active, site_id)
 				VALUES ($1, $2, true, $3)
-				ON CONFLICT (version_hash) DO UPDATE SET is_active = true
-			`, schema), siteHashStr, string(siteContent), siteID)
+				ON CONFLICT (version_hash) DO UPDATE
+				SET script_content = EXCLUDED.script_content,
+				    is_active = true,
+				    site_id = EXCLUDED.site_id
+			`, versionsTable), siteHashStr, string(siteContent), siteID)
 			if err != nil {
 				log.Printf("Schema %s deploy warning/error: %v\n", schema, err)
+				continue
 			}
+			log.Printf("Deployed to schema %s site %s: %s", schema, siteID, siteHashStr)
 		}
-		log.Printf("Deployed to site: %s\n", siteID)
+		if err := siteRows.Err(); err != nil {
+			log.Printf("Schema %s site enumeration error: %v", schema, err)
+		}
+		siteRows.Close()
 	}
+	if err := schemaRows.Err(); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func quoteIdentifier(identifier string) string {
+	return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`
 }

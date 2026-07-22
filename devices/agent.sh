@@ -11,6 +11,42 @@ TELEMETRY_URL="$BASE_URL/telemetry"
 DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]' || cat /sys/class/net/eth0/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 
+# logd is a local dependency, not part of the telemetry heartbeat.  On some
+# OpenWrt builds logread can remain blocked on the logd socket; running it in
+# the telemetry pipeline would then stop the agent before the POST forever.
+# Keep the collection bounded and let telemetry continue when logd is stuck.
+collect_recent_logs() {
+    local log_file="/tmp/nerve-agent-logread.$$"
+    local log_pid
+    local waited=0
+
+    rm -f "$log_file"
+    logread -l 20 >"$log_file" 2>/dev/null &
+    log_pid=$!
+
+    while kill -0 "$log_pid" 2>/dev/null; do
+        if [ "$waited" -ge 2 ]; then
+            kill "$log_pid" 2>/dev/null
+            wait "$log_pid" 2>/dev/null
+            rm -f "$log_file"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    wait "$log_pid" 2>/dev/null
+    sed 's/\\/\\\\/g; s/"/\\"/g' "$log_file" | awk '{printf "%s\\n", $0}'
+    rm -f "$log_file"
+}
+
+# Local/CI seam for the bounded log collector.  It does not start the agent
+# loop or touch device configuration.
+if [ "${1:-}" = "--self-test-log-collection" ]; then
+    collect_recent_logs
+    exit 0
+fi
+
 # Instalar dependencias si faltan (opcional)
 if ! command -v tcpdump >/dev/null 2>&1; then
     logger -t agent "Installing missing tcpdump..."
@@ -233,17 +269,9 @@ while true; do
     DHCP_LEASES=$(ubus call dhcp ipv4leases 2>/dev/null || echo "{\"leases\":[]}")
 
     # 5. LOGS RECIENTES (Últimas 20 líneas de syslog)
-    # Usa `logread -l 20` (single process, ring-buffer native) en vez de
-    # `logread | tail -n 20` (pipe). Si el socket de logd se atasca, el pipe
-    # queda bloqueado indefinidamente (tail esperando EOF) y mata el bucle
-    # entero del agente — visto en MR8300 (10.128.128.1) Jun 17 2026.
-    #
-    # Cap: 20 (was 50). 20 es suficiente para "qué pasó hace poco" sin
-    # inflar el payload. El controller dedupe por (device_id, log_timestamp,
-    # message) descarta los repetidos que ya se enviaron en el ciclo
-    # anterior, pero reducir el cap también reduce el trabajo del parser
-    # awk + el tamaño del POST.
-    SYS_LOGS=$(logread -l 20 | sed 's/\\/\\\\/g; s/"/\\"/g' | awk '{printf "%s\\n", $0}')
+    # El colector tiene un límite de 2 s: logd nunca puede impedir el POST
+    # de telemetría ni marcar el nodo como offline.
+    SYS_LOGS=$(collect_recent_logs)
 
     # 5.5 FLOW_SENSE – Top 20 destinos activos desde /proc/net/nf_conntrack (ZERO CPU overhead)
     # Lee únicamente conexiones ESTABLISHED, extrae dst_ip y dst_port, agrupa y cuenta.

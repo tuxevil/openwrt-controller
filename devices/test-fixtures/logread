@@ -1,0 +1,13 @@
+#!/bin/sh
+
+case "${AGENT_LOGREAD_TEST_MODE:-healthy}" in
+    block)
+        exec sleep 30
+        ;;
+    healthy)
+        printf '%s\n' 'healthy log'
+        ;;
+    *)
+        exit 1
+        ;;
+esac
