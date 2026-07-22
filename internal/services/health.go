@@ -11,7 +11,7 @@ func GetGlobalHealth(ctx context.Context) int {
 	// 1. Status de Nodos (40%)
 	var totalNodes, onlineNodes int
 	err := database.Tx(ctx).QueryRow(`
-		SELECT count(*), sum(case when status='ONLINE' then 1 else 0 end) 
+		SELECT count(*), COALESCE(sum(case when last_seen_at > CURRENT_TIMESTAMP - INTERVAL '2 minutes' then 1 else 0 end), 0) 
 		FROM devices
 	`).Scan(&totalNodes, &onlineNodes)
 

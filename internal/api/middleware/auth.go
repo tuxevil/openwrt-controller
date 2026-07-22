@@ -77,10 +77,13 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 		// users are bound to the schema in their signed claims.
 		tenantSchema := strings.TrimSpace(r.Header.Get("X-Tenant-Schema"))
 		if tenantSchema != "" && !tenantHeaderAllowed(claims) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(`{"error":"FORBIDDEN: tenant assumption requires SUPERADMIN"}`))
-			return
+			sa, _ := claims["schema_alias"].(string)
+			if !strings.EqualFold(tenantSchema, sa) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusForbidden)
+				w.Write([]byte(`{"error":"FORBIDDEN: tenant assumption requires SUPERADMIN"}`))
+				return
+			}
 		}
 		if tenantSchema == "" {
 			if sa, ok := claims["schema_alias"].(string); ok && sa != "" {

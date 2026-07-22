@@ -27,7 +27,7 @@ async function handleLogin() {
     // POST with the wrong credentials, returning 401 and bouncing the
     // user back to this screen with ACCESS_DENIED.
     auth.setSession(token, user, role)
-    if (schema_alias) {
+    if (schema_alias && role === 'SUPERADMIN') {
       auth.assumeTenant(schema_alias, user)
     } else {
       auth.exitAssumedIdentity()
