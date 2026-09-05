@@ -407,6 +407,18 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	rolloutSchema, schemaErr := getTenantSchema(r)
+	if schemaErr != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	for _, result := range syncResults {
+		if result.Status == "ABORTED" {
+			if _, err := database.Tx(r.Context()).ExecContext(r.Context(), "UPDATE "+rolloutSchema+".devices SET last_rollout_status = 'ABORTED', last_rollout_at = CURRENT_TIMESTAMP WHERE id = $1", result.DeviceID); err != nil {
+				log.Printf("[SITE_ORCHESTRATOR][WARN] failed to mark aborted device %s: %v", result.DeviceID, err)
+			}
+		}
+	}
 	if err := updateRolloutRun(r, rolloutID, rolloutStatus, syncResults); err != nil {
 		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to persist rollout %s: %v", rolloutID, err)
 	}

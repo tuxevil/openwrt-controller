@@ -242,7 +242,7 @@ uci export %s > /tmp/central_luci_bak_%s.conf 2>/dev/null || true
   exit 1
 }
 
-trap 'status=$?; echo "CENTRAL_LUCI: command failed with status $status" >&2; rollback' ERR
+trap 'status=$?; echo "CENTRAL_LUCI: command failed at line $LINENO with status $status" >&2; rollback' ERR
 
 # Phase 2: Apply UCI mutations
 %s
