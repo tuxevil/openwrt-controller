@@ -649,6 +649,9 @@ func sequentialFleetRolloutPhases(results []services.RenderResult) [][]int {
 		if leftGateway != rightGateway {
 			return !leftGateway
 		}
+		if left.LastIP != right.LastIP {
+			return left.LastIP < right.LastIP
+		}
 		return left.DeviceID < right.DeviceID
 	})
 	phases := make([][]int, 0, len(results))
