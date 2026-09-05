@@ -2,9 +2,30 @@ package services
 
 import (
 	"fmt"
+	"net"
 	"regexp"
 	"strings"
 )
+
+var healthTargetPattern = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}$`)
+
+// ValidateHealthTargets accepts IPv4/IPv6 addresses and DNS-like hostnames.
+// Shell quoting is still applied by BuildSafeBatchScript at the execution seam.
+func ValidateHealthTargets(targets []string) ([]string, error) {
+	valid := make([]string, 0, len(targets))
+	seen := make(map[string]struct{}, len(targets))
+	for _, target := range targets {
+		if target == "" || (net.ParseIP(target) == nil && !healthTargetPattern.MatchString(target)) {
+			return nil, fmt.Errorf("invalid health check target")
+		}
+		if _, ok := seen[target]; ok {
+			continue
+		}
+		seen[target] = struct{}{}
+		valid = append(valid, target)
+	}
+	return valid, nil
+}
 
 // ─── UCI Bridge ──────────────────────────────────────────────────────────────
 // Translation engine for OpenWrt UCI commands.

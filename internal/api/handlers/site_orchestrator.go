@@ -272,6 +272,18 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"no devices found for this site"}`, http.StatusBadRequest)
 		return
 	}
+	var healthTargets []string
+	if len(sc.HealthChecks) > 0 {
+		if err := json.Unmarshal(sc.HealthChecks, &healthTargets); err != nil {
+			http.Error(w, `{"error":"invalid health_checks configuration"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	healthTargets, err = services.ValidateHealthTargets(healthTargets)
+	if err != nil {
+		http.Error(w, `{"error":"invalid health check target"}`, http.StatusBadRequest)
+		return
+	}
 
 	results := services.RenderSiteConfig(*sc, devs)
 
@@ -313,7 +325,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 			var allOutput string
 			for cfg, cmds := range configGroups {
-				script := services.BuildBatchScript(cfg, cmds)
+				script := services.BuildSafeBatchScript(cfg, cmds, healthTargets)
 				out, err := runSSHScript(rr.DeviceID, script)
 				allOutput += out + "\n"
 				if err != nil {
