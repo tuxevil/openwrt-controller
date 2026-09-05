@@ -13,6 +13,22 @@ CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 DEVICE_TOKEN_FILE="/etc/nerve-device-token"
 DEVICE_TOKEN="$(cat "$DEVICE_TOKEN_FILE" 2>/dev/null || true)"
 
+bootstrap_agent() {
+    [ -n "$DEVICE_TOKEN" ] && return 0
+    logger -t agent "Device token missing; starting bootstrap provisioning"
+    bootstrap_response=$(curl -m 5 -s -X GET \
+        -H "X-Site-Key: $SITE_KEY" "$CONFIG_URL")
+    bootstrap_token=$(echo "$bootstrap_response" | jsonfilter -e '@.config.device_token' 2>/dev/null)
+    if [ -z "$bootstrap_token" ]; then
+        logger -t agent "Bootstrap failed: controller did not provide a device token"
+        return 1
+    fi
+    printf '%s\n' "$bootstrap_token" > "$DEVICE_TOKEN_FILE"
+    chmod 600 "$DEVICE_TOKEN_FILE"
+    DEVICE_TOKEN="$bootstrap_token"
+    logger -t agent "Device token provisioned"
+}
+
 # logd is a local dependency, not part of the telemetry heartbeat.  On some
 # OpenWrt builds logread can remain blocked on the logd socket; running it in
 # the telemetry pipeline would then stop the agent before the POST forever.
@@ -68,6 +84,14 @@ if ! command -v tcpdump >/dev/null 2>&1; then
     fi
 fi
 # apk update && apk add iwinfo curl
+
+if ! command -v curl >/dev/null 2>&1 || ! command -v jsonfilter >/dev/null 2>&1; then
+    logger -t agent "Bootstrap prerequisites are unavailable"
+    exit 1
+fi
+if ! bootstrap_agent; then
+    exit 1
+fi
 
 T_FAILS=0
 
@@ -380,8 +404,9 @@ EOF
 )
 
     # 6. ENVÍO DE TELEMETRÍA (Con X-Site-Key y comprobación de rollback)
-    TELEMETRY_HEADERS="-H X-Site-Key:$SITE_KEY"
-    [ -n "$DEVICE_TOKEN" ] && TELEMETRY_HEADERS="$TELEMETRY_HEADERS -H X-Device-Token:$DEVICE_TOKEN"
+    # The site key routes the request to its tenant; the device token is the
+    # credential that authenticates this enrolled device.
+    TELEMETRY_HEADERS="-H X-Site-Key:$SITE_KEY -H X-Device-Token:$DEVICE_TOKEN"
     HTTP_CODE=$(curl -m 5 -s -X POST \
         -H "Content-Type: application/json" \
         $TELEMETRY_HEADERS \
@@ -408,8 +433,7 @@ EOF
 
     # 7. OBTENCIÓN DE CONFIGURACIÓN E INYECCIÓN DE LLAVE SSH
     # El controlador envía la llave pública en la respuesta de configuración
-    CONFIG_HEADERS="-H X-Site-Key:$SITE_KEY"
-    [ -n "$DEVICE_TOKEN" ] && CONFIG_HEADERS="$CONFIG_HEADERS -H X-Device-Token:$DEVICE_TOKEN"
+    CONFIG_HEADERS="-H X-Site-Key:$SITE_KEY -H X-Device-Token:$DEVICE_TOKEN"
     CONFIG_RESPONSE=$(curl -m 5 -s -X GET $CONFIG_HEADERS "$CONFIG_URL")
 
 NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_token' 2>/dev/null)
