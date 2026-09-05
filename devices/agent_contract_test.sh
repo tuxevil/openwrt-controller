@@ -19,6 +19,11 @@ grep -q 'exit 1' "$AGENT"
 # reserved for bootstrap and update discovery.
 grep -q 'TELEMETRY_HEADERS="-H X-Device-Token:' "$AGENT"
 grep -q 'CONFIG_HEADERS="-H X-Device-Token:' "$AGENT"
+grep -q 'AGENT_UPDATE_PUBLIC_KEY=' "$AGENT"
+grep -q 'signature_algorithm' "$AGENT"
+grep -q 'openssl pkeyutl -verify' "$AGENT"
+grep -q 'AGENT_UPDATE_PUBLIC_KEY="REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64"' "$SCRIPT_DIR/99-nerve-center-bootstrap"
+grep -q 'AGENT_UPDATE_PUBLIC_KEY=' "$SCRIPT_DIR/99-nerve-center-bootstrap"
 
 # The bootstrap must download with the site key, not invent a device token.
 grep -q 'X-Site-Key: \$SITE_KEY' "$SCRIPT_DIR/99-nerve-center-bootstrap"

@@ -13,6 +13,7 @@
 CONTROLLER_IP="10.0.0.6"
 CONTROLLER_PORT="3000"
 SITE_KEY="REPLACE_WITH_SITE_API_KEY"    # From Dashboard → Site Settings
+AGENT_UPDATE_PUBLIC_KEY="REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64"
 
 # ── OPTIONAL CONFIGURATION ───────────────────────────────────────────────────
 ROOT_PASSWORD="REPLACE_WITH_SECURE_PASSWORD"   # Set a secure root password
@@ -98,6 +99,7 @@ fi
 sed -i "s|SITE_KEY=\"TU_API_KEY_AQUI\"|SITE_KEY=\"$SITE_KEY\"|g" "$AGENT_DEST"
 sed -i "s|CONTROLLER_IP=\"10.0.0.6\"|CONTROLLER_IP=\"$CONTROLLER_IP\"|g" "$AGENT_DEST"
 sed -i "s|PORT=\"3000\"|PORT=\"$CONTROLLER_PORT\"|g" "$AGENT_DEST"
+sed -i "s|AGENT_UPDATE_PUBLIC_KEY=\"REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64\"|AGENT_UPDATE_PUBLIC_KEY=\"$AGENT_UPDATE_PUBLIC_KEY\"|g" "$AGENT_DEST"
 echo "[+] Agent configured with site credentials."
 
 # The agent performs first enrollment with the site key, then persists the

@@ -1,23 +1,46 @@
 package handlers
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 
 	"openwrt-controller/internal/database"
 )
 
 type AgentVersion struct {
-	ID            string    `json:"id"`
-	VersionHash   string    `json:"version_hash"`
-	ScriptContent string    `json:"script_content"`
-	IsActive      bool      `json:"is_active"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID                 string    `json:"id"`
+	VersionHash        string    `json:"version_hash"`
+	ScriptContent      string    `json:"script_content"`
+	IsActive           bool      `json:"is_active"`
+	CreatedAt          time.Time `json:"created_at"`
+	Signature          string    `json:"signature,omitempty"`
+	SignatureAlgorithm string    `json:"signature_algorithm,omitempty"`
+}
+
+func signAgentContent(content string) (string, string, error) {
+	rawKey := os.Getenv("AGENT_UPDATE_SIGNING_KEY")
+	if rawKey == "" {
+		return "", "", nil
+	}
+	privateKey, err := base64.StdEncoding.DecodeString(rawKey)
+	if err != nil || len(privateKey) != ed25519.PrivateKeySize {
+		return "", "", fmt.Errorf("AGENT_UPDATE_SIGNING_KEY must be base64-encoded Ed25519 private key")
+	}
+	signature := ed25519.Sign(ed25519.PrivateKey(privateKey), []byte(content))
+	return base64.StdEncoding.EncodeToString(signature), "Ed25519", nil
+}
+
+func verifyAgentSignature(content, signature string, publicKey ed25519.PublicKey) bool {
+	decoded, err := base64.StdEncoding.DecodeString(signature)
+	return err == nil && len(publicKey) == ed25519.PublicKeySize && ed25519.Verify(publicKey, []byte(content), decoded)
 }
 
 // resolveSiteByKey looks up a site by its api_key header value.
@@ -62,7 +85,7 @@ func GetLatestAgentHandler(w http.ResponseWriter, r *http.Request) {
 
 	var version AgentVersion
 	err = database.DB.QueryRow(fmt.Sprintf(`
-		SELECT id, version_hash, script_content, is_active, created_at 
+		SELECT id, version_hash, script_content, is_active, created_at
 		FROM %s.agent_versions 
 		WHERE is_active = true AND site_id = $1
 		ORDER BY created_at DESC LIMIT 1
@@ -71,6 +94,11 @@ func GetLatestAgentHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// No active version for this site — agent should do nothing
 		http.Error(w, "No active agent version found for this site", http.StatusNotFound)
+		return
+	}
+	version.Signature, version.SignatureAlgorithm, err = signAgentContent(version.ScriptContent)
+	if err != nil {
+		http.Error(w, "Agent signing is misconfigured", http.StatusInternalServerError)
 		return
 	}
 

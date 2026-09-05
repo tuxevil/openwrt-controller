@@ -12,6 +12,7 @@ DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:up
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 DEVICE_TOKEN_FILE="/etc/nerve-device-token"
 DEVICE_TOKEN="$(cat "$DEVICE_TOKEN_FILE" 2>/dev/null || true)"
+AGENT_UPDATE_PUBLIC_KEY="REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64"
 
 bootstrap_agent() {
     [ -n "$DEVICE_TOKEN" ] && return 0
@@ -106,10 +107,27 @@ while true; do
     if [ -n "$LATEST_JSON" ]; then
         LATEST_HASH=$(echo "$LATEST_JSON" | jsonfilter -e '@.version_hash' 2>/dev/null)
         if [ -n "$LATEST_HASH" ] && [ "$LATEST_HASH" != "$AGENT_VERSION" ]; then
+            LATEST_SIGNATURE=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature' 2>/dev/null)
+            LATEST_SIGNATURE_ALGORITHM=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature_algorithm' 2>/dev/null)
             logger -t agent "New agent version found: $LATEST_HASH. Downloading..."
             if curl -m 10 -s -X GET -H "X-Site-Key: $SITE_KEY" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
                 TMP_HASH=$(sha256sum "$0.tmp" | awk '{print $1}')
-                if [ "$TMP_HASH" = "$LATEST_HASH" ]; then
+                SIGNATURE_OK=0
+                if [ -n "$LATEST_SIGNATURE" ] && [ "$LATEST_SIGNATURE_ALGORITHM" = "Ed25519" ] && command -v openssl >/dev/null 2>&1 && [ "$AGENT_UPDATE_PUBLIC_KEY" != "REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64" ]; then
+                    PUBKEY_HEX=$(printf '%s' "$AGENT_UPDATE_PUBLIC_KEY" | base64 -d 2>/dev/null | od -An -tx1 | tr -d ' \n')
+                    SIGNATURE_DECODED=$(printf '%s' "$LATEST_SIGNATURE" | base64 -d 2>/dev/null) || SIGNATURE_DECODED=""
+                    if [ "${#PUBKEY_HEX}" -eq 64 ] && [ "${#SIGNATURE_DECODED}" -eq 64 ] && command -v xxd >/dev/null 2>&1; then
+                        printf '302a300506032b6570032100%s' "$PUBKEY_HEX" | xxd -r -p > /tmp/nerve-agent-pubkey.$$
+                        printf '%s' "$SIGNATURE_DECODED" > /tmp/nerve-agent-signature.$$
+                        if openssl pkeyutl -verify -pubin -inkey /tmp/nerve-agent-pubkey.$$ -rawin -in "$0.tmp" -sigfile /tmp/nerve-agent-signature.$$ >/dev/null 2>&1; then
+                            SIGNATURE_OK=1
+                        fi
+                        rm -f /tmp/nerve-agent-pubkey.$$ /tmp/nerve-agent-signature.$$
+                    fi
+                elif [ -z "$LATEST_SIGNATURE" ]; then
+                    SIGNATURE_OK=1
+                fi
+                if [ "$TMP_HASH" = "$LATEST_HASH" ] && [ "$SIGNATURE_OK" = "1" ]; then
                     logger -t agent "Agent downloaded securely. Updating and restarting."
                     
                     # Preserve config from the current agent script
