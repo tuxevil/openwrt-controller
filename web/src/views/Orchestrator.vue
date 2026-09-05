@@ -75,7 +75,7 @@ const runCommand = async () => {
   cmdResults.value = []
   cmdElapsed.value = null
   try {
-    const res = await api.massCommand(cmdSiteID.value, cmdText.value)
+    const res = await api.massCommand(cmdSiteID.value, 'collect_diagnostics', {}, cmdText.value)
     cmdResults.value = res.data.results || []
     cmdElapsed.value = res.data.elapsed_ms
   } catch (err) {
