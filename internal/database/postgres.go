@@ -557,15 +557,20 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS health_checks JSONB DEFAULT '[]'", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS threat_shield_enabled BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS guest_portal_enabled BOOLEAN DEFAULT false", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS sqm_cake_enabled BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS sqm_enabled BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS sqm_download INTEGER DEFAULT 0", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS sqm_upload INTEGER DEFAULT 0", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS dpi_enabled BOOLEAN DEFAULT false", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS secure_tunnel_enabled BOOLEAN DEFAULT true", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS tailscale_enabled BOOLEAN DEFAULT false", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS tailscale_auth_key VARCHAR(255) DEFAULT ''", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS wan_interfaces JSONB DEFAULT '[]'", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS allow_public_surveys BOOLEAN NOT NULL DEFAULT false", quotedSchema),
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
-			log.Printf("tenant migration warning (%s): %v", m, err)
+			return fmt.Errorf("tenant migration failed in %s: %w", safeSchema, err)
 		}
 	}
 

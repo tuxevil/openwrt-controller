@@ -15,9 +15,9 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 	if os.Getenv("OPENWRT_INTEGRATION_DB") != "1" {
 		t.Skip("set OPENWRT_INTEGRATION_DB=1 to run PostgreSQL migration integration tests")
 	}
-	dsn := os.Getenv("TEST_DATABASE_URL")
+	dsn := os.Getenv("DATABASE_URL_TEST")
 	if dsn == "" {
-		t.Fatal("TEST_DATABASE_URL is required when OPENWRT_INTEGRATION_DB=1")
+		t.Fatal("DATABASE_URL_TEST is required when OPENWRT_INTEGRATION_DB=1")
 	}
 
 	db, err := sql.Open("pgx", dsn)
@@ -39,11 +39,14 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 	}
 	defer DB.Exec(fmt.Sprintf("DROP SCHEMA %s CASCADE", pgx.Identifier{schema}.Sanitize()))
 
-	if err := createTenantTables(schema); err != nil {
-		t.Fatalf("first tenant migration: %v", err)
+	if err := createLegacyTenantTables(schema); err != nil {
+		t.Fatalf("create legacy tenant schema: %v", err)
 	}
 	if err := createTenantTables(schema); err != nil {
-		t.Fatalf("second tenant migration was not idempotent: %v", err)
+		t.Fatalf("legacy tenant migration: %v", err)
+	}
+	if err := createTenantTables(schema); err != nil {
+		t.Fatalf("legacy tenant migration was not idempotent: %v", err)
 	}
 
 	rows, err := DB.Query(`
@@ -76,4 +79,19 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 			t.Errorf("site_configs is missing contract column %q", column)
 		}
 	}
+}
+
+func createLegacyTenantTables(schema string) error {
+	quoted := pgx.Identifier{schema}.Sanitize()
+	_, err := DB.Exec(fmt.Sprintf(`
+		CREATE TABLE %s.site_configs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			site_id UUID UNIQUE,
+			enable_global_ssid BOOLEAN DEFAULT true,
+			global_ssid VARCHAR(255) DEFAULT '',
+			global_wpa_key VARCHAR(255) DEFAULT '',
+			global_encryption VARCHAR(50) DEFAULT 'psk2',
+			lan_ipaddr VARCHAR(50) DEFAULT '192.168.1.1'
+		)`, quoted))
+	return err
 }
