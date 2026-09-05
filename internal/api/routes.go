@@ -179,6 +179,8 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/devices/{device_id}/role", middleware.WithAuth(middleware.RequireAdmin(handlers.PutDeviceRoleHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/preview", middleware.WithAuth(middleware.RequireAdmin(handlers.PreviewSyncHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/orchestrator/sync", middleware.WithAuth(middleware.RequireAdmin(handlers.SyncFleetHandler)))
+	mux.HandleFunc("GET /api/sites/{site_id}/orchestrator/rollouts", middleware.WithAuth(middleware.RequireAdmin(handlers.GetRolloutHistoryHandler)))
+	mux.HandleFunc("GET /api/sites/{site_id}/orchestrator/rollouts/{rollout_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.GetRolloutHandler)))
 
 	// ── VPN MESH ORCHESTRATION ─────────────────────────────────────────────
 

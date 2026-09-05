@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"sync"
+	"time"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
@@ -412,6 +414,72 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		"failures":   failures,
 		"results":    syncResults,
 	})
+}
+
+func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	limit := 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit < 1 || limit > 100 {
+			http.Error(w, `{"error":"limit must be between 1 and 100"}`, http.StatusBadRequest)
+			return
+		}
+	}
+	rows, err := database.Tx(r.Context()).QueryContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE site_id = $1 ORDER BY created_at DESC LIMIT $2", r.PathValue("site_id"), limit)
+	if err != nil {
+		http.Error(w, `{"error":"could not load rollout history"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+	rollouts := make([]rolloutRecord, 0)
+	for rows.Next() {
+		var rollout rolloutRecord
+		if err := rows.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
+			http.Error(w, `{"error":"could not read rollout history"}`, http.StatusInternalServerError)
+			return
+		}
+		rollouts = append(rollouts, rollout)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, `{"error":"could not read rollout history"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rollouts)
+}
+
+func GetRolloutHandler(w http.ResponseWriter, r *http.Request) {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	row := database.Tx(r.Context()).QueryRowContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE id = $1 AND site_id = $2", r.PathValue("rollout_id"), r.PathValue("site_id"))
+	var rollout rolloutRecord
+	if err := row.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
+		http.Error(w, `{"error":"rollout not found"}`, http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rollout)
+}
+
+type rolloutRecord struct {
+	ID              string          `json:"id"`
+	SiteID          string          `json:"site_id"`
+	Generation      int64           `json:"generation"`
+	Status          string          `json:"status"`
+	PlanHash        string          `json:"plan_hash"`
+	RequestedBy     string          `json:"requested_by"`
+	TargetDeviceIDs json.RawMessage `json:"target_device_ids"`
+	Results         json.RawMessage `json:"results"`
+	CreatedAt       time.Time       `json:"created_at"`
+	UpdatedAt       time.Time       `json:"updated_at"`
 }
 
 func createRolloutRun(r *http.Request, siteID, username string, results []services.RenderResult) (string, int64, error) {
