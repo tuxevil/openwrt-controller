@@ -112,6 +112,9 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
+	// From this point on every stateful processor must use the canonical
+	// controller identity, not a transient bridge MAC reported by the agent.
+	deviceID = canonicalDeviceID
 	assigned := deviceSiteID != nil && *deviceSiteID != ""
 	storedToken := ""
 	if storedDeviceToken != nil {

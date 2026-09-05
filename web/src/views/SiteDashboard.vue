@@ -457,7 +457,7 @@ const goBack = () => router.push('/global')
               </span>
                <span v-else-if="syncStatus(dev) === 'OUT_OF_SYNC' || dev.drift_status === 'DRIFT'" class="px-2 py-0.5 bg-neon-amber/20 text-neon-amber border border-neon-amber/50 clip-chamfer text-xs glitch-anim w-fit block">OUT_OF_SYNC</span>
                <span v-else-if="dev.drift_status === 'DRIFT_DEFAULT'" class="px-2 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 clip-chamfer text-xs w-fit block">DEFAULT_DIFF</span>
-              <span v-else class="text-muted text-xs">NO_PULL</span>
+               <span v-else class="text-muted text-xs">UNKNOWN</span>
             </td>
             <td class="py-3 text-center flex justify-center gap-2">
               <button @click="showDetails(dev)" class="text-neon-cyan hover:bg-black border border-neon-cyan px-2 py-1 clip-chamfer transition-all text-xs focus:outline-none" style="color: #0ff; border-color: #0ff;">INFO</button>
