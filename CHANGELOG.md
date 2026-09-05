@@ -10,6 +10,8 @@ without a deprecation period.
 ## [Unreleased]
 
 ### Added
+- Professional project documentation under `docs/`: architecture, deployment,
+  operations, security model, device agent, and testing guides.
 - `CONTRIBUTING.md` with full contribution workflow
 - `CHANGELOG.md` (this file)
 - `.editorconfig` for cross-editor consistency

@@ -17,7 +17,7 @@ cmd/        # One binary per subcommand (openwrt-controller is the production on
 internal/   # All non-exported Go packages (api, database, services, orchestrator, …)
 web/        # Vue 3 + Vite SPA
 devices/    # OpenWrt-side agent (shell script + procd init)
-docs/       # Specs, references, design notes
+docs/       # Architecture, deployment, operations and testing guides
 .github/    # CI workflows
 ```
 

@@ -94,5 +94,7 @@ skills/
 get-docker.sh
 .git.dirty-backup/
 clean-repo.sh
-docs/
+# Keep maintained project guides under version control; ignore only local docs.
+docs/*
+!docs/*.md
 openwrt-controller.old
