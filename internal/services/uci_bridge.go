@@ -234,7 +234,7 @@ logger -t central_luci "CENTRAL_LUCI: starting batch push for '%s'"
 # Phase 1: Snapshot current state for rollback
 uci export %s > /tmp/central_luci_bak_%s.conf 2>/dev/null || true
 
-rollback() {
+	rollback() {
   logger -t central_luci "CENTRAL_LUCI: ROLLBACK — restoring '%s' from snapshot"
   uci import %s < /tmp/central_luci_bak_%s.conf 2>/dev/null || true
   uci commit %s
@@ -242,7 +242,7 @@ rollback() {
   exit 1
 }
 
-trap rollback ERR
+trap 'status=$?; echo "CENTRAL_LUCI: command failed with status $status" >&2; rollback' ERR
 
 # Phase 2: Apply UCI mutations
 %s
