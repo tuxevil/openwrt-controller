@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"openwrt-controller/internal/database"
 )
@@ -74,25 +73,34 @@ type DeviceRoleInfo struct {
 }
 
 type DeviceCapabilities struct {
-	Interfaces       []string `json:"interfaces"`
-	Radios           []string `json:"radios"`
-	WirelessSections []string `json:"wireless_sections"`
+	Interfaces             []string          `json:"interfaces"`
+	Radios                 []string          `json:"radios"`
+	WirelessDeviceSections []string          `json:"wifi_device_sections"`
+	WirelessIfaceSections  []string          `json:"wifi_iface_sections"`
+	LogicalNetworks        map[string]string `json:"logical_networks"`
+	SQMCandidates          []string          `json:"sqm_candidates"`
 }
 
 func resolveResources(capabilities DeviceCapabilities) (string, string, string) {
 	radioSection, radioDevice := "default_radio0", "radio0"
-	if len(capabilities.WirelessSections) >= 2 {
-		radioSection = capabilities.WirelessSections[0]
-		radioDevice = capabilities.WirelessSections[1]
+	if len(capabilities.WirelessIfaceSections) > 0 && capabilities.WirelessIfaceSections[0] != "" {
+		radioSection = capabilities.WirelessIfaceSections[0]
+	}
+	if len(capabilities.WirelessDeviceSections) > 0 && capabilities.WirelessDeviceSections[0] != "" {
+		radioDevice = capabilities.WirelessDeviceSections[0]
 	}
 	sqmInterface := "eth1"
-	for _, iface := range capabilities.Interfaces {
-		if strings.HasPrefix(iface, "eth") || strings.HasPrefix(iface, "br-wan") {
-			sqmInterface = iface
-			break
-		}
+	if len(capabilities.SQMCandidates) > 0 && capabilities.SQMCandidates[0] != "" {
+		sqmInterface = capabilities.SQMCandidates[0]
 	}
 	return radioSection, radioDevice, sqmInterface
+}
+
+func logicalNetworkSection(capabilities DeviceCapabilities, name string) string {
+	if section := capabilities.LogicalNetworks[name]; section != "" {
+		return section
+	}
+	return name
 }
 
 // RenderResult is the output of the rendering engine — UCI commands per device.
@@ -203,18 +211,20 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 
 		// ── NETWORK (Gateway only) ───────────────────────────────────
 		if role == "Gateway" {
+			lanNetwork := logicalNetworkSection(dev.Capabilities, "lan")
 			cmds = append(cmds,
-				UciCommand{Action: "set", Config: "network", Section: "lan", Option: "ipaddr", Value: cfg.LanIPAddr},
-				UciCommand{Action: "set", Config: "network", Section: "lan", Option: "netmask", Value: cfg.LanNetmask},
+				UciCommand{Action: "set", Config: "network", Section: lanNetwork, Option: "ipaddr", Value: cfg.LanIPAddr},
+				UciCommand{Action: "set", Config: "network", Section: lanNetwork, Option: "netmask", Value: cfg.LanNetmask},
 			)
 		}
 
 		// ── DHCP (Gateway only) ──────────────────────────────────────
 		if role == "Gateway" {
+			lanNetwork := logicalNetworkSection(dev.Capabilities, "lan")
 			cmds = append(cmds,
-				UciCommand{Action: "set", Config: "dhcp", Section: "lan", Option: "start", Value: fmt.Sprintf("%d", cfg.DHCPStart)},
-				UciCommand{Action: "set", Config: "dhcp", Section: "lan", Option: "limit", Value: fmt.Sprintf("%d", cfg.DHCPLimit)},
-				UciCommand{Action: "set", Config: "dhcp", Section: "lan", Option: "leasetime", Value: cfg.DHCPLeasetime},
+				UciCommand{Action: "set", Config: "dhcp", Section: lanNetwork, Option: "start", Value: fmt.Sprintf("%d", cfg.DHCPStart)},
+				UciCommand{Action: "set", Config: "dhcp", Section: lanNetwork, Option: "limit", Value: fmt.Sprintf("%d", cfg.DHCPLimit)},
+				UciCommand{Action: "set", Config: "dhcp", Section: lanNetwork, Option: "leasetime", Value: cfg.DHCPLeasetime},
 			)
 			// DNS upstream
 			cmds = append(cmds,
@@ -278,7 +288,7 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 			if cfg.SQMCakeEnabled {
 				cmds = append(cmds,
 					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "enabled", Value: "1"},
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "interface", Value: "eth0"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "interface", Value: sqmInterface},
 					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "download", Value: "0"},
 					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "upload", Value: "0"},
 					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "qdisc", Value: "cake"},

@@ -134,8 +134,14 @@ while true; do
     [ -n "$CAP_INTERFACES" ] || CAP_INTERFACES=""
     CAP_RADIOS=$(iwinfo 2>/dev/null | awk '/^[a-zA-Z0-9_.-]+[[:space:]]+ESSID:/ {print $1}' | head -n 16 | sed 's/.*/"&"/' | paste -sd, -)
     [ -n "$CAP_RADIOS" ] || CAP_RADIOS=""
-    CAP_WIRELESS_SECTIONS=$(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-device|=wifi-iface/ {print $2}' | head -n 16 | sed 's/.*/"&"/' | paste -sd, -)
-    [ -n "$CAP_WIRELESS_SECTIONS" ] || CAP_WIRELESS_SECTIONS=""
+    CAP_WIFI_DEVICES=$(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-device/ {print $2}' | head -n 8 | sed 's/.*/"&"/' | paste -sd, -)
+    CAP_WIFI_IFACES=$(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-iface/ {print $2}' | head -n 16 | sed 's/.*/"&"/' | paste -sd, -)
+    [ -n "$CAP_WIFI_DEVICES" ] || CAP_WIFI_DEVICES=""
+    [ -n "$CAP_WIFI_IFACES" ] || CAP_WIFI_IFACES=""
+    CAP_LOGICAL_NETWORKS=$(uci -q show network 2>/dev/null | awk -F'[.=]' '/\.device=/ {print $1":"$2}' | head -n 16 | awk -F: '{print "\""$2"\":\""$2"\""}' | paste -sd, -)
+    [ -n "$CAP_LOGICAL_NETWORKS" ] || CAP_LOGICAL_NETWORKS=""
+    CAP_SQM_CANDIDATES=$(printf '%s\n' "$CAP_INTERFACES" | tr ',' '\n' | tr -d '"' | awk '/^(eth|br-wan)/ {print}' | head -n 8 | sed 's/.*/"&"/' | paste -sd, -)
+    [ -n "$CAP_SQM_CANDIDATES" ] || CAP_SQM_CANDIDATES=""
     CAP_FIREWALL="unknown"
     command -v fw4 >/dev/null 2>&1 && CAP_FIREWALL="firewall4"
     command -v fw3 >/dev/null 2>&1 && CAP_FIREWALL="firewall3"
@@ -359,7 +365,7 @@ while true; do
     "timestamp": $(date +%s),
     "board": $BOARD,
     "system": $SYS_INFO,
-    "capabilities": {"openwrt_release":"$CAP_RELEASE","architecture":"$CAP_ARCH","kernel":"$CAP_KERNEL","ram_mb":${CAP_RAM_MB:-0},"flash_mb":${CAP_FLASH_MB:-0},"interfaces":[${CAP_INTERFACES}],"radios":[${CAP_RADIOS}],"wireless_sections":[${CAP_WIRELESS_SECTIONS}],"switch_stack":"$CAP_SWITCH","firewall":"$CAP_FIREWALL","packages":[${CAP_PACKAGES}]},
+    "capabilities": {"openwrt_release":"$CAP_RELEASE","architecture":"$CAP_ARCH","kernel":"$CAP_KERNEL","ram_mb":${CAP_RAM_MB:-0},"flash_mb":${CAP_FLASH_MB:-0},"interfaces":[${CAP_INTERFACES}],"radios":[${CAP_RADIOS}],"wifi_device_sections":[${CAP_WIFI_DEVICES}],"wifi_iface_sections":[${CAP_WIFI_IFACES}],"logical_networks":{${CAP_LOGICAL_NETWORKS}},"sqm_candidates":[${CAP_SQM_CANDIDATES}],"switch_stack":"$CAP_SWITCH","firewall":"$CAP_FIREWALL","packages":[${CAP_PACKAGES}]},
     "wireless_stations": $WIFI_DATA,
     "top_talkers": $TOP_TALKERS,
     "iface_stats": $IFACE_STATS,
