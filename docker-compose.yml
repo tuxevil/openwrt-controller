@@ -37,6 +37,7 @@ services:
       - REQUIRE_TLS=${REQUIRE_TLS:-false}
       - WS_ALLOWED_ORIGINS=${WS_ALLOWED_ORIGINS:-}
       - ALLOW_LEGACY_PROVISION=${ALLOW_LEGACY_PROVISION:-false}
+      - AI_ENGINE_ENCRYPTION_KEY=${AI_ENGINE_ENCRYPTION_KEY:-}
     depends_on:
       postgres:
         condition: service_started

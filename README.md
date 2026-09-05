@@ -16,7 +16,7 @@ OMEGA is a self-hosted control plane for OpenWrt fleets. It combines declarative
 - **Device lifecycle:** first enrollment with a site key, per-device token handoff, telemetry heartbeat and procd-based agent operation.
 - **Visibility:** CPU, memory, link and client telemetry, Starlink health, configuration drift, mesh benchmarks and hierarchical topology.
 - **Security boundaries:** PostgreSQL schema isolation per tenant, JWT/RBAC, audited privileged actions, SSH host-key TOFU and constrained UCI command namespaces.
-- **Optional services:** WireGuard mesh, Tailscale/Headscale, FreeRADIUS, Threat Shield, packet capture, iperf3, webhooks and local Ollama analysis.
+- **Optional services:** WireGuard mesh, Tailscale/Headscale, FreeRADIUS, Threat Shield, packet capture, iperf3, webhooks and OpenAI-compatible AI analysis.
 
 ## Architecture At A Glance
 

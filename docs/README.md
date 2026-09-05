@@ -10,6 +10,7 @@ This directory contains the detailed guides behind the project README. Start wit
 | [SECURITY_MODEL.md](SECURITY_MODEL.md) | Review authentication, tenant isolation and secrets |
 | [DEVICE_AGENT.md](DEVICE_AGENT.md) | Install, enroll or troubleshoot an OpenWrt device |
 | [TESTING.md](TESTING.md) | Run quality gates or opt-in integration checks |
+| [AI_ENGINE.md](AI_ENGINE.md) | Configure an OpenAI-compatible provider and encrypted key |
 
 Related references:
 

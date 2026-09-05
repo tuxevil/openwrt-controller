@@ -95,8 +95,9 @@ func createLandlordTables() error {
 
 	CREATE TABLE IF NOT EXISTS platform_settings (
 		id INT PRIMARY KEY DEFAULT 1,
-		ollama_host VARCHAR(255) DEFAULT '127.0.0.1:11434',
-		ollama_model VARCHAR(255) DEFAULT 'llama3',
+		ai_engine_base_url VARCHAR(512) DEFAULT 'https://api.openai.com/v1',
+		ai_engine_model VARCHAR(255) DEFAULT 'gpt-4o-mini',
+		ai_engine_api_key TEXT DEFAULT '',
 		sentinel_prompt TEXT DEFAULT 'You are a Fleet Security Analyst. Analyze this cross-device log stream. Look for coordinated attacks, lateral movements, or cascading hardware failures. If Device A shows a login failure and Device B shows a login success from the same IP, flag it as CRITICAL SUSPICION. Be technical, concise, and provide a ''Recommended Action''. The output must look like a high-level SOC report. No fluff.\n\nEnd your report with these two exact lines at the bottom for parsing:\nSEVERITY: [Critical, High, Medium, Low]\nDEVICES: [Device_Name_1, Device_Name_2]',
 		telegram_bot_token VARCHAR(255) DEFAULT '',
 		telegram_chat_id VARCHAR(255) DEFAULT '',
@@ -128,6 +129,9 @@ func createLandlordTables() error {
 		"ALTER TABLE users ADD COLUMN IF NOT EXISTS tenant_id UUID REFERENCES tenants(id)",
 		"UPDATE users SET role = UPPER(role)",
 		"ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS global_surveys_public_lockdown BOOLEAN NOT NULL DEFAULT false",
+		"ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS ai_engine_base_url VARCHAR(512) DEFAULT 'https://api.openai.com/v1'",
+		"ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS ai_engine_model VARCHAR(255) DEFAULT 'gpt-4o-mini'",
+		"ALTER TABLE platform_settings ADD COLUMN IF NOT EXISTS ai_engine_api_key TEXT DEFAULT ''",
 	}
 	for _, m := range landlordMigrations {
 		if _, err := DB.Exec(m); err != nil {

@@ -14,14 +14,20 @@
         
         <div class="flex flex-col md:flex-row gap-6">
           <div class="flex-1 flex flex-col gap-2">
-            <label class="text-xs text-muted uppercase tracking-widest">Ollama Host</label>
-            <input v-model="settings.ollama_host" type="text" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
+            <label class="text-xs text-muted uppercase tracking-widest">OpenAI-Compatible Base URL</label>
+            <input v-model="settings.ai_engine_base_url" type="url" placeholder="https://api.openai.com/v1" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
           </div>
           
           <div class="flex-1 flex flex-col gap-2">
-            <label class="text-xs text-muted uppercase tracking-widest">Ollama Model</label>
-            <input v-model="settings.ollama_model" type="text" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
+            <label class="text-xs text-muted uppercase tracking-widest">Model</label>
+            <input v-model="settings.ai_engine_model" type="text" placeholder="gpt-4o-mini" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
           </div>
+        </div>
+
+        <div class="flex flex-col gap-2">
+          <label class="text-xs text-muted uppercase tracking-widest">Provider API Key</label>
+          <input v-model="settings.ai_engine_api_key" type="password" :placeholder="settings.ai_engine_configured ? 'Key configured; enter a new key to replace it' : 'sk-...'" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
+          <span class="text-xs text-muted">Stored encrypted. Compatible with OpenAI, Azure-compatible gateways, and local OpenAI-compatible servers.</span>
         </div>
 
         <div class="flex flex-col gap-2">
@@ -81,8 +87,10 @@
 import { ref, onMounted } from 'vue';
 
 const settings = ref({
-  ollama_host: '',
-  ollama_model: '',
+  ai_engine_base_url: 'https://api.openai.com/v1',
+  ai_engine_model: 'gpt-4o-mini',
+  ai_engine_api_key: '',
+  ai_engine_configured: false,
   sentinel_prompt: '',
   telegram_bot_token: '',
   telegram_chat_id: '',

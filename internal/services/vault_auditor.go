@@ -4,11 +4,9 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
@@ -86,20 +84,11 @@ func RunVaultAudit(schema, deviceID string) (*AuditResult, error) {
 	log.Printf("[VAULT_AUDIT] Extracted %d bytes of UCI config for device %s. Sending to Sentinel AI...", len(configDump), deviceID)
 
 	// 3. Query Sentinel AI with the compliance auditor system prompt
-	settings := database.GetPlatformSettings()
-	ollamaHost := settings.OllamaHost
-	if ollamaHost == "" {
-		ollamaHost = "127.0.0.1:11434"
-	}
-	model := settings.OllamaModel
-	if model == "" {
-		model = "llama3"
-	}
-
-	diagnosis, severity, llmModel, tokensUsed, err := callOllamaAudit(ollamaHost, model, configDump)
+	diagnosis, llmModel, tokensUsed, err := completeAI(vaultAuditSystemPrompt, "UCI CONFIGURATION DUMP:\n"+configDump, false)
 	if err != nil {
 		return nil, fmt.Errorf("Sentinel AI inference failed: %w", err)
 	}
+	severity := parseAuditSeverity(diagnosis)
 
 	isNominal := strings.Contains(strings.ToUpper(diagnosis), "NOMINAL STATE")
 
@@ -178,55 +167,6 @@ func extractUCIConfigs(tarGzData []byte) (string, error) {
 	}
 
 	return sb.String(), nil
-}
-
-// callOllamaAudit sends UCI config to Ollama with the vault audit system prompt.
-func callOllamaAudit(host, model, configDump string) (diagnosis, severity, llmModel string, tokensUsed int, err error) {
-	payload := map[string]interface{}{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": vaultAuditSystemPrompt},
-			{"role": "user", "content": "UCI CONFIGURATION DUMP:\n" + configDump},
-		},
-		"stream": false,
-	}
-
-	b, _ := json.Marshal(payload)
-	url := fmt.Sprintf("http://%s/api/chat", host)
-
-	client := &http.Client{Timeout: 300 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewBuffer(b))
-	if err != nil {
-		return "", "Low", model, 0, fmt.Errorf("ollama request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", "Low", model, 0, err
-	}
-
-	var result struct {
-		Model   string `json:"model"`
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-		PromptEvalCount int `json:"prompt_eval_count"`
-		EvalCount       int `json:"eval_count"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return "", "Low", model, 0, fmt.Errorf("unmarshal ollama response: %w", err)
-	}
-
-	content := strings.TrimSpace(result.Message.Content)
-	llmModel = result.Model
-	if llmModel == "" {
-		llmModel = model
-	}
-	tokensUsed = result.PromptEvalCount + result.EvalCount
-	severity = parseAuditSeverity(content)
-
-	return content, severity, llmModel, tokensUsed, nil
 }
 
 func parseAuditSeverity(content string) string {

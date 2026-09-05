@@ -1,13 +1,10 @@
 package services
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
@@ -57,56 +54,14 @@ Respond ONLY with a valid JSON block, using this strict schema:
 
 // ProcessChatOpsQuery takes natural language from the user, determines the intent via the LLM, and explicitly maps it to safe data functions execution.
 func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
-	settings := database.GetPlatformSettings()
-	ollamaHost := settings.OllamaHost
-	if ollamaHost == "" {
-		ollamaHost = "127.0.0.1:11434"
-	}
-	model := settings.OllamaModel
-	if model == "" {
-		model = "llama3"
-	}
-
-	payload := map[string]interface{}{
-		"model": model,
-		"messages": []map[string]string{
-			{"role": "system", "content": chatOpsSystemPrompt},
-			{"role": "user", "content": "OPERATOR QUERY:\n" + query},
-		},
-		"stream": false,
-		"format": "json", // Enforce JSON output for ChatOps intent parsing
-	}
-
-	b, _ := json.Marshal(payload)
-	url := fmt.Sprintf("http://%s/api/chat", ollamaHost)
-
-	client := &http.Client{Timeout: 60 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewBuffer(b))
+	content, _, _, err := completeAI(chatOpsSystemPrompt, "OPERATOR QUERY:\n"+query, true)
 	if err != nil {
-		return nil, fmt.Errorf("ollama request failed: %w", err)
+		return nil, err
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
+	content, err = ParseAICompletion(content)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read ollama response: %w", err)
+		return &ChatOpsResponse{Summary: "AI engine returned invalid intent JSON"}, nil
 	}
-
-	var result struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal ollama base response: %w", err)
-	}
-
-	content := strings.TrimSpace(result.Message.Content)
 	var intent ChatOpsIntent
 
 	// Fallback cleanly if LLM hallucinated markdown code blocks
