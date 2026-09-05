@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
 	"log"
 	"net/http"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/google/uuid"
@@ -126,14 +130,82 @@ func DiffBackupHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// A real visual diff logic returns the raw strings to the frontend which rendering it line-by-line
-	// Base64 encoding not needed since its sending raw tar bytes or text? Oh wait, in vault.go we did rawBytes! Its a TAR GZ!
-	// Sending TAR GZ is impossible for frontend to diff directly.
-	// Oh, I will just send a mock since the user didn't ask for a full untar parser in golang.
-	diffStr := "---- DIFF ----\n- old_parameter=1\n+ new_parameter=2\n(Actual tar.gz diffing requires unpack logic)\n"
+	files1, err := backupFiles(buf1)
+	if err != nil {
+		http.Error(w, `{"error":"B1 invalid backup"}`, http.StatusUnprocessableEntity)
+		return
+	}
+	files2, err := backupFiles(buf2)
+	if err != nil {
+		http.Error(w, `{"error":"B2 invalid backup"}`, http.StatusUnprocessableEntity)
+		return
+	}
+	paths := make(map[string]bool)
+	for path := range files1 {
+		paths[path] = true
+	}
+	for path := range files2 {
+		paths[path] = true
+	}
+	sortedPaths := make([]string, 0, len(paths))
+	for path := range paths {
+		sortedPaths = append(sortedPaths, path)
+	}
+	sort.Strings(sortedPaths)
+	type change struct {
+		Path   string `json:"path"`
+		Status string `json:"status"`
+	}
+	changes := make([]change, 0)
+	for _, path := range sortedPaths {
+		a, oka := files1[path]
+		b, okb := files2[path]
+		status := "unchanged"
+		if !oka {
+			status = "added"
+		} else if !okb {
+			status = "removed"
+		} else if string(a) != string(b) {
+			status = "modified"
+		}
+		if status != "unchanged" {
+			changes = append(changes, change{Path: path, Status: status})
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"data": diffStr})
+	json.NewEncoder(w).Encode(map[string]interface{}{"data": map[string]interface{}{"changes": changes, "changed_files": len(changes)}})
+}
+
+func backupFiles(content []byte) (map[string][]byte, error) {
+	reader, err := gzip.NewReader(bytes.NewReader(content))
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+	tarReader := tar.NewReader(reader)
+	files := map[string][]byte{}
+	for {
+		header, err := tarReader.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if header.Typeflag != tar.TypeReg {
+			continue
+		}
+		if header.Name == "" || strings.Contains(header.Name, "..") {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(tarReader, 10<<20))
+		if err != nil {
+			return nil, err
+		}
+		files[header.Name] = data
+	}
+	return files, nil
 }
 
 // UploadFirmwareHandler receives multipart and saves
@@ -183,16 +255,8 @@ func UploadFirmwareHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{"status": "FIRMWARE_STORED", "id": id.String()})
 }
 
-// TriggerSysupgradeHandler will remotely trigger flash
+// TriggerSysupgradeHandler is intentionally disabled until firmware rollout
+// has an explicit compatibility check, backup, health gate, and rollback plan.
 func TriggerSysupgradeHandler(w http.ResponseWriter, r *http.Request) {
-	deviceID := r.PathValue("device_id")
-	// logic triggers Orchestrator or runMassCommand
-	// For demo:
-	cmd := "echo 'FLASHING NOW' && sysupgrade -n /tmp/fw.bin"
-	res := services.RunMassCommand(r.Context(), deviceID, cmd) // Using mass command for single device using deviceID instead of siteID? Actually RunMassCommand uses site_id!
-	// I'll emit a simple response
-	_ = res
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{"status": "SYSUPGRADE_TRIGGERED_VIA_WGET"})
+	http.Error(w, `{"error":"firmware rollout is not available; use a validated staged workflow"}`, http.StatusNotImplemented)
 }

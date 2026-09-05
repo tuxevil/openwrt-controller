@@ -103,6 +103,9 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/sites/{site_id}/profile", middleware.WithAuth(handlers.AssignSiteProfileHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/rf-optimization", middleware.WithAuth(handlers.GetRFOptimizationHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rf-fix", middleware.WithAuth(handlers.RunRFFixHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/benchmark", middleware.WithAuth(handlers.RunSiteBenchmarkHandler))
+	mux.HandleFunc("POST /api/devices/{device_id}/benchmark", middleware.WithAuth(handlers.RunDeviceBenchmarkHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/starlink", middleware.WithAuth(handlers.GetSiteStarlinkStatusHandler))
 
 	// ── GUEST PORTAL / Captive Portal ────────────────────────────────────────
 	mux.HandleFunc("GET /api/sites/{site_id}/portal/settings", middleware.WithAuth(handlers.GetPortalSettingsHandler))
@@ -164,6 +167,9 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/devices/{device_id}/central-config", middleware.WithAuth(middleware.RequireAdmin(handlers.GetCentralConfigHandler)))
 	mux.HandleFunc("GET /api/devices/{device_id}/central-configs", middleware.WithAuth(middleware.RequireAdmin(handlers.ListCentralConfigsHandler)))
 	mux.HandleFunc("PUT /api/devices/{device_id}/central-config", middleware.WithAuth(middleware.RequireAdmin(handlers.PutCentralConfigHandler)))
+	mux.HandleFunc("POST /api/devices/{device_id}/safe-rollout", middleware.WithAuth(middleware.RequireAdmin(handlers.SafeRolloutHandler)))
+	mux.HandleFunc("GET /api/devices/{device_id}/drift", middleware.WithAuth(middleware.RequireAdmin(handlers.GetDeviceDriftHandler)))
+	mux.HandleFunc("GET /api/sites/{site_id}/drift-summary", middleware.WithAuth(middleware.RequireAdmin(handlers.GetSiteDriftSummaryHandler)))
 	mux.HandleFunc("POST /api/central-config/preview", middleware.WithAuth(middleware.RequireAdmin(handlers.PreviewCentralConfigHandler)))
 
 	// ── SITE_ORCHESTRATOR / Global Fleet Templates ───────────────────────

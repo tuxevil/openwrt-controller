@@ -146,6 +146,7 @@ func PreviewCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
 	config := r.URL.Query().Get("config")
+	dryRun := r.URL.Query().Get("dry_run") == "true"
 	username := GetUsernameFromReq(r)
 
 	if config == "" {
@@ -168,18 +169,30 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"empty command list"}`, http.StatusBadRequest)
 		return
 	}
+	if dryRun {
+		script := services.BuildDryRunScript(config, payload.Commands)
+		if script == "" {
+			http.Error(w, `{"error":"invalid UCI command or config"}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":   "dry_run",
+			"config":   config,
+			"commands": services.PreviewCommands(payload.Commands),
+		})
+		return
+	}
 
 	// ── VAULT INTEGRATION: Pre-change backup ─────────────────────────────
 	// Before any destructive change, snapshot the entire /etc/config/<config>
 	// into The Vault as a safety net.
 	log.Printf("[CENTRAL_LUCI] Triggering pre-change Vault backup for device %s, config: %s", deviceID, config)
-	go func() {
-		if err := services.CreateBackup(context.Background(), middleware.GetTenantSchema(r), deviceID); err != nil {
-			log.Printf("[CENTRAL_LUCI][WARN] Pre-change backup failed for %s: %v", deviceID, err)
-		} else {
-			log.Printf("[CENTRAL_LUCI] Pre-change backup stored in Vault for %s", deviceID)
-		}
-	}()
+	if err := services.CreateBackup(context.Background(), middleware.GetTenantSchema(r), deviceID); err != nil {
+		log.Printf("[CENTRAL_LUCI][WARN] Pre-change backup failed for %s: %v", deviceID, err)
+		http.Error(w, `{"error":"pre-change backup failed; configuration was not applied"}`, http.StatusServiceUnavailable)
+		return
+	}
 
 	// ── Build & execute batch script via UCI Bridge ──────────────────────
 	script := services.BuildBatchScript(config, payload.Commands)
@@ -214,6 +227,156 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// SafeRolloutHandler applies a validated UCI batch to exactly one device.
+// It is intentionally opt-in: without confirm=true it only returns a plan.
+func SafeRolloutHandler(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("device_id")
+	config := r.URL.Query().Get("config")
+	if deviceID == "" || config == "" || !isAllowedUciConfig(config) {
+		http.Error(w, `{"error":"device_id and a valid config are required"}`, http.StatusBadRequest)
+		return
+	}
+
+	var payload struct {
+		Commands []services.UciCommand `json:"commands"`
+		Confirm  bool                  `json:"confirm"`
+	}
+	if !readBody(w, r, &payload) || len(payload.Commands) == 0 {
+		return
+	}
+	for _, command := range payload.Commands {
+		if command.Config != config {
+			http.Error(w, `{"error":"all commands must target the selected config"}`, http.StatusBadRequest)
+			return
+		}
+	}
+
+	plan := services.PreviewCommands(payload.Commands)
+	if !payload.Confirm {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":    "preview",
+			"device_id": deviceID,
+			"config":    config,
+			"commands":  plan,
+			"next_step": "repeat with confirm=true to apply to this device",
+		})
+		return
+	}
+
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := services.CreateBackup(context.Background(), schema, deviceID); err != nil {
+		http.Error(w, `{"error":"pre-change backup failed; rollout aborted"}`, http.StatusServiceUnavailable)
+		return
+	}
+	_, _ = database.Tx(r.Context()).Exec("UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE id = $1", deviceID)
+
+	script := services.BuildSafeBatchScript(config, payload.Commands, nil)
+	output, err := runSSHScript(deviceID, script)
+	if err != nil {
+		_, _ = database.Tx(r.Context()).Exec("UPDATE "+schema+".devices SET last_rollout_status = 'FAILED', last_health_check_at = CURRENT_TIMESTAMP WHERE id = $1", deviceID)
+		database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]string{"status": "rolled_back_or_failed", "output": output, "error": err.Error()})
+		return
+	}
+
+	database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_APPLIED", "DEVICE", deviceID, fmt.Sprintf("Applied %d commands to %s", len(payload.Commands), config), r.RemoteAddr)
+	_, _ = database.Tx(r.Context()).Exec("UPDATE "+schema+".devices SET last_rollout_status = 'SUCCESS', last_health_check_at = CURRENT_TIMESTAMP WHERE id = $1", deviceID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "success", "output": output})
+}
+
+// GetDeviceDriftHandler compares the rendered desired state with live UCI.
+// It is read-only: no commit, restart, or remote mutation is performed.
+func GetDeviceDriftHandler(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("device_id")
+	if deviceID == "" {
+		http.Error(w, `{"error":"device_id is required"}`, http.StatusBadRequest)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	var siteID, name, role string
+	if err := database.Tx(r.Context()).QueryRow("SELECT site_id, COALESCE(name, model, id), COALESCE(device_role, 'AP') FROM "+schema+".devices WHERE id = $1", deviceID).Scan(&siteID, &name, &role); err != nil {
+		http.Error(w, `{"error":"device not found"}`, http.StatusNotFound)
+		return
+	}
+	cfg, err := services.GetSiteConfig(r.Context(), siteID)
+	if err != nil {
+		http.Error(w, `{"error":"desired site config not found"}`, http.StatusUnprocessableEntity)
+		return
+	}
+	results := services.RenderSiteConfig(*cfg, []services.DeviceRoleInfo{{DeviceID: deviceID, Hostname: name, Role: role}})
+	if len(results) == 0 {
+		http.Error(w, `{"error":"desired state rendered empty"}`, http.StatusUnprocessableEntity)
+		return
+	}
+
+	byConfig := map[string][]services.UciCommand{}
+	for _, command := range results[0].Commands {
+		byConfig[command.Config] = append(byConfig[command.Config], command)
+	}
+	type NamespaceResult struct {
+		Config   string   `json:"config"`
+		Status   string   `json:"status"`
+		Expected []string `json:"expected"`
+		Observed string   `json:"observed,omitempty"`
+		Missing  []string `json:"missing,omitempty"`
+		Defaults []string `json:"default_differences,omitempty"`
+		Error    string   `json:"error,omitempty"`
+	}
+	resultsByNamespace := make([]NamespaceResult, 0, len(byConfig))
+	for config, commands := range byConfig {
+		if config == "sqm" || config == "firewall" {
+			// Preserve the comparison contract but avoid leaking secrets/large UCI dumps.
+		}
+		out, readErr := runSSHCommand(deviceID, "uci show "+config+" 2>&1")
+		preview := services.PreviewCommands(commands)
+		redacted := make([]string, 0, len(preview))
+		for _, command := range preview {
+			redacted = append(redacted, redactUCICommand(command))
+		}
+		result := NamespaceResult{Config: config, Expected: redacted}
+		if readErr != nil {
+			result.Status = "UNREACHABLE"
+			result.Error = readErr.Error()
+		} else {
+			sections := parseUciShow(out, config)
+			result.Observed = redactUCIRaw(out)
+			for _, command := range commands {
+				if command.Option != "" && !uciCommandMatchesObserved(command, sections) {
+					formatted := redactUCICommand(services.PreviewCommands([]services.UciCommand{command})[0])
+					if isDefaultDifference(command, sections) {
+						result.Defaults = append(result.Defaults, formatted)
+					} else {
+						result.Missing = append(result.Missing, formatted)
+					}
+				}
+			}
+			if len(result.Missing) > 0 {
+				result.Status = "DRIFT_RELEVANT"
+			} else if len(result.Defaults) > 0 {
+				result.Status = "DRIFT_DEFAULT"
+			} else {
+				result.Status = "MATCH"
+			}
+		}
+		resultsByNamespace = append(resultsByNamespace, result)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"device_id": deviceID, "site_id": siteID, "role": role, "namespaces": resultsByNamespace, "read_only": true})
+}
+
 // ─── UCI Show Parser ─────────────────────────────────────────────────────────
 // Parses `uci show <config>` output into a structured map of sections.
 // Input format (programmable notation):
@@ -229,6 +392,61 @@ type UCISection struct {
 	Name    string                 `json:"name"`
 	IsAnon  bool                   `json:"is_anon"`
 	Options map[string]interface{} `json:"options"` // string or []string
+}
+
+func redactUCICommand(command string) string {
+	for _, option := range []string{"key", "password", "secret", "private_key", "auth_secret", "auth_key"} {
+		marker := "." + option + "="
+		if idx := strings.Index(command, marker); idx >= 0 {
+			return command[:idx+len(marker)] + "'<redacted>'"
+		}
+	}
+	return command
+}
+
+func redactUCIRaw(raw string) string {
+	lines := strings.Split(raw, "\n")
+	for i, line := range lines {
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		for _, option := range []string{"key", "password", "secret", "private_key", "auth_secret", "auth_key"} {
+			if strings.HasSuffix(parts[0], "."+option) {
+				lines[i] = parts[0] + "='<redacted>'"
+			}
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+func uciCommandMatchesObserved(command services.UciCommand, sections []UCISection) bool {
+	for _, section := range sections {
+		value, ok := section.Options[command.Option]
+		if !ok {
+			continue
+		}
+		if valueString, ok := value.(string); ok && valueString == command.Value {
+			return true
+		}
+		if values, ok := value.([]string); ok {
+			for _, item := range values {
+				if item == command.Value {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func isDefaultDifference(command services.UciCommand, _ []UCISection) bool {
+	// OpenWrt treats an omitted disabled option as enabled. Requiring an
+	// explicit disabled=0 would create noise for otherwise equivalent radios.
+	if command.Config == "wireless" && command.Option == "disabled" && command.Value == "0" {
+		return true
+	}
+	return false
 }
 
 func parseUciShow(raw string, config string) []UCISection {

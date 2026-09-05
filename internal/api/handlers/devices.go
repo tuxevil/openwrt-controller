@@ -13,6 +13,13 @@ import (
 	"openwrt-controller/internal/services"
 )
 
+func formatNullTime(value sql.NullTime) string {
+	if !value.Valid {
+		return ""
+	}
+	return value.Time.Format(time.RFC3339)
+}
+
 func GetDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
 
@@ -72,7 +79,7 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json FROM devices WHERE site_id = $1`
+	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json, last_rollout_status, last_rollout_at, last_health_check_at FROM devices WHERE site_id = $1`
 	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -81,6 +88,11 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	now := time.Now()
+	var desiredHash string
+	_ = database.Tx(r.Context()).QueryRow(
+		"SELECT COALESCE(version_hash, '') FROM agent_versions WHERE is_active = true AND site_id = $1 ORDER BY created_at DESC LIMIT 1",
+		siteID,
+	).Scan(&desiredHash)
 
 	var devices []map[string]interface{}
 	var deviceIDs []string
@@ -91,9 +103,10 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id string
 		var sID, name, model, status, lastIP, agentVersion sql.NullString
-		var lastSeen, lastPulled sql.NullTime
+		var lastSeen, lastPulled, rolloutAt, healthCheckAt sql.NullTime
+		var rolloutStatus sql.NullString
 		var stateJSON []byte
-		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON); err == nil {
+		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON, &rolloutStatus, &rolloutAt, &healthCheckAt); err == nil {
 			var lastSeenStr, lastPulledStr string
 			if lastSeen.Valid {
 				lastSeenStr = lastSeen.Time.Format(time.RFC3339)
@@ -114,6 +127,21 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 				"last_ip":               lastIP.String,
 				"agent_version":         agentVersion.String,
 				"open_incidents":        []map[string]string{},
+				"desired_hash":          desiredHash,
+				"observed_hash":         agentVersion.String,
+				"last_rollout_status":   rolloutStatus.String,
+				"last_rollout_at":       formatNullTime(rolloutAt),
+				"last_health_check_at":  formatNullTime(healthCheckAt),
+			}
+			switch {
+			case desiredHash == "":
+				dev["drift_status"] = "NO_DESIRED_VERSION"
+			case agentVersion.String == "":
+				dev["drift_status"] = "UNKNOWN"
+			case agentVersion.String == desiredHash:
+				dev["drift_status"] = "SYNCED"
+			default:
+				dev["drift_status"] = "DRIFT"
 			}
 			if len(stateJSON) > 0 {
 				var parsedState map[string]interface{}
@@ -160,6 +188,89 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"data":  devices,
 		"error": nil,
+	})
+}
+
+// GetSiteDriftSummaryHandler returns a read-only fleet-level configuration
+// summary. Deep per-device UCI inspection remains available through /drift.
+func GetSiteDriftSummaryHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	if siteID == "" {
+		http.Error(w, `{"error":"site_id is required"}`, http.StatusBadRequest)
+		return
+	}
+
+	var desiredHash string
+	_ = database.Tx(r.Context()).QueryRow(
+		"SELECT COALESCE(version_hash, '') FROM agent_versions WHERE site_id = $1 AND is_active = true ORDER BY created_at DESC LIMIT 1",
+		siteID,
+	).Scan(&desiredHash)
+
+	rows, err := database.Tx(r.Context()).Query(`
+		SELECT id, COALESCE(name, model, id), COALESCE(last_ip, ''),
+		       COALESCE(agent_version, ''), last_seen_at,
+		       COALESCE(last_rollout_status, ''), last_rollout_at,
+		       last_health_check_at
+		FROM devices WHERE site_id = $1 ORDER BY id
+	`, siteID)
+	if err != nil {
+		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	type deviceSummary struct {
+		DeviceID          string `json:"device_id"`
+		Name              string `json:"name"`
+		IP                string `json:"ip"`
+		DesiredHash       string `json:"desired_hash"`
+		ObservedHash      string `json:"observed_hash"`
+		DriftStatus       string `json:"drift_status"`
+		LastSeenAt        string `json:"last_seen_at,omitempty"`
+		LastRolloutStatus string `json:"last_rollout_status,omitempty"`
+		LastRolloutAt     string `json:"last_rollout_at,omitempty"`
+		LastHealthCheckAt string `json:"last_health_check_at,omitempty"`
+	}
+
+	devices := make([]deviceSummary, 0)
+	counts := map[string]int{}
+	for rows.Next() {
+		var d deviceSummary
+		var lastSeen, rolloutAt, healthAt sql.NullTime
+		if err := rows.Scan(&d.DeviceID, &d.Name, &d.IP, &d.ObservedHash, &lastSeen, &d.LastRolloutStatus, &rolloutAt, &healthAt); err != nil {
+			continue
+		}
+		d.DesiredHash = desiredHash
+		switch {
+		case desiredHash == "":
+			d.DriftStatus = "NO_DESIRED_VERSION"
+		case d.ObservedHash == "":
+			d.DriftStatus = "UNKNOWN"
+		case d.ObservedHash == desiredHash:
+			d.DriftStatus = "SYNCED"
+		default:
+			d.DriftStatus = "DRIFT"
+		}
+		if lastSeen.Valid {
+			d.LastSeenAt = lastSeen.Time.Format(time.RFC3339)
+		}
+		if rolloutAt.Valid {
+			d.LastRolloutAt = rolloutAt.Time.Format(time.RFC3339)
+		}
+		if healthAt.Valid {
+			d.LastHealthCheckAt = healthAt.Time.Format(time.RFC3339)
+		}
+		counts[d.DriftStatus]++
+		devices = append(devices, d)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"site_id":      siteID,
+		"desired_hash": desiredHash,
+		"devices":      devices,
+		"counts":       counts,
+		"read_only":    true,
 	})
 }
 

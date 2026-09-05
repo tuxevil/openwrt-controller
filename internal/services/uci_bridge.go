@@ -219,6 +219,7 @@ rollback() {
   uci commit %s
   exit 1
 }
+
 trap rollback ERR
 
 # Phase 2: Apply UCI mutations
@@ -240,6 +241,46 @@ rm -f /tmp/central_luci_bak_%s.conf
 exit 0
 `, config, config, config, config, config, config, config, config,
 		sb.String(), config, config, config, restartCmd, config, config)
+}
+
+// BuildSafeBatchScript adds a post-apply connectivity check to the normal
+// rollback-protected batch before the backup is removed.
+func BuildSafeBatchScript(config string, commands []UciCommand, healthTargets []string) string {
+	script := BuildBatchScript(config, commands)
+	if script == "" {
+		return ""
+	}
+	if len(healthTargets) == 0 {
+		healthTargets = []string{"1.1.1.1"}
+	}
+	var healthCheck strings.Builder
+	healthCheck.WriteString("\n")
+	for _, target := range healthTargets {
+		healthCheck.WriteString(fmt.Sprintf("ping -c 1 -W 2 %s >/dev/null 2>&1 || rollback\n", shellQuote(target)))
+	}
+	healthCheck.WriteString("\n")
+	return strings.Replace(script, "# Phase 5: Service restart", healthCheck.String()+"# Phase 6: Service restart", 1)
+}
+
+// BuildDryRunScript validates the batch without committing or restarting a
+// service. It is intended for a preview/validation pass before a rollout.
+func BuildDryRunScript(config string, commands []UciCommand) string {
+	if len(commands) == 0 || !validUCIName(config) {
+		return ""
+	}
+	var sb strings.Builder
+	for _, cmd := range commands {
+		if cmd.Config != config {
+			return ""
+		}
+		line := translateCommand(cmd)
+		if line == "" {
+			return ""
+		}
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
 }
 
 // translateCommand converts a UciCommand struct into its shell-safe UCI string.
