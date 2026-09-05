@@ -111,7 +111,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if storedToken != "" && validateDeviceTelemetryToken(storedToken, providedToken) != nil {
+		if storedToken != "" && validateDeviceTelemetryToken(storedToken, providedToken) != nil && !allowLegacyProvision() {
 			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}
