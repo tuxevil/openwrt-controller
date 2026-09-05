@@ -73,6 +73,18 @@ export default {
   importDeviceConfig(deviceId) {
     return apiClient.post(`/devices/${deviceId}/import-config`)
   },
+  runSiteBenchmark(siteId) {
+    return apiClient.post(`/sites/${siteId}/benchmark`)
+  },
+  runDeviceBenchmark(deviceId) {
+    return apiClient.post(`/devices/${deviceId}/benchmark`)
+  },
+  getSiteStarlink(siteId) {
+    return apiClient.get(`/sites/${siteId}/starlink`)
+  },
+  getSiteDriftSummary(siteId) {
+    return apiClient.get(`/sites/${siteId}/drift-summary`)
+  },
   getSiteDevices(siteId) {
     return apiClient.get(`/sites/${siteId}/devices`)
   },
@@ -169,8 +181,8 @@ export default {
   assignSiteProfile(siteId, profileId) {
     return apiClient.put(`/sites/${siteId}/profile`, { profile_id: profileId })
   },
-  massCommand(siteId, command) {
-    return apiClient.post('/orchestrator/command', { site_id: siteId, command })
+  massCommand(siteId, action, args, reason) {
+    return apiClient.post('/orchestrator/command', { site_id: siteId, action, args, reason })
   },
 
   // Audit

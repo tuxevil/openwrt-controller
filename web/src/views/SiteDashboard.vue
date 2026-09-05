@@ -13,15 +13,44 @@ const router = useRouter()
 const devices = ref([])
 const activeMetrics = ref([])
 const activeChartMetric = ref('signal')
+const driftSummary = ref({ desired_hash: '', devices: [], counts: {}, read_only: true })
 let pollingInterval
+
+const starlinkStatus = ref({
+  status: 'LOADING',
+  dish_rtt_ms: 0,
+  pop_rtt_ms: 0,
+  packet_loss_pct: 0,
+  health_rating: 'UNKNOWN'
+})
+
+const fetchStarlink = async () => {
+  try {
+    const res = await api.getSiteStarlink(props.site_id)
+    if (res.data) {
+      starlinkStatus.value = res.data
+    }
+  } catch (_) {}
+}
+
+const fetchDriftSummary = async () => {
+  try {
+    const res = await api.getSiteDriftSummary(props.site_id)
+    if (res.data) driftSummary.value = res.data
+  } catch (_) {}
+}
 
 onMounted(async () => {
   await fetchDevices()
   await fetchMetrics()
   await fetchSites()
+  await fetchStarlink()
+  await fetchDriftSummary()
   pollingInterval = setInterval(async () => {
     await fetchDevices()
     await fetchMetrics()
+    await fetchStarlink()
+    await fetchDriftSummary()
   }, 10000)
 })
 
@@ -205,6 +234,26 @@ const importError = ref('')
 const importSuccess = ref('')
 const importReport = ref(null)
 
+const runningBenchmark = ref(false)
+const benchmarkReport = ref(null)
+const benchmarkError = ref('')
+const showBenchmarkModal = ref(false)
+
+const runBenchmark = async () => {
+  runningBenchmark.value = true
+  benchmarkError.value = ''
+  benchmarkReport.value = null
+  showBenchmarkModal.value = true
+  try {
+    const res = await api.runSiteBenchmark(props.site_id)
+    benchmarkReport.value = res.data
+  } catch (err) {
+    benchmarkError.value = err.response?.data?.error || err.message || 'Benchmark execution failed'
+  } finally {
+    runningBenchmark.value = false
+  }
+}
+
 const importConfig = async () => {
   if (!selectedDeviceDetails.value) return
   importingConfig.value = true
@@ -254,17 +303,46 @@ const goBack = () => router.push('/global')
         <h1 class="text-3xl glitch-anim">SITE_MATRIX : {{ site_id.substring(0, 8) }}</h1>
       </div>
       <div class="flex items-center gap-4">
+        <button @click="runBenchmark" :disabled="runningBenchmark" class="neon-btn !text-cyan-400 !border-cyan-400 hover:!bg-cyan-900 border font-mono px-3 glitch-anim flex items-center gap-2">
+          <span v-if="runningBenchmark" class="animate-pulse">BENCHMARKING...</span>
+          <span v-else>[MESH_BENCHMARK]</span>
+        </button>
         <button @click="router.push(`/site/${site_id}/vpn`)" class="neon-btn !text-white !border-blue-500 hover:!bg-blue-900 border font-mono px-3 glitch-anim" style="color: #0047AB; border-color: #0047AB;">[SECURE_TUNNEL]</button>
         <div class="text-neon-green animate-pulse font-mono">&gt; LINK_ESTABLISHED</div>
       </div>
     </div>
 
     <!-- METRICS GRID -->
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 shrink-0">
+    <div class="grid grid-cols-1 md:grid-cols-4 gap-6 shrink-0">
       <div class="neon-panel">
         <h3 class="text-sm text-neon-green mb-4 border-b border-neon-green/30 pb-1">UPLINK_TRAFFIC</h3>
         <MetricHacker :data="activeMetrics" />
       </div>
+
+      <!-- STARLINK SAT PANEL -->
+      <div class="neon-panel border-cyan-400/50 shadow-cyan-400/10 flex flex-col justify-between">
+        <div class="flex justify-between items-center mb-2 border-b border-cyan-400/30 pb-1">
+          <h3 class="text-sm text-cyan-400 font-bold font-mono">STARLINK_LINK</h3>
+          <span :class="starlinkStatus.status === 'ONLINE' ? 'text-green-400' : starlinkStatus.status === 'MICRO_OUTAGE' ? 'text-amber-400 animate-pulse' : 'text-red-400'" class="text-xs font-bold font-mono">
+            [{{ starlinkStatus.status }}]
+          </span>
+        </div>
+        <div class="grid grid-cols-2 gap-2 text-xs font-mono my-auto">
+          <div class="bg-black/50 p-2 border border-white/10 rounded">
+            <span class="text-muted block text-[10px]">DISH_RTT</span>
+            <span class="text-white text-sm font-bold">{{ starlinkStatus.dish_rtt_ms ? starlinkStatus.dish_rtt_ms.toFixed(1) + ' ms' : '--' }}</span>
+          </div>
+          <div class="bg-black/50 p-2 border border-white/10 rounded">
+            <span class="text-muted block text-[10px]">POP_RTT</span>
+            <span class="text-cyan-400 text-sm font-bold">{{ starlinkStatus.pop_rtt_ms ? starlinkStatus.pop_rtt_ms.toFixed(1) + ' ms' : '--' }}</span>
+          </div>
+        </div>
+        <div class="flex justify-between items-center pt-2 text-[11px] font-mono border-t border-white/10">
+          <span class="text-muted">HEALTH_INDEX:</span>
+          <span :class="starlinkStatus.health_rating === 'OPTIMAL' ? 'text-green-400' : 'text-amber-400'" class="font-bold font-mono">{{ starlinkStatus.health_rating }}</span>
+        </div>
+      </div>
+
       <div class="neon-panel border-neon-amber/70 shadow-neon-amber/20">
         <h3 class="text-sm text-neon-amber mb-4 border-b border-neon-amber/30 pb-1">SYNC_STATUS</h3>
         <div class="flex flex-col gap-2 text-xs font-mono">
@@ -284,6 +362,37 @@ const goBack = () => router.push('/global')
       <div class="neon-panel">
         <h3 class="text-sm text-neon-green mb-4 border-b border-neon-green/30 pb-1">ACTIVE_NODES</h3>
         <div class="text-6xl text-center pt-2 font-mono neon-text-green">{{ devices.length }}</div>
+      </div>
+    </div>
+
+    <div class="neon-panel shrink-0 border-cyan-400/40">
+      <div class="flex items-center justify-between mb-3 border-b border-cyan-400/30 pb-2">
+        <h2 class="text-sm text-cyan-400 font-bold">&gt; CONFIGURATION_STATE</h2>
+        <span class="text-[10px] text-muted font-mono">READ_ONLY</span>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs font-mono">
+        <div class="border border-green-500/30 bg-green-500/5 p-3">
+          <span class="text-muted block">SYNCED</span>
+          <span class="text-green-400 text-2xl font-bold">{{ driftSummary.counts?.SYNCED || 0 }}</span>
+        </div>
+        <div class="border border-amber-500/30 bg-amber-500/5 p-3">
+          <span class="text-muted block">DRIFT</span>
+          <span class="text-amber-400 text-2xl font-bold">{{ driftSummary.counts?.DRIFT || 0 }}</span>
+        </div>
+        <div class="border border-cyan-500/30 bg-cyan-500/5 p-3">
+          <span class="text-muted block">UNKNOWN</span>
+          <span class="text-cyan-300 text-2xl font-bold">{{ driftSummary.counts?.UNKNOWN || 0 }}</span>
+        </div>
+        <div class="border border-white/10 bg-white/5 p-3">
+          <span class="text-muted block">LAST ROLLOUT</span>
+          <span class="text-white text-xs font-bold">{{ driftSummary.devices?.filter(d => d.last_rollout_at).length || 0 }} device(s)</span>
+        </div>
+      </div>
+      <div v-if="driftSummary.devices?.length" class="mt-3 flex flex-wrap gap-2">
+        <span v-for="device in driftSummary.devices" :key="device.device_id" class="text-[10px] px-2 py-1 border clip-chamfer"
+          :class="device.drift_status === 'SYNCED' ? 'text-green-400 border-green-500/40' : device.drift_status === 'DRIFT' ? 'text-amber-400 border-amber-500/40' : 'text-gray-400 border-gray-700'">
+          {{ device.name }}: {{ device.drift_status }}
+        </span>
       </div>
     </div>
 
@@ -338,11 +447,12 @@ const goBack = () => router.push('/global')
             </td>
             <td class="py-3 text-muted">{{ dev.state_json?.system?.uptime ? formatUptime(dev.state_json.system.uptime) : 'N/A' }}</td>
             <td class="py-3">
-              <span v-if="syncStatus(dev) === 'SYNCED'" class="px-2 py-0.5 bg-neon-green/20 text-neon-green border border-neon-green/50 clip-chamfer text-xs flex items-center gap-1 w-fit">
+                <span v-if="syncStatus(dev) === 'SYNCED'" class="px-2 py-0.5 bg-neon-green/20 text-neon-green border border-neon-green/50 clip-chamfer text-xs flex items-center gap-1 w-fit">
                 <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
                 SYNCED
               </span>
-              <span v-else-if="syncStatus(dev) === 'OUT_OF_SYNC'" class="px-2 py-0.5 bg-neon-amber/20 text-neon-amber border border-neon-amber/50 clip-chamfer text-xs glitch-anim w-fit block">OUT_OF_SYNC</span>
+               <span v-else-if="syncStatus(dev) === 'OUT_OF_SYNC' || dev.drift_status === 'DRIFT'" class="px-2 py-0.5 bg-neon-amber/20 text-neon-amber border border-neon-amber/50 clip-chamfer text-xs glitch-anim w-fit block">OUT_OF_SYNC</span>
+               <span v-else-if="dev.drift_status === 'DRIFT_DEFAULT'" class="px-2 py-0.5 bg-cyan-500/20 text-cyan-300 border border-cyan-500/50 clip-chamfer text-xs w-fit block">DEFAULT_DIFF</span>
               <span v-else class="text-muted text-xs">NO_PULL</span>
             </td>
             <td class="py-3 text-center flex justify-center gap-2">
@@ -528,6 +638,85 @@ const goBack = () => router.push('/global')
             </div>
           </div>
 
+        </div>
+      </div>
+    </div>
+
+    <!-- MESH BENCHMARK MODAL -->
+    <div v-if="showBenchmarkModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <div class="bg-black/90 border border-cyan-400/50 clip-chamfer p-6 max-w-4xl w-full max-h-[85vh] flex flex-col font-mono shadow-[0_0_30px_rgba(0,255,255,0.2)]">
+        <div class="flex justify-between items-center border-b border-cyan-400/30 pb-3 mb-4">
+          <div class="flex items-center gap-3">
+            <span class="text-cyan-400 text-lg font-bold">&gt; MESH_PERFORMANCE_BENCHMARK</span>
+            <span v-if="benchmarkReport" :class="benchmarkReport.overall_status === 'HEALTHY' ? 'bg-green-500/20 text-green-400 border border-green-500/40' : 'bg-amber-500/20 text-amber-400 border border-amber-500/40'" class="text-xs px-2 py-0.5 clip-chamfer font-bold">
+              [{{ benchmarkReport.overall_status }}]
+            </span>
+          </div>
+          <button @click="showBenchmarkModal = false" class="text-muted hover:text-white text-sm">[ESC_CLOSE]</button>
+        </div>
+
+        <div v-if="runningBenchmark" class="py-12 flex flex-col items-center justify-center gap-4 text-cyan-400">
+          <div class="w-12 h-12 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin"></div>
+          <div class="text-sm font-bold tracking-wider animate-pulse">&gt; EXECUTING ACTIVE IPERF3 &amp; LATENCY BURST ACROSS NODES...</div>
+          <div class="text-xs text-muted">Running 3-second non-disruptive tests and evaluating baseline variances</div>
+        </div>
+
+        <div v-else-if="benchmarkError" class="py-6 text-red-400 text-sm">
+          [ ERR ] {{ benchmarkError }}
+        </div>
+
+        <div v-else-if="benchmarkReport" class="flex-1 overflow-y-auto space-y-4 pr-1">
+          <div class="text-xs text-muted flex justify-between border-b border-green-500/20 pb-2">
+            <span>TIMESTAMP: {{ new Date(benchmarkReport.timestamp).toLocaleTimeString() }}</span>
+            <span v-if="benchmarkReport.anomalies_count === 0" class="text-green-400 font-bold">✓ ALL LINKS WITHIN EXPECTED BASELINES (NO DRIFT)</span>
+            <span v-else class="text-amber-400 font-bold">⚠ {{ benchmarkReport.anomalies_count }} ANOMALY DETECTED</span>
+          </div>
+
+          <div class="grid grid-cols-1 gap-3">
+            <div v-for="node in benchmarkReport.nodes" :key="node.device_id" class="border p-4 clip-chamfer bg-black/60 flex flex-col gap-2"
+                 :class="node.status === 'NOMINAL' ? 'border-green-500/30' : node.status === 'DEGRADED' ? 'border-amber-500/60 bg-amber-500/5' : 'border-red-500/60 bg-red-500/5'">
+              <div class="flex justify-between items-center">
+                <div class="flex items-center gap-2">
+                  <span class="text-white font-bold">{{ node.device_name }}</span>
+                  <span class="text-xs text-muted font-mono">({{ node.ip }})</span>
+                </div>
+                <div class="flex items-center gap-3">
+                  <span class="text-xs px-2 py-0.5 clip-chamfer font-bold"
+                        :class="node.status === 'NOMINAL' ? 'bg-green-500/20 text-green-400' : 'bg-amber-500/20 text-amber-400'">
+                    {{ node.status }}
+                  </span>
+                  <span class="text-lg font-bold font-mono" :class="node.status === 'NOMINAL' ? 'text-green-400' : 'text-amber-400'">
+                    {{ node.throughput_mbps ? node.throughput_mbps.toFixed(1) + ' Mbps' : 'N/A' }}
+                  </span>
+                </div>
+              </div>
+
+              <!-- Details bar -->
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs font-mono bg-black/40 p-2 rounded border border-white/10">
+                <div>MEDIUM: <span class="text-white">{{ node.baseline.medium }}</span></div>
+                <div>BASELINE: <span class="text-white">{{ node.baseline.expected_mbps }} Mbps</span></div>
+                <div>VARIANCE: <span :class="node.deviation_pct >= 0 ? 'text-green-400' : 'text-amber-400'">{{ node.deviation_pct > 0 ? '+' : '' }}{{ node.deviation_pct.toFixed(1) }}%</span></div>
+                <div>LATENCY: <span class="text-white">{{ node.latency_ms.toFixed(1) }} ms</span></div>
+              </div>
+
+              <!-- Assessment -->
+              <div class="text-xs" :class="node.status === 'NOMINAL' ? 'text-muted' : 'text-amber-400 font-bold'">
+                &gt; {{ node.assessment }}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="mt-4 pt-3 border-t border-cyan-400/20 flex justify-between items-center">
+          <span class="text-[11px] text-muted">OMEGA Performance Engine • Baseline-Aware Matrix Analyzer</span>
+          <div class="flex gap-3">
+            <button @click="runBenchmark" :disabled="runningBenchmark" class="neon-btn !text-cyan-400 !border-cyan-400 hover:!bg-cyan-400 hover:!text-black text-xs px-4 py-1">
+              RE-RUN BENCHMARK
+            </button>
+            <button @click="showBenchmarkModal = false" class="neon-btn !text-white !border-white hover:!bg-white text-xs px-4 py-1">
+              CLOSE
+            </button>
+          </div>
         </div>
       </div>
     </div>

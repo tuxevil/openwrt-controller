@@ -71,6 +71,20 @@ func WriteMetrics(deviceID string, metrics *models.DeviceMetrics) error {
 	return WriteAPI.WritePoint(context.Background(), p)
 }
 
+func GetInfluxOrg() string {
+	if org == "" {
+		return "openwrthub"
+	}
+	return org
+}
+
+func GetInfluxBucket() string {
+	if bucket == "" {
+		return "telemetry"
+	}
+	return bucket
+}
+
 func GetDeviceMetrics(deviceID string, duration string) ([]float64, error) {
 	if InfluxClient == nil {
 		return nil, fmt.Errorf("influx client not initialized")
