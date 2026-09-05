@@ -69,14 +69,21 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	providedKey := r.Header.Get("X-Site-Key")
-	if providedKey == "" {
-		http.Error(w, `{"error": "Forbidden: missing site key"}`, http.StatusForbidden)
+	providedToken := r.Header.Get("X-Device-Token")
+	if providedKey == "" && providedToken == "" {
+		http.Error(w, `{"error": "Forbidden: missing device credentials"}`, http.StatusForbidden)
 		return
 	}
 
-	tenantSchema, err := database.GetTenantSchemaForSiteKey(providedKey)
+	tenantSchema := ""
+	var err error
+	if providedToken != "" {
+		tenantSchema, err = database.GetTenantSchemaForDeviceToken(providedToken)
+	} else {
+		tenantSchema, err = database.GetTenantSchemaForSiteKey(providedKey)
+	}
 	if err != nil {
-		http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
+		http.Error(w, `{"error": "Forbidden: invalid device credentials"}`, http.StatusForbidden)
 		return
 	}
 
@@ -139,7 +146,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if siteKey != nil && *siteKey != "" {
-		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
+		if providedKey != "" && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
 			return
 		}

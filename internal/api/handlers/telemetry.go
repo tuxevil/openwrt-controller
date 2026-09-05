@@ -60,14 +60,19 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	// site and is sufficient to pull the agent/config endpoints.
 	log.Printf("[DEBUG] Telemetry received from device_id=%s, IP=%s, site_key_present=%t, device_token_present=%t", deviceID, r.RemoteAddr, providedKey != "", providedToken != "")
 
-	if providedKey == "" {
-		http.Error(w, "Forbidden: missing site key", http.StatusForbidden)
+	if providedKey == "" && providedToken == "" {
+		http.Error(w, "Forbidden: missing device credentials", http.StatusForbidden)
 		return
 	}
 
-	tenantSchema, err := database.GetTenantSchemaForSiteKey(providedKey)
+	tenantSchema := ""
+	if providedToken != "" {
+		tenantSchema, err = database.GetTenantSchemaForDeviceToken(providedToken)
+	} else {
+		tenantSchema, err = database.GetTenantSchemaForSiteKey(providedKey)
+	}
 	if err != nil {
-		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+		http.Error(w, "Forbidden: invalid device credentials", http.StatusForbidden)
 		return
 	}
 
@@ -96,15 +101,17 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Forbidden: device site is not configured", http.StatusForbidden)
 			return
 		}
-		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
+		if providedKey != "" && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
 			return
 		}
 		if storedToken == "" {
-			http.Error(w, "Forbidden: device token is not initialized", http.StatusForbidden)
-			return
+			if providedToken != "" || providedKey == "" {
+				http.Error(w, "Forbidden: device token is not initialized", http.StatusForbidden)
+				return
+			}
 		}
-		if err := validateDeviceTelemetryToken(storedToken, providedToken); err != nil {
+		if storedToken != "" && validateDeviceTelemetryToken(storedToken, providedToken) != nil {
 			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}
@@ -113,6 +120,9 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}
+	} else if providedToken != "" {
+		http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
+		return
 	}
 
 	// ── ZERO_TOUCH: Auto-Adoption ─────────────────────────────────────────────

@@ -17,8 +17,8 @@ grep -q 'exit 1' "$AGENT"
 
 # Runtime device-scoped calls must use the per-device token. The site key is
 # reserved for bootstrap and update discovery.
-grep -q 'TELEMETRY_HEADERS="-H X-Site-Key:\$SITE_KEY -H X-Device-Token:' "$AGENT"
-grep -q 'CONFIG_HEADERS="-H X-Site-Key:\$SITE_KEY -H X-Device-Token:' "$AGENT"
+grep -q 'TELEMETRY_HEADERS="-H X-Device-Token:' "$AGENT"
+grep -q 'CONFIG_HEADERS="-H X-Device-Token:' "$AGENT"
 
 # The bootstrap must download with the site key, not invent a device token.
 grep -q 'X-Site-Key: \$SITE_KEY' "$SCRIPT_DIR/99-nerve-center-bootstrap"

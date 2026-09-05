@@ -550,6 +550,7 @@ func createTenantTables(schema string) error {
 	// Idempotent tenant-schema migrations
 	migrations := []string{
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS device_token VARCHAR(255)", quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_devices_device_token ON %s.devices(device_token) WHERE device_token IS NOT NULL", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_config_pulled_at TIMESTAMP WITH TIME ZONE", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_ip VARCHAR(50)", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS agent_version VARCHAR(64)", quotedSchema),
@@ -986,6 +987,47 @@ func GetTenantSchemaForSiteKey(siteKey string) (string, error) {
 	}
 
 	return "", fmt.Errorf("site key not found in any tenant schema")
+}
+
+// GetTenantSchemaForDeviceToken resolves an enrolled device token to exactly
+// one active tenant schema. Tokens are compared by the database as parameters;
+// schema identifiers come only from the validated landlord registry.
+func GetTenantSchemaForDeviceToken(deviceToken string) (string, error) {
+	if strings.TrimSpace(deviceToken) == "" {
+		return "", fmt.Errorf("empty device token")
+	}
+	rows, err := DB.Query("SELECT schema_alias FROM tenants WHERE is_active = true")
+	if err != nil {
+		return "", err
+	}
+	defer rows.Close()
+
+	var match string
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			continue
+		}
+		schema, schemaErr := SafeTenantSchema(alias)
+		if schemaErr != nil {
+			continue
+		}
+		devicesTable := pgx.Identifier{schema, "devices"}.Sanitize()
+		var found bool
+		if err := DB.QueryRow(fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %s WHERE device_token = $1)", devicesTable), deviceToken).Scan(&found); err != nil {
+			continue
+		}
+		if found {
+			if match != "" {
+				return "", fmt.Errorf("device token is ambiguous")
+			}
+			match = schema
+		}
+	}
+	if match == "" {
+		return "", fmt.Errorf("device token not found")
+	}
+	return match, nil
 }
 
 // Queryer is the subset of *sql.DB / *sql.Tx that we use across

@@ -406,7 +406,7 @@ EOF
     # 6. ENVÍO DE TELEMETRÍA (Con X-Site-Key y comprobación de rollback)
     # The site key routes the request to its tenant; the device token is the
     # credential that authenticates this enrolled device.
-    TELEMETRY_HEADERS="-H X-Site-Key:$SITE_KEY -H X-Device-Token:$DEVICE_TOKEN"
+    TELEMETRY_HEADERS="-H X-Device-Token:$DEVICE_TOKEN"
     HTTP_CODE=$(curl -m 5 -s -X POST \
         -H "Content-Type: application/json" \
         $TELEMETRY_HEADERS \
@@ -433,7 +433,7 @@ EOF
 
     # 7. OBTENCIÓN DE CONFIGURACIÓN E INYECCIÓN DE LLAVE SSH
     # El controlador envía la llave pública en la respuesta de configuración
-    CONFIG_HEADERS="-H X-Site-Key:$SITE_KEY -H X-Device-Token:$DEVICE_TOKEN"
+    CONFIG_HEADERS="-H X-Device-Token:$DEVICE_TOKEN"
     CONFIG_RESPONSE=$(curl -m 5 -s -X GET $CONFIG_HEADERS "$CONFIG_URL")
 
 NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_token' 2>/dev/null)
