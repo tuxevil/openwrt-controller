@@ -121,6 +121,27 @@ while true; do
     BOARD=$(ubus call system board 2>/dev/null || echo "{}")
     SYS_INFO=$(ubus call system info 2>/dev/null || echo "{}")
 
+    # Keep this inventory bounded and best-effort: missing OpenWrt packages
+    # must not prevent the regular telemetry heartbeat.
+    CAP_ARCH=$(uname -m 2>/dev/null || echo unknown)
+    CAP_KERNEL=$(uname -r 2>/dev/null || echo unknown)
+    CAP_RELEASE=$(echo "$BOARD" | jsonfilter -e '@.release.version' 2>/dev/null || echo unknown)
+    CAP_RAM_MB=$(free -m 2>/dev/null | awk 'NR==2 && $2 ~ /^[0-9]+$/ {print $2}' || true)
+    CAP_FLASH_MB=$(df -Pm /overlay 2>/dev/null | awk 'NR==2 && $2 ~ /^[0-9]+$/ {print $2}' || true)
+    case "$CAP_RAM_MB" in *[!0-9]*|'') CAP_RAM_MB=0 ;; esac
+    case "$CAP_FLASH_MB" in *[!0-9]*|'') CAP_FLASH_MB=0 ;; esac
+    CAP_INTERFACES=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1 | head -n 32 | sed 's/.*/"&"/' | paste -sd, -)
+    [ -n "$CAP_INTERFACES" ] || CAP_INTERFACES=""
+    CAP_RADIOS=$(iwinfo 2>/dev/null | awk '/^[a-zA-Z0-9_.-]+[[:space:]]+ESSID:/ {print $1}' | head -n 16 | sed 's/.*/"&"/' | paste -sd, -)
+    [ -n "$CAP_RADIOS" ] || CAP_RADIOS=""
+    CAP_FIREWALL="unknown"
+    command -v fw4 >/dev/null 2>&1 && CAP_FIREWALL="firewall4"
+    command -v fw3 >/dev/null 2>&1 && CAP_FIREWALL="firewall3"
+    CAP_SWITCH="unknown"
+    [ -d /sys/class/net ] && { command -v bridge >/dev/null 2>&1 && CAP_SWITCH="dsa"; command -v swconfig >/dev/null 2>&1 && CAP_SWITCH="swconfig"; }
+    CAP_PACKAGES=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34])' | head -n 32 | sed 's/.*/"&"/' | paste -sd, -)
+    [ -n "$CAP_PACKAGES" ] || CAP_PACKAGES=""
+
     # 2. RECOLECCIÓN WIRELESS AVANZADA (Parser de 3 líneas para iwinfo)
     WIFI_DATA="{"
     FIRST_IFACE=1
@@ -336,7 +357,7 @@ while true; do
     "timestamp": $(date +%s),
     "board": $BOARD,
     "system": $SYS_INFO,
-    "capabilities": {"openwrt_release": $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.version' 2>/dev/null | sed 's/.*/"&"/' || echo '"unknown"'), "architecture": "$(uname -m 2>/dev/null || echo unknown)", "kernel": "$(uname -r 2>/dev/null || echo unknown)"},
+    "capabilities": {"openwrt_release":"$CAP_RELEASE","architecture":"$CAP_ARCH","kernel":"$CAP_KERNEL","ram_mb":${CAP_RAM_MB:-0},"flash_mb":${CAP_FLASH_MB:-0},"interfaces":[${CAP_INTERFACES}],"radios":[${CAP_RADIOS}],"switch_stack":"$CAP_SWITCH","firewall":"$CAP_FIREWALL","packages":[${CAP_PACKAGES}]},
     "wireless_stations": $WIFI_DATA,
     "top_talkers": $TOP_TALKERS,
     "iface_stats": $IFACE_STATS,
