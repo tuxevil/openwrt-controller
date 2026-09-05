@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"openwrt-controller/internal/database"
 )
@@ -65,10 +66,33 @@ type SiteConfig struct {
 
 // DeviceRoleInfo holds the device identity and role for rendering.
 type DeviceRoleInfo struct {
-	DeviceID string `json:"device_id"`
-	Hostname string `json:"hostname"`
-	LastIP   string `json:"last_ip"`
-	Role     string `json:"device_role"`
+	DeviceID     string             `json:"device_id"`
+	Hostname     string             `json:"hostname"`
+	LastIP       string             `json:"last_ip"`
+	Role         string             `json:"device_role"`
+	Capabilities DeviceCapabilities `json:"capabilities"`
+}
+
+type DeviceCapabilities struct {
+	Interfaces       []string `json:"interfaces"`
+	Radios           []string `json:"radios"`
+	WirelessSections []string `json:"wireless_sections"`
+}
+
+func resolveResources(capabilities DeviceCapabilities) (string, string, string) {
+	radioSection, radioDevice := "default_radio0", "radio0"
+	if len(capabilities.WirelessSections) >= 2 {
+		radioSection = capabilities.WirelessSections[0]
+		radioDevice = capabilities.WirelessSections[1]
+	}
+	sqmInterface := "eth1"
+	for _, iface := range capabilities.Interfaces {
+		if strings.HasPrefix(iface, "eth") || strings.HasPrefix(iface, "br-wan") {
+			sqmInterface = iface
+			break
+		}
+	}
+	return radioSection, radioDevice, sqmInterface
 }
 
 // RenderResult is the output of the rendering engine — UCI commands per device.
@@ -97,6 +121,7 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 		if role == "" {
 			role = "AP" // default
 		}
+		radioSection, radioDevice, sqmInterface := resolveResources(dev.Capabilities)
 
 		// ── SYSTEM (ALL roles) ───────────────────────────────────────
 		hostname := fmt.Sprintf("%s-%s-%d", cfg.HostnamePrefix, role, i+1)
@@ -112,17 +137,17 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 		if role == "Gateway" || role == "AP" {
 			if cfg.EnableGlobalSSID && cfg.GlobalSSID != "" {
 				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "wireless", Section: "default_radio0", Option: "ssid", Value: cfg.GlobalSSID},
-					UciCommand{Action: "set", Config: "wireless", Section: "default_radio0", Option: "encryption", Value: cfg.GlobalEncryption},
+					UciCommand{Action: "set", Config: "wireless", Section: radioSection, Option: "ssid", Value: cfg.GlobalSSID},
+					UciCommand{Action: "set", Config: "wireless", Section: radioSection, Option: "encryption", Value: cfg.GlobalEncryption},
 				)
 				if cfg.GlobalWPAKey != "" {
 					cmds = append(cmds,
-						UciCommand{Action: "set", Config: "wireless", Section: "default_radio0", Option: "key", Value: cfg.GlobalWPAKey},
+						UciCommand{Action: "set", Config: "wireless", Section: radioSection, Option: "key", Value: cfg.GlobalWPAKey},
 					)
 				}
 				// Enable radio
 				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "wireless", Section: "radio0", Option: "disabled", Value: "0"},
+					UciCommand{Action: "set", Config: "wireless", Section: radioDevice, Option: "disabled", Value: "0"},
 				)
 			}
 		}
@@ -137,7 +162,7 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 
 					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "enabled", Value: "1"},
 
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "interface", Value: "eth1"},
+					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "interface", Value: sqmInterface},
 
 					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "download", Value: strconv.Itoa(cfg.SqmDownload)},
 
@@ -513,7 +538,7 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 func GetSiteDevicesWithRoles(ctx context.Context, siteID string) ([]DeviceRoleInfo, error) {
 	rows, err := database.Tx(ctx).Query(`
 		SELECT id, COALESCE(state_json->'board'->>'hostname','UNKNOWN'),
-		       COALESCE(last_ip,''), COALESCE(device_role,'AP')
+		       COALESCE(last_ip,''), COALESCE(device_role,'AP'), COALESCE(capabilities, '{}')
 		FROM devices WHERE site_id = $1 AND status != 'OFFLINE'
 		ORDER BY device_role, id
 	`, siteID)
@@ -525,7 +550,9 @@ func GetSiteDevicesWithRoles(ctx context.Context, siteID string) ([]DeviceRoleIn
 	var devs []DeviceRoleInfo
 	for rows.Next() {
 		var d DeviceRoleInfo
-		if err := rows.Scan(&d.DeviceID, &d.Hostname, &d.LastIP, &d.Role); err == nil {
+		var capabilities []byte
+		if err := rows.Scan(&d.DeviceID, &d.Hostname, &d.LastIP, &d.Role, &capabilities); err == nil {
+			_ = json.Unmarshal(capabilities, &d.Capabilities)
 			devs = append(devs, d)
 		}
 	}
