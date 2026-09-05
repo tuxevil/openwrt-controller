@@ -3,11 +3,26 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"regexp"
 	"time"
 
 	"openwrt-controller/internal/database"
 )
+
+var siteIDPattern = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
+
+func buildStarlinkQuery(siteID string) (string, error) {
+	if !siteIDPattern.MatchString(siteID) {
+		return "", fmt.Errorf("invalid site ID")
+	}
+	return `from(bucket: "` + database.GetInfluxBucket() + `")
+		|> range(start: -2m)
+		|> filter(fn: (r) => r["_measurement"] == "starlink_health")
+		|> filter(fn: (r) => r["site_id"] == "` + siteID + `")
+		|> last()`, nil
+}
 
 type StarlinkStatus struct {
 	Status        string    `json:"status"`
@@ -39,10 +54,11 @@ func GetSiteStarlinkStatusHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queryAPI := database.InfluxClient.QueryAPI(database.GetInfluxOrg())
-	query := `from(bucket: "` + database.GetInfluxBucket() + `")
-		|> range(start: -2m)
-		|> filter(fn: (r) => r["_measurement"] == "starlink_health")
-		|> last()`
+	query, err := buildStarlinkQuery(siteID)
+	if err != nil {
+		http.Error(w, `{"error":"invalid site_id"}`, http.StatusBadRequest)
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
