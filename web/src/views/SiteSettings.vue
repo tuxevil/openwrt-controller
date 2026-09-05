@@ -21,6 +21,7 @@ import PortalTab from './SiteSettings/tabs/PortalTab.vue'
 import CredentialsTab from './SiteSettings/tabs/CredentialsTab.vue'
 import BaselinesTab from './SiteSettings/tabs/BaselinesTab.vue'
 import TopologyMetadataTab from './SiteSettings/tabs/TopologyMetadataTab.vue'
+import HealthChecksTab from './SiteSettings/tabs/HealthChecksTab.vue'
 
 const props = defineProps(['site_id'])
 
@@ -203,6 +204,11 @@ async function applyRevision() {
             v-else-if="activeTab === 'topology'"
             :config="config"
             :devices="devices"
+            @mark-dirty="dirty = true"
+          />
+          <HealthChecksTab
+            v-else-if="activeTab === 'health'"
+            :config="config"
             @mark-dirty="dirty = true"
           />
         </div>

@@ -74,6 +74,13 @@ export const SITE_SETTINGS_TABS = [
     color: '#facc15',
     badge: 'Site',
   },
+  {
+    id: 'health',
+    label: 'ROLLOUT HEALTH CHECKS',
+    icon: 'M12 3v18M3 12h18M5 5l14 14',
+    color: '#22c55e',
+    badge: 'Site',
+  },
 ]
 
 export const DEFAULT_TAB = 'wired'
