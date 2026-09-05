@@ -26,6 +26,8 @@ var allowedUciConfigs = map[string]struct{}{
 	"dropbear": {},
 	"uhttpd":   {},
 	"openvpn":  {},
+	"usteer":   {},
+	"sqm":      {},
 }
 
 func isAllowedUciConfig(s string) bool {

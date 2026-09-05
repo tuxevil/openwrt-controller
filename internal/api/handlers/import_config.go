@@ -74,7 +74,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Connect to device and run unified SSH query
-	cmd := `uci show wireless; echo "===SECTION_BREAK==="; uci show network; echo "===SECTION_BREAK==="; uci show dhcp; echo "===SECTION_BREAK==="; uci show firewall; echo "===SECTION_BREAK==="; uci show system; echo "===SECTION_BREAK==="; uci show dropbear`
+	cmd := `uci show wireless; echo "===SECTION_BREAK==="; uci show network; echo "===SECTION_BREAK==="; uci show dhcp; echo "===SECTION_BREAK==="; uci show firewall; echo "===SECTION_BREAK==="; uci show system; echo "===SECTION_BREAK==="; uci show dropbear; echo "===SECTION_BREAK==="; uci show usteer`
 	out, err := runSSHCommand(deviceID, cmd)
 	log.Printf("[IMPORT_DEBUG] runSSHCommand output: %q, error: %v", out, err)
 	if err != nil {
@@ -88,7 +88,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.Split(out, "===SECTION_BREAK===")
-	var rawWireless, rawNetwork, rawDhcp, rawFirewall, rawSystem, rawDropbear string
+	var rawWireless, rawNetwork, rawDhcp, rawFirewall, rawSystem, rawDropbear, rawUsteer string
 	if len(parts) > 0 {
 		rawWireless = parts[0]
 	}
@@ -107,6 +107,9 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	if len(parts) > 5 {
 		rawDropbear = parts[5]
 	}
+	if len(parts) > 6 {
+		rawUsteer = parts[6]
+	}
 
 	log.Printf("[IMPORT_DEBUG] rawWireless: %q, rawNetwork: %q", rawWireless, rawNetwork)
 	wirelessSecs := parseUciShow(rawWireless, "wireless")
@@ -116,42 +119,138 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	firewallSecs := parseUciShow(rawFirewall, "firewall")
 	systemSecs := parseUciShow(rawSystem, "system")
 	dropbearSecs := parseUciShow(rawDropbear, "dropbear")
+	usteerSecs := parseUciShow(rawUsteer, "usteer")
 
-	// 1. Parse Wireless (supporting multiple SSIDs)
-	type ImportedWLAN struct {
-		SSID          string `json:"ssid"`
-		Encryption    string `json:"encryption"`
-		WpaKeyPresent bool   `json:"wpa_key_present"`
-		WpaKey        string `json:"-"`
+	// Map radio devices to bands (2.4GHz / 5GHz)
+	radioBands := make(map[string]string)
+	for _, sec := range wirelessSecs {
+		if sec.Type == "wifi-device" {
+			band := "2.4GHz"
+			if bVal, ok := sec.Options["band"].(string); ok {
+				if strings.Contains(bVal, "5g") {
+					band = "5GHz"
+				} else if strings.Contains(bVal, "2g") {
+					band = "2.4GHz"
+				}
+			} else if chVal, ok := sec.Options["channel"].(string); ok {
+				if ch, err := strconv.Atoi(chVal); err == nil && ch >= 36 {
+					band = "5GHz"
+				}
+			}
+			radioBands[sec.ID] = band
+		}
 	}
-	var importedWLANs []ImportedWLAN
+
+	// 1. Parse Wireless (aggregating multi-band SSIDs)
+	type wlanAggregator struct {
+		ssid           string
+		encryption     string
+		key            string
+		bands          map[string]bool
+		roamingEnabled bool
+		ieee80211k     bool
+		ieee80211v     bool
+	}
+	wlanMap := make(map[string]*wlanAggregator)
+	var orderedSSIDs []string
 
 	for _, sec := range wirelessSecs {
 		if sec.Type == "wifi-iface" {
 			ssidVal, hasSSID := sec.Options["ssid"]
-			if hasSSID {
-				if s, ok := ssidVal.(string); ok && s != "" {
-					key := ""
-					if keyVal, hasKey := sec.Options["key"]; hasKey {
-						if k, ok := keyVal.(string); ok {
-							key = k
-						}
-					}
-					enc := "psk2"
-					if encVal, hasEnc := sec.Options["encryption"]; hasEnc {
-						if e, ok := encVal.(string); ok {
-							enc = e
-						}
-					}
-					importedWLANs = append(importedWLANs, ImportedWLAN{
-						SSID:          s,
-						Encryption:    enc,
-						WpaKeyPresent: key != "",
-						WpaKey:        key,
-					})
+			if !hasSSID {
+				continue
+			}
+			s, ok := ssidVal.(string)
+			if !ok || s == "" {
+				continue
+			}
+
+			key := ""
+			if kVal, ok := sec.Options["key"].(string); ok {
+				key = kVal
+			}
+			enc := "psk2"
+			if eVal, ok := sec.Options["encryption"].(string); ok && eVal != "" {
+				enc = eVal
+			}
+
+			rVal, _ := sec.Options["ieee80211r"].(string)
+			roam := (rVal == "1" || rVal == "true")
+			kVal, _ := sec.Options["ieee80211k"].(string)
+			k := (kVal == "1" || kVal == "true")
+			vVal, _ := sec.Options["ieee80211v"].(string)
+			v := (vVal == "1" || vVal == "true")
+
+			devName, _ := sec.Options["device"].(string)
+			band := radioBands[devName]
+			if band == "" {
+				band = "2.4GHz"
+			}
+
+			agg, exists := wlanMap[s]
+			if !exists {
+				agg = &wlanAggregator{
+					ssid:           s,
+					encryption:     enc,
+					key:            key,
+					bands:          make(map[string]bool),
+					roamingEnabled: roam,
+					ieee80211k:     k,
+					ieee80211v:     v,
+				}
+				wlanMap[s] = agg
+				orderedSSIDs = append(orderedSSIDs, s)
+			} else {
+				if key != "" && agg.key == "" {
+					agg.key = key
+				}
+				if enc != "" && (agg.encryption == "psk2" || agg.encryption == "") {
+					agg.encryption = enc
+				}
+				if roam {
+					agg.roamingEnabled = true
+				}
+				if k {
+					agg.ieee80211k = true
+				}
+				if v {
+					agg.ieee80211v = true
 				}
 			}
+			agg.bands[band] = true
 		}
+	}
+
+	type ImportedWLAN struct {
+		SSID           string `json:"ssid"`
+		Encryption     string `json:"encryption"`
+		WpaKeyPresent  bool   `json:"wpa_key_present"`
+		WpaKey         string `json:"-"`
+		Band           string `json:"band"`
+		RoamingEnabled bool   `json:"roaming_enabled"`
+		IEEE80211k     bool   `json:"ieee80211k"`
+		IEEE80211v     bool   `json:"ieee80211v"`
+	}
+	var importedWLANs []ImportedWLAN
+
+	for _, s := range orderedSSIDs {
+		agg := wlanMap[s]
+		band := "2.4GHz"
+		if agg.bands["2.4GHz"] && agg.bands["5GHz"] {
+			band = "both"
+		} else if agg.bands["5GHz"] {
+			band = "5GHz"
+		}
+		importedWLANs = append(importedWLANs, ImportedWLAN{
+			SSID:           agg.ssid,
+			Encryption:     agg.encryption,
+			WpaKeyPresent:  agg.key != "",
+			WpaKey:         agg.key,
+			Band:           band,
+			RoamingEnabled: agg.roamingEnabled,
+			IEEE80211k:     agg.ieee80211k,
+			IEEE80211v:     agg.ieee80211v,
+		})
 	}
 
 	var globalSSID, globalWPAKey, globalEncryption string
@@ -462,7 +561,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 2. Insert ALL WLAN configs that do not already exist
+	// 2. Insert or update ALL WLAN configs
 	for _, wlan := range importedWLANs {
 		var wlanExists bool
 		err = tx.QueryRow("SELECT EXISTS(SELECT 1 FROM "+schema+".wlans WHERE site_id = $1 AND ssid = $2)", siteID.String, wlan.SSID).Scan(&wlanExists)
@@ -472,12 +571,54 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		if !wlanExists {
 			_, err = tx.Exec(`
-				INSERT INTO `+schema+`.wlans (site_id, ssid, security, password, enabled, roaming_enabled)
-				VALUES ($1, true, $2, $3, $4, true, false)
-			`, siteID.String, wlan.SSID, wlan.Encryption, wlan.WpaKey)
+				INSERT INTO `+schema+`.wlans (site_id, ssid, security, password, enabled, roaming_enabled, band, ieee80211k, ieee80211v)
+				VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8)
+			`, siteID.String, wlan.SSID, wlan.Encryption, wlan.WpaKey, wlan.RoamingEnabled, wlan.Band, wlan.IEEE80211k, wlan.IEEE80211v)
 			if err != nil {
 				http.Error(w, fmt.Sprintf(`{"error": "Failed to insert WLAN: %s"}`, err.Error()), http.StatusInternalServerError)
 				return
+			}
+		} else {
+			_, err = tx.Exec(`
+				UPDATE `+schema+`.wlans
+				SET security = $1, password = $2, roaming_enabled = $3, band = $4, ieee80211k = $5, ieee80211v = $6, updated_at = CURRENT_TIMESTAMP
+				WHERE site_id = $7 AND ssid = $8
+			`, wlan.Encryption, wlan.WpaKey, wlan.RoamingEnabled, wlan.Band, wlan.IEEE80211k, wlan.IEEE80211v, siteID.String, wlan.SSID)
+			if err != nil {
+				http.Error(w, fmt.Sprintf(`{"error": "Failed to update WLAN: %s"}`, err.Error()), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+
+	// 2.1 Parse Usteer config
+	type ImportedUsteer struct {
+		Configured          bool   `json:"configured"`
+		MinConnectSNR       string `json:"min_connect_snr,omitempty"`
+		MinSNR              string `json:"min_snr,omitempty"`
+		SignalDiffThreshold string `json:"signal_diff_threshold,omitempty"`
+		RoamTriggerSNR      string `json:"roam_trigger_snr,omitempty"`
+		RoamScanSNR         string `json:"roam_scan_snr,omitempty"`
+	}
+	var importedUsteer ImportedUsteer
+
+	for _, sec := range usteerSecs {
+		if sec.Type == "usteer" {
+			importedUsteer.Configured = true
+			if v, ok := sec.Options["min_connect_snr"].(string); ok {
+				importedUsteer.MinConnectSNR = v
+			}
+			if v, ok := sec.Options["min_snr"].(string); ok {
+				importedUsteer.MinSNR = v
+			}
+			if v, ok := sec.Options["signal_diff_threshold"].(string); ok {
+				importedUsteer.SignalDiffThreshold = v
+			}
+			if v, ok := sec.Options["roam_trigger_snr"].(string); ok {
+				importedUsteer.RoamTriggerSNR = v
+			}
+			if v, ok := sec.Options["roam_scan_snr"].(string); ok {
+				importedUsteer.RoamScanSNR = v
 			}
 		}
 	}
@@ -532,6 +673,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		"timezone":            timezone,
 		"hostname_prefix":     hostnamePrefix,
 		"dropbear_port":       dropbearPort,
+		"usteer":              importedUsteer,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

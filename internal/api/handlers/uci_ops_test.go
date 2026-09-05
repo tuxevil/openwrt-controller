@@ -15,6 +15,8 @@ func TestIsAllowedUciConfig(t *testing.T) {
 		{"dropbear", true},
 		{"uhttpd", true},
 		{"openvpn", true},
+		{"usteer", true},
+		{"sqm", true},
 		// Disallowed — these were the historical attack surface.
 		{"public", false},
 		{"", false},
