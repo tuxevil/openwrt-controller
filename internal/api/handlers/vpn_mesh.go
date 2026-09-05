@@ -12,7 +12,11 @@ import (
 )
 
 func GetVPNMeshesHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	meshes, err := database.GetVPNMeshes(schema)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -25,7 +29,11 @@ func GetVPNMeshesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateVPNMeshHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	var mesh models.VPNMesh
 	if err := json.NewDecoder(r.Body).Decode(&mesh); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -47,7 +55,11 @@ func CreateVPNMeshHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteVPNMeshHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	meshID := r.PathValue("mesh_id")
 
 	if err := database.DeleteVPNMesh(schema, meshID); err != nil {
@@ -58,7 +70,11 @@ func DeleteVPNMeshHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func GetVPNMeshNodesHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	meshID := r.PathValue("mesh_id")
 
 	nodes, err := database.GetVPNMeshNodes(schema, meshID)
@@ -73,7 +89,11 @@ func GetVPNMeshNodesHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func AddVPNMeshNodeHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	meshID := r.PathValue("mesh_id")
 
 	var req struct {
@@ -110,7 +130,11 @@ func AddVPNMeshNodeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteVPNMeshNodeHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	nodeID := r.PathValue("node_id")
 
 	if err := database.DeleteVPNMeshNode(schema, nodeID); err != nil {
@@ -121,7 +145,11 @@ func DeleteVPNMeshNodeHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func SyncVPNMeshHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	meshID := r.PathValue("mesh_id")
 
 	// Call orchestrator

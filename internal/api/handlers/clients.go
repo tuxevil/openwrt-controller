@@ -40,6 +40,19 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Fetch custom hostnames first so we don't interleave active queries on the same Tx connection
+	customHostnames := make(map[string]string)
+	hRows, err := database.Tx(r.Context()).Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	if err == nil {
+		for hRows.Next() {
+			var m, h string
+			if err := hRows.Scan(&m, &h); err == nil {
+				customHostnames[strings.ToUpper(m)] = h
+			}
+		}
+		hRows.Close()
+	}
+
 	rows, err := database.Tx(r.Context()).Query(
 		"SELECT id, name, state_json FROM devices WHERE site_id = $1 AND state_json IS NOT NULL",
 		siteID,
@@ -49,19 +62,6 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-
-	// Fetch custom hostnames
-	customHostnames := make(map[string]string)
-	hRows, err := database.Tx(r.Context()).Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
-	if err == nil {
-		defer hRows.Close()
-		for hRows.Next() {
-			var m, h string
-			if err := hRows.Scan(&m, &h); err == nil {
-				customHostnames[strings.ToUpper(m)] = h
-			}
-		}
-	}
 
 	clientMap := make(map[string]*AggregatedClient)
 

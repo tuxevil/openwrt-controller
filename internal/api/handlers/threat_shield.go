@@ -25,9 +25,15 @@ func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	schema, err := database.GetTenantSchemaForSiteKey(siteKey)
+	if err != nil || schema == "" {
+		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+		return
+	}
+
 	var siteID string
-	err := database.Tx(r.Context()).QueryRow(
-		"SELECT id FROM sites WHERE api_key = $1", siteKey,
+	err = database.DB.QueryRow(
+		"SELECT id FROM "+schema+".sites WHERE api_key = $1", siteKey,
 	).Scan(&siteID)
 	if err != nil || siteID == "" {
 		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
@@ -36,8 +42,8 @@ func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Only serve if the site has threat_shield enabled
 	var enabled bool
-	_ = database.Tx(r.Context()).QueryRow(
-		"SELECT COALESCE(threat_shield_enabled, false) FROM sites WHERE id = $1", siteID,
+	_ = database.DB.QueryRow(
+		"SELECT COALESCE(threat_shield_enabled, false) FROM "+schema+".sites WHERE id = $1", siteID,
 	).Scan(&enabled)
 	if !enabled {
 		http.Error(w, "Threat Shield not enabled for this site", http.StatusForbidden)
@@ -49,6 +55,12 @@ func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Threat intel not yet available. Try again in a minute.", http.StatusServiceUnavailable)
 		return
 	}
+	// The list is validated during ingestion and again at the serving boundary.
+	// A stale or manually modified file must never reach an edge firewall.
+	if !services.ValidateThreatListContent(content) {
+		http.Error(w, "Threat intel list failed safety validation", http.StatusServiceUnavailable)
+		return
+	}
 
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("X-IP-Count", "see Content-Length")
@@ -58,6 +70,12 @@ func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
 // ToggleThreatShieldHandler enables or disables threat shield for a site.
 // POST /api/sites/{site_id}/threat-shield
 func ToggleThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+
 	siteID := r.PathValue("site_id")
 
 	var req struct {
@@ -68,14 +86,20 @@ func ToggleThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := database.Tx(r.Context()).Exec(
-		"UPDATE sites SET threat_shield_enabled = $1 WHERE id = $2",
+	_, err = database.Tx(r.Context()).Exec(
+		"UPDATE "+schema+".sites SET threat_shield_enabled = $1 WHERE id = $2",
 		req.Enabled, siteID,
 	)
 	if err != nil {
 		http.Error(w, `{"error":"db error"}`, http.StatusInternalServerError)
 		return
 	}
+
+	// Also update site_configs
+	_, _ = database.Tx(r.Context()).Exec(
+		"UPDATE "+schema+".site_configs SET threat_shield_enabled = $1 WHERE site_id = $2",
+		req.Enabled, siteID,
+	)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
@@ -87,11 +111,17 @@ func ToggleThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
 // GetSiteThreatShieldHandler returns per-site threat shield status + global intel metadata.
 // GET /api/sites/{site_id}/threat-shield
 func GetSiteThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+
 	siteID := r.PathValue("site_id")
 
 	var enabled bool
-	err := database.Tx(r.Context()).QueryRow(
-		"SELECT COALESCE(threat_shield_enabled, false) FROM sites WHERE id = $1", siteID,
+	err = database.Tx(r.Context()).QueryRow(
+		"SELECT COALESCE(threat_shield_enabled, false) FROM "+schema+".sites WHERE id = $1", siteID,
 	).Scan(&enabled)
 	if err != nil {
 		http.Error(w, `{"error":"site not found"}`, http.StatusNotFound)
@@ -101,10 +131,12 @@ func GetSiteThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
 	// Collect per-device drop stats
 	rows, _ := database.Tx(r.Context()).Query(`
 		SELECT id, COALESCE(name, id), COALESCE(threat_shield_drops, 0)
-		FROM devices
+		FROM `+schema+`.devices
 		WHERE site_id = $1
 	`, siteID)
-	defer rows.Close()
+	if rows != nil {
+		defer rows.Close()
+	}
 
 	type DeviceStat struct {
 		DeviceID string `json:"device_id"`

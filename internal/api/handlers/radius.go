@@ -3,8 +3,18 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"openwrt-controller/internal/api/middleware"
 	"openwrt-controller/internal/database"
 )
+
+func getTenantID(r *http.Request) string {
+	if claims, ok := middleware.GetClaims(r); ok {
+		if tid, ok := claims["tenant_id"].(string); ok {
+			return tid
+		}
+	}
+	return ""
+}
 
 type RadiusUser struct {
 	ID       int    `json:"id,omitempty"`
@@ -15,7 +25,11 @@ type RadiusUser struct {
 }
 
 func GetRadiusUsersHandler(w http.ResponseWriter, r *http.Request) {
-	tenantID := r.Context().Value("tenant_id").(string)
+	tenantID := getTenantID(r)
+	if tenantID == "" {
+		http.Error(w, `{"error":"missing tenant context"}`, http.StatusBadRequest)
+		return
+	}
 
 	rows, err := database.DB.Query(`
 		SELECT c.id, c.username, c.value, r.value, c.site_id
@@ -51,7 +65,11 @@ func GetRadiusUsersHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateRadiusUserHandler(w http.ResponseWriter, r *http.Request) {
-	tenantID := r.Context().Value("tenant_id").(string)
+	tenantID := getTenantID(r)
+	if tenantID == "" {
+		http.Error(w, `{"error":"missing tenant context"}`, http.StatusBadRequest)
+		return
+	}
 
 	var req RadiusUser
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -82,7 +100,11 @@ func CreateRadiusUserHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteRadiusUserHandler(w http.ResponseWriter, r *http.Request) {
-	tenantID := r.Context().Value("tenant_id").(string)
+	tenantID := getTenantID(r)
+	if tenantID == "" {
+		http.Error(w, `{"error":"missing tenant context"}`, http.StatusBadRequest)
+		return
+	}
 	username := r.URL.Query().Get("username")
 	siteID := r.URL.Query().Get("site_id")
 

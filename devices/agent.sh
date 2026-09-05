@@ -10,6 +10,8 @@ TELEMETRY_URL="$BASE_URL/telemetry"
 # Obtener MAC de la interfaz puente como ID único
 DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]' || cat /sys/class/net/eth0/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
+DEVICE_TOKEN_FILE="/etc/nerve-device-token"
+DEVICE_TOKEN="$(cat "$DEVICE_TOKEN_FILE" 2>/dev/null || true)"
 
 # logd is a local dependency, not part of the telemetry heartbeat.  On some
 # OpenWrt builds logread can remain blocked on the logd socket; running it in
@@ -374,9 +376,16 @@ EOF
 
     # 7. OBTENCIÓN DE CONFIGURACIÓN E INYECCIÓN DE LLAVE SSH
     # El controlador envía la llave pública en la respuesta de configuración
-    CONFIG_RESPONSE=$(curl -m 5 -s -X GET \
-        -H "X-Site-Key: $SITE_KEY" \
-        "$CONFIG_URL")
+    CONFIG_HEADERS="-H X-Site-Key:$SITE_KEY"
+    [ -n "$DEVICE_TOKEN" ] && CONFIG_HEADERS="$CONFIG_HEADERS -H X-Device-Token:$DEVICE_TOKEN"
+    CONFIG_RESPONSE=$(curl -m 5 -s -X GET $CONFIG_HEADERS "$CONFIG_URL")
+
+NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_token' 2>/dev/null)
+    if [ -n "$NEW_DEVICE_TOKEN" ] && [ "$NEW_DEVICE_TOKEN" != "$DEVICE_TOKEN" ]; then
+        printf '%s\n' "$NEW_DEVICE_TOKEN" > "$DEVICE_TOKEN_FILE"
+        chmod 600 "$DEVICE_TOKEN_FILE"
+        DEVICE_TOKEN="$NEW_DEVICE_TOKEN"
+    fi
 
     # 7.0 WIFI_SURVEY: detect survey mode from controller. When active:
     #   - telemetry interval drops to 2s (vs 10s normal)
@@ -392,10 +401,7 @@ EOF
     if [ "$SURVEY_MODE" = "true" ]; then
         # Build a compact neighbor_aps snapshot. iwinfo scan returns a
         # human-readable table; we only need BSSID,SSID,channel,signal per row.
-        NEIGHBOR_APS="[]"
-        FIRST_IF=1
-        NEIGHBOR_APS="["
-        for IFACE in $(ls /sys/class/net | grep -E "wlan|ath|radio|ra|phy"); do
+        NEIGHBOR_APS=$(for IFACE in $(ls /sys/class/net | grep -E "wlan|ath|radio|ra|phy"); do
             iwinfo "$IFACE" scan 2>/dev/null | awk -v iface="$IFACE" '
                 /Address:/ { bssid = $2 }
                 /ESSID:/   { essid = ""; for (i=2; i<=NF; i++) essid = essid (i==2?"":" ") $i; gsub(/"/, "", essid) }
@@ -408,17 +414,17 @@ EOF
                             }
                 END { exit }
             '
-        done | awk 'BEGIN{first=1} { if(NR>0){ if(!first)printf ","; printf "%s",$0; first=0} } END{print ""}'
-        # Wrap properly: prefix and suffix with brackets
-        if [ -n "$(echo "$NEIGHBOR_APS" | tr -d '[:space:]')" ]; then
-            NEIGHBOR_APS="[${NEIGHBOR_APS}]"
+        done | awk 'BEGIN{first=1} { if(NR>0){ if(!first)printf ","; printf "%s",$0; first=0} }'
+        )
+        [ -z "$NEIGHBOR_APS" ] && NEIGHBOR_APS=""
+        # Cap neighbor_aps to 64 entries to keep payload small (and prevent
+        # a busy AP environment from ballooning telemetry).
+        if [ -n "$NEIGHBOR_APS" ]; then
+            NEIGHBOR_APS=$(printf '%s\n' "$NEIGHBOR_APS" | awk -F '},' 'NR <= 64 { if (NR > 1) printf ","; printf "%s", $0 }')
+            NEIGHBOR_APS="[$NEIGHBOR_APS]"
         else
             NEIGHBOR_APS="[]"
         fi
-        # Cap neighbor_aps to 64 entries to keep payload small (and prevent
-        # a busy AP environment from ballooning telemetry).
-        NEIGHBOR_APS=$(echo "$NEIGHBOR_APS" | tr ',' '\n' | head -n 64 | tr '\n' ',' | sed 's/,$//')
-        NEIGHBOR_APS="[$NEIGHBOR_APS]"
     else
         NEIGHBOR_APS="[]"
     fi
@@ -685,8 +691,38 @@ EOF
                     "$BASE_URL/threat-shield/list" \
                     -o "$TS_LIST_FILE.tmp" 2>/dev/null; then
                 TS_COUNT=$(wc -l < "$TS_LIST_FILE.tmp" 2>/dev/null || echo 0)
-                if [ "$TS_COUNT" -gt 10 ]; then
-                    mv "$TS_LIST_FILE.tmp" "$TS_LIST_FILE"
+			if [ "$TS_COUNT" -gt 10 ]; then
+				# Never install malformed, non-routable, or private ranges from a feed.
+				TS_SAFE_FILE="$TS_LIST_FILE.safe"
+				awk '
+					function ipnum(a,b,c,d) { return (((a*256+b)*256+c)*256+d) }
+					NF && !/^#/ {
+						t=$1; gsub(/[;, \t].*/, "", t)
+						split(t, ip, "/"); split(ip[1], o, ".")
+						if (length(o) != 4 || ip[2] == "0" || ip[2] == "") next
+						base=ipnum(o[1],o[2],o[3],o[4])
+						if (base < ipnum(1,0,0,0) || base >= ipnum(224,0,0,0)) next
+						if (base >= ipnum(10,0,0,0) && base < ipnum(11,0,0,0)) next
+						if (base >= ipnum(100,64,0,0) && base < ipnum(100,128,0,0)) next
+						if (base >= ipnum(127,0,0,0) && base < ipnum(128,0,0,0)) next
+						if (base >= ipnum(169,254,0,0) && base < ipnum(169,255,0,0)) next
+						if (base >= ipnum(172,16,0,0) && base < ipnum(172,32,0,0)) next
+						if (base >= ipnum(192,168,0,0) && base < ipnum(192,169,0,0)) next
+						print t
+					}
+				' "$TS_LIST_FILE.tmp" > "$TS_SAFE_FILE"
+				TS_SAFE_COUNT=$(wc -l < "$TS_SAFE_FILE" 2>/dev/null || echo 0)
+				# Require a substantial safe subset and reject the feed if any
+				# line was discarded. This prevents partial/ambiguous feeds from
+				# silently changing firewall policy.
+				if [ "$TS_SAFE_COUNT" -lt 10 ] || [ "$TS_SAFE_COUNT" -ne "$TS_COUNT" ]; then
+					rm -f "$TS_LIST_FILE.tmp" "$TS_SAFE_FILE"
+					logger -t threat_shield "Rejected blocklist: insufficient safe entries"
+					continue
+				fi
+				mv "$TS_SAFE_FILE" "$TS_LIST_FILE.tmp"
+
+				mv "$TS_LIST_FILE.tmp" "$TS_LIST_FILE"
                     date +%s > "$TS_STAMP_FILE"
                     logger -t threat_shield "Blocklist updated: $TS_COUNT entries"
 

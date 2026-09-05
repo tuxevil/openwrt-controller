@@ -18,7 +18,11 @@ import (
 var interfaceNameRegex = regexp.MustCompile(`^[a-zA-Z0-9_.:-]{1,15}$`)
 
 func CapturePacketHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	deviceID := r.PathValue("device_id")
 
 	var req struct {
@@ -68,7 +72,11 @@ func CapturePacketHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func RunIperfHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	deviceID := r.PathValue("device_id")
 
 	var req struct {

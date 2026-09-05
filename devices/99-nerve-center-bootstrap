@@ -100,6 +100,10 @@ sed -i "s|CONTROLLER_IP=\"10.0.0.6\"|CONTROLLER_IP=\"$CONTROLLER_IP\"|g" "$AGENT
 sed -i "s|PORT=\"3000\"|PORT=\"$CONTROLLER_PORT\"|g" "$AGENT_DEST"
 echo "[+] Agent configured with site credentials."
 
+# The agent performs first enrollment with the site key, then persists the
+# per-device token returned by /devices/{id}/config. Legacy provisioning may
+# remain enabled only for this first enrollment transition.
+
 # 7. Register service via procd (rc.local fallback for simplicity)
 #    Creates a procd-compatible init script so the agent survives reboots.
 cat > /etc/init.d/nerve-agent << 'EOF'

@@ -2,9 +2,11 @@ package handlers
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +15,21 @@ import (
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
+
+func ensureDeviceToken(ctx context.Context, schema, deviceID string, current sql.NullString) (string, error) {
+	if current.Valid && current.String != "" {
+		return current.String, nil
+	}
+	tokenBytes := make([]byte, 24)
+	if _, err := rand.Read(tokenBytes); err != nil {
+		return "", err
+	}
+	token := fmt.Sprintf("%x", tokenBytes)
+	if _, err := database.Tx(ctx).Exec("UPDATE "+schema+".devices SET device_token = $1 WHERE id = $2", token, deviceID); err != nil {
+		return "", err
+	}
+	return token, nil
+}
 
 // allowLegacyProvision enables the historical behaviour where a device
 // could pull config with only an X-Site-Key (no per-device token). It is
@@ -73,17 +90,36 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	// --- Hardening: X-Device-Token is mandatory unless legacy mode is enabled ---
 	token := r.Header.Get("X-Device-Token")
-	if token == "" && !allowLegacyProvision() {
-		http.Error(w, `{"error": "X-Device-Token header is required"}`, http.StatusUnauthorized)
+	var storedToken sql.NullString
+	tokenErr := database.Tx(r.Context()).QueryRow("SELECT device_token FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&storedToken)
+	if tokenErr != nil && tokenErr != sql.ErrNoRows {
+		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
 	}
-	if token != "" {
-		var storedToken sql.NullString
-		err := database.Tx(r.Context()).QueryRow("SELECT device_token FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&storedToken)
-		if err == nil && storedToken.Valid && storedToken.String != "" && storedToken.String != token {
+	if token == "" {
+		// Narrow first-enrollment exception: an adopted device with no token
+		// may bootstrap using the site key and receive its token below.
+		if !allowLegacyProvision() && tokenErr == nil && storedToken.Valid && storedToken.String != "" {
+			http.Error(w, `{"error": "X-Device-Token header is required"}`, http.StatusUnauthorized)
+			return
+		}
+		if tokenErr == sql.ErrNoRows {
+			http.Error(w, `{"error":"device not found"}`, http.StatusNotFound)
+			return
+		}
+	} else {
+		if tokenErr != nil || !storedToken.Valid || storedToken.String == "" || storedToken.String != token {
 			http.Error(w, `{"error": "invalid device token"}`, http.StatusUnauthorized)
 			return
 		}
+	}
+	if token == "" && !storedToken.Valid {
+		generated, err := ensureDeviceToken(r.Context(), tenantSchema, deviceID, storedToken)
+		if err != nil {
+			http.Error(w, `{"error":"could not initialize device token"}`, http.StatusInternalServerError)
+			return
+		}
+		storedToken = sql.NullString{String: generated, Valid: true}
 	}
 
 	var siteID sql.NullString
@@ -118,6 +154,9 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	// Return the per-device token so the agent can persist it after adoption.
+	deviceToken := storedToken
 
 	// --- Módulo 2: Actualizar last_config_pulled_at ---
 	_, _ = database.Tx(r.Context()).Exec(
@@ -257,6 +296,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"action": "apply",
 		"config": map[string]interface{}{
+			"device_token": deviceToken.String,
 			"wireless": map[string]interface{}{
 				"wlans": wlansList,
 			},
@@ -267,8 +307,8 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 				"enabled":  tailscaleEnabled,
 				"auth_key": tailscaleAuthKey,
 			},
-			"survey_mode":   surveyModeFor(tenantSchema, siteID.String),
-			"survey_id":     surveyIDFor(tenantSchema, siteID.String),
+			"survey_mode":                       surveyModeFor(tenantSchema, siteID.String),
+			"survey_id":                         surveyIDFor(tenantSchema, siteID.String),
 			"survey_telemetry_interval_seconds": surveyIntervalFor(tenantSchema, siteID.String),
 		},
 	})

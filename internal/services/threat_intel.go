@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -14,6 +15,68 @@ import (
 
 	"openwrt-controller/internal/database"
 )
+
+var threatExcludedNetworks = []*net.IPNet{
+	{IP: net.IPv4zero, Mask: net.CIDRMask(8, 32)},
+	{IP: net.IPv4(10, 0, 0, 0), Mask: net.CIDRMask(8, 32)},
+	{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)},
+	{IP: net.IPv4(127, 0, 0, 0), Mask: net.CIDRMask(8, 32)},
+	{IP: net.IPv4(169, 254, 0, 0), Mask: net.CIDRMask(16, 32)},
+	{IP: net.IPv4(172, 16, 0, 0), Mask: net.CIDRMask(12, 32)},
+	{IP: net.IPv4(192, 0, 0, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(192, 0, 2, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(192, 168, 0, 0), Mask: net.CIDRMask(16, 32)},
+	{IP: net.IPv4(198, 18, 0, 0), Mask: net.CIDRMask(15, 32)},
+	{IP: net.IPv4(198, 51, 100, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(203, 0, 113, 0), Mask: net.CIDRMask(24, 32)},
+	{IP: net.IPv4(224, 0, 0, 0), Mask: net.CIDRMask(4, 32)},
+	{IP: net.IPv4(240, 0, 0, 0), Mask: net.CIDRMask(4, 32)},
+}
+
+func safeThreatCIDR(token string) bool {
+	ip, network, err := net.ParseCIDR(token)
+	if err != nil || ip.To4() == nil {
+		return false
+	}
+	network.IP = ip.To4().Mask(network.Mask)
+	for _, excluded := range threatExcludedNetworks {
+		if excluded.Contains(network.IP) ||
+			network.Contains(excluded.IP) ||
+			excluded.Contains(networkLastIP(network)) {
+			return false
+		}
+	}
+	return true
+}
+
+// ValidateThreatListContent applies the same safety policy to persisted data
+// before it is served to an edge device.
+func ValidateThreatListContent(content string) bool {
+	count := 0
+	for _, line := range strings.Split(content, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		token := strings.TrimSpace(fields[0])
+		if token == "" {
+			continue
+		}
+		if !safeThreatCIDR(strings.TrimRight(token, ";,")) {
+			return false
+		}
+		count++
+	}
+	return count >= 10
+}
+
+func networkLastIP(network *net.IPNet) net.IP {
+	last := network.IP.To4()
+	for i := range last {
+		last[i] |= ^network.Mask[i]
+	}
+	return last
+}
 
 const threatShieldListFile = "/tmp/threat_shield_combined.txt"
 
@@ -95,7 +158,7 @@ func fetchAndMergeLists() {
 			token = strings.TrimRight(token, ";,")
 
 			// Basic sanity: must start with a digit (IPv4) or digit-like prefix
-			if token == "" || token[0] < '0' || token[0] > '9' {
+			if token == "" || token[0] < '0' || token[0] > '9' || !safeThreatCIDR(token) {
 				continue
 			}
 

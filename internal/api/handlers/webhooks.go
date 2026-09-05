@@ -8,7 +8,11 @@ import (
 )
 
 func GetWebhooksHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 
 	rows, err := database.Tx(r.Context()).Query("SELECT id, url, secret, events, enabled, created_at FROM " + schema + ".webhooks")
 	if err != nil {
@@ -36,7 +40,11 @@ func GetWebhooksHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func CreateWebhookHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 
 	var req models.Webhook
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -46,7 +54,7 @@ func CreateWebhookHandler(w http.ResponseWriter, r *http.Request) {
 
 	eventsJSON, _ := json.Marshal(req.Events)
 
-	_, err := database.Tx(r.Context()).Exec(
+	_, err = database.Tx(r.Context()).Exec(
 		"INSERT INTO "+schema+".webhooks (url, secret, events, enabled) VALUES ($1, $2, $3, $4)",
 		req.URL, req.Secret, eventsJSON, req.Enabled,
 	)
@@ -60,10 +68,14 @@ func CreateWebhookHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func DeleteWebhookHandler(w http.ResponseWriter, r *http.Request) {
-	schema := r.Context().Value("schema").(string)
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 	whID := r.PathValue("webhook_id")
 
-	_, err := database.Tx(r.Context()).Exec("DELETE FROM "+schema+".webhooks WHERE id = $1", whID)
+	_, err = database.Tx(r.Context()).Exec("DELETE FROM "+schema+".webhooks WHERE id = $1", whID)
 	if err != nil {
 		http.Error(w, `{"error":"database error"}`, http.StatusInternalServerError)
 		return

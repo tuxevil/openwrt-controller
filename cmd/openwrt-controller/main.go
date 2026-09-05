@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"openwrt-controller/internal/api"
+	"openwrt-controller/internal/api/handlers"
 	"openwrt-controller/internal/authtickets"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/metrics"
@@ -87,8 +88,7 @@ func main() {
 	// read from this single KeyStore instead of each init() reading the
 	// file independently.
 	orchestrator.LoadKeyStore()
-	// The handlers package's RefreshSSHKeys() is now a no-op: the
-	// orchestrator.GetKeyStore().Get() path is the canonical one.
+	handlers.RefreshSSHKeys()
 
 	// Initialise the WebSocket ticket store (30s default TTL). The
 	// store is used by /api/ws-ticket to issue single-use tickets

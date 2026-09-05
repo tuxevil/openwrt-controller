@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -100,9 +99,22 @@ func getDeviceIPAndSchema(deviceID string) (string, string, error) {
 	return bestMatch.ip, bestMatch.schema, nil
 }
 
+func getSSHSigner() (ssh.Signer, error) {
+	if ks := orchestrator.GetKeyStore(); ks != nil {
+		if s, err := ks.Get(); err == nil && s != nil {
+			return s, nil
+		}
+	}
+	if PrivateKey != nil {
+		return PrivateKey, nil
+	}
+	return nil, fmt.Errorf("controller SSH key not configured")
+}
+
 func runSSHCommand(deviceID string, cmd string) (string, error) {
-	if PrivateKey == nil {
-		return "", fmt.Errorf("controller SSH key not configured")
+	signer, err := getSSHSigner()
+	if err != nil {
+		return "", err
 	}
 
 	targetIP, _, err := getDeviceIPAndSchema(deviceID)
@@ -112,7 +124,7 @@ func runSSHCommand(deviceID string, cmd string) (string, error) {
 
 	cfg := &ssh.ClientConfig{
 		User:            "root",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(PrivateKey)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 		Timeout:         30 * time.Second,
 	}
@@ -128,20 +140,17 @@ func runSSHCommand(deviceID string, cmd string) (string, error) {
 	}
 	defer sess.Close()
 
-	var out bytes.Buffer
-	sess.Stdout = &out
-	sess.Stderr = &out
-	sess.Stdin = strings.NewReader(cmd)
-	err = sess.Run("sh")
+	out, err := sess.CombinedOutput(cmd)
 	if err != nil {
-		return out.String(), fmt.Errorf("remote command failed: %w", err)
+		return string(out), fmt.Errorf("remote command failed: %w", err)
 	}
-	return out.String(), nil
+	return string(out), nil
 }
 
 func runSSHScript(deviceID string, script string) (string, error) {
-	if PrivateKey == nil {
-		return "", fmt.Errorf("controller SSH key not configured")
+	signer, err := getSSHSigner()
+	if err != nil {
+		return "", err
 	}
 
 	targetIP, _, err := getDeviceIPAndSchema(deviceID)
@@ -151,7 +160,7 @@ func runSSHScript(deviceID string, script string) (string, error) {
 
 	cfg := &ssh.ClientConfig{
 		User:            "root",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(PrivateKey)},
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
 		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 		Timeout:         60 * time.Second,
 	}
@@ -167,15 +176,12 @@ func runSSHScript(deviceID string, script string) (string, error) {
 	}
 	defer sess.Close()
 
-	var out bytes.Buffer
-	sess.Stdout = &out
-	sess.Stderr = &out
 	sess.Stdin = strings.NewReader(script)
-
-	if err := sess.Run("sh"); err != nil {
-		return out.String(), fmt.Errorf("script execution failed: %w", err)
+	out, err := sess.CombinedOutput("sh -s")
+	if err != nil {
+		return string(out), fmt.Errorf("script execution failed: %w", err)
 	}
-	return out.String(), nil
+	return string(out), nil
 }
 
 func readBody(w http.ResponseWriter, r *http.Request, target interface{}) bool {
