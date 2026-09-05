@@ -91,11 +91,7 @@ const syncStatus = (device) => {
 			: 'OUT_OF_SYNC'
 	}
 	if (device.last_rollout_status === 'SUCCESS') return 'SYNCED'
-	if (!device.last_config_pulled_at) return 'UNKNOWN'
-  const pulled = new Date(device.last_config_pulled_at).getTime()
-  const seen   = new Date(device.last_seen_at).getTime()
-  const diffSeconds = (seen - pulled) / 1000
-  return Math.abs(diffSeconds) < 30 ? 'SYNCED' : 'OUT_OF_SYNC'
+	return 'UNKNOWN'
 }
 
 const formatUptime = (seconds) => {
