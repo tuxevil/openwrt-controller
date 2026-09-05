@@ -258,6 +258,12 @@ export default {
   syncSiteFleet(siteId) {
     return apiClient.post(`/sites/${siteId}/orchestrator/sync`)
   },
+  getRolloutHistory(siteId, limit = 20) {
+    return apiClient.get(`/sites/${siteId}/orchestrator/rollouts`, { params: { limit } })
+  },
+  getRollout(siteId, rolloutId) {
+    return apiClient.get(`/sites/${siteId}/orchestrator/rollouts/${rolloutId}`)
+  },
 
   // ── LANDLORD / Multi-Tenant Management ────────────────────────────────────
   getLandlordTenants() {

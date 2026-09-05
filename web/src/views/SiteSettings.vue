@@ -22,6 +22,7 @@ import CredentialsTab from './SiteSettings/tabs/CredentialsTab.vue'
 import BaselinesTab from './SiteSettings/tabs/BaselinesTab.vue'
 import TopologyMetadataTab from './SiteSettings/tabs/TopologyMetadataTab.vue'
 import HealthChecksTab from './SiteSettings/tabs/HealthChecksTab.vue'
+import RolloutHistory from './SiteSettings/RolloutHistory.vue'
 
 const props = defineProps(['site_id'])
 
@@ -49,6 +50,7 @@ const showOverlay = ref(false)
 const overlayTitle = ref('')
 const overlayDevices = ref([])
 const syncSummary = ref(null)
+const rolloutRefreshKey = ref(0)
 
 // ─── Loaders that aren't part of site_config ────────────────────────────────
 async function loadDevices() {
@@ -89,6 +91,7 @@ async function applyRevision() {
 
     const syncRes = await api.syncSiteFleet(props.site_id)
     const data = syncRes.data
+    rolloutRefreshKey.value++
     overlayTitle.value = `REVISION APPLIED — ${data.successes} OK · ${data.failures} FAILED`
     overlayDevices.value = data.results || []
     syncSummary.value = { successes: data.successes, failures: data.failures }
@@ -211,6 +214,7 @@ async function applyRevision() {
             :config="config"
             @mark-dirty="dirty = true"
           />
+          <RolloutHistory :site-id="props.site_id" :refresh-key="rolloutRefreshKey" />
         </div>
       </main>
     </div>
