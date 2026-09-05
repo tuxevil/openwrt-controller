@@ -108,6 +108,7 @@ type RenderResult struct {
 	DeviceID string       `json:"device_id"`
 	Hostname string       `json:"hostname"`
 	Role     string       `json:"role"`
+	LastIP   string       `json:"last_ip"`
 	Commands []UciCommand `json:"commands"`
 }
 
@@ -351,6 +352,7 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 			DeviceID: dev.DeviceID,
 			Hostname: hostname,
 			Role:     role,
+			LastIP:   dev.LastIP,
 			Commands: cmds,
 		})
 	}

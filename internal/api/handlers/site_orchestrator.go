@@ -16,6 +16,7 @@ import (
 )
 
 const fleetSyncMaxConcurrency = 4
+const fleetSyncSequential = true
 
 type fleetSyncResult struct {
 	DeviceID string `json:"device_id"`
@@ -377,6 +378,9 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	phases := fleetRolloutPhases(len(results))
+	if fleetSyncSequential {
+		phases = sequentialFleetRolloutPhases(results)
+	}
 	executeBatch(phases[0])
 	canaryOK := syncResults[phases[0][0]].Status == "SUCCESS"
 	rolloutStatus := "completed"
@@ -629,6 +633,27 @@ func fleetRolloutPhases(deviceCount int) [][]int {
 			phase[offset] = start + offset
 		}
 		phases = append(phases, phase)
+	}
+	return phases
+}
+
+func sequentialFleetRolloutPhases(results []services.RenderResult) [][]int {
+	indices := make([]int, len(results))
+	for idx := range results {
+		indices[idx] = idx
+	}
+	sort.SliceStable(indices, func(i, j int) bool {
+		left, right := results[indices[i]], results[indices[j]]
+		leftGateway := left.Role == "Gateway"
+		rightGateway := right.Role == "Gateway"
+		if leftGateway != rightGateway {
+			return !leftGateway
+		}
+		return left.DeviceID < right.DeviceID
+	})
+	phases := make([][]int, 0, len(results))
+	for _, idx := range indices {
+		phases = append(phases, []int{idx})
 	}
 	return phases
 }

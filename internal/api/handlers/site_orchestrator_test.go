@@ -47,6 +47,24 @@ func TestFleetRolloutPhasesHandlesEmptyFleet(t *testing.T) {
 	}
 }
 
+func TestSequentialFleetRolloutPhasesPutGatewayLast(t *testing.T) {
+	results := []services.RenderResult{
+		{DeviceID: "gateway", Role: "Gateway"},
+		{DeviceID: "ap-b", Role: "AP"},
+		{DeviceID: "ap-a", Role: "AP"},
+	}
+	got := sequentialFleetRolloutPhases(results)
+	want := [][]int{{2}, {1}, {0}}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if len(got[i]) != 1 || got[i][0] != want[i][0] {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+	}
+}
+
 func TestFleetPlanHashIsStable(t *testing.T) {
 	first := fleetPlanHash([]services.RenderResult{{
 		DeviceID: "device-a",
