@@ -79,7 +79,7 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json, last_rollout_status, last_rollout_at, last_health_check_at FROM devices WHERE site_id = $1`
+	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json, last_rollout_status, last_rollout_at, last_health_check_at, desired_generation, observed_generation, last_successful_generation FROM devices WHERE site_id = $1`
 	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -105,8 +105,9 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		var sID, name, model, status, lastIP, agentVersion sql.NullString
 		var lastSeen, lastPulled, rolloutAt, healthCheckAt sql.NullTime
 		var rolloutStatus sql.NullString
+		var desiredGeneration, observedGeneration, lastSuccessfulGeneration int64
 		var stateJSON []byte
-		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON, &rolloutStatus, &rolloutAt, &healthCheckAt); err == nil {
+		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON, &rolloutStatus, &rolloutAt, &healthCheckAt, &desiredGeneration, &observedGeneration, &lastSuccessfulGeneration); err == nil {
 			var lastSeenStr, lastPulledStr string
 			if lastSeen.Valid {
 				lastSeenStr = lastSeen.Time.Format(time.RFC3339)
@@ -117,21 +118,24 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 			deviceIDs = append(deviceIDs, id)
 
 			dev := map[string]interface{}{
-				"id":                    id,
-				"site_id":               siteID,
-				"name":                  name.String,
-				"model":                 model.String,
-				"status":                status.String,
-				"last_seen_at":          lastSeenStr,
-				"last_config_pulled_at": lastPulledStr,
-				"last_ip":               lastIP.String,
-				"agent_version":         agentVersion.String,
-				"open_incidents":        []map[string]string{},
-				"desired_hash":          desiredHash,
-				"observed_hash":         agentVersion.String,
-				"last_rollout_status":   rolloutStatus.String,
-				"last_rollout_at":       formatNullTime(rolloutAt),
-				"last_health_check_at":  formatNullTime(healthCheckAt),
+				"id":                         id,
+				"site_id":                    siteID,
+				"name":                       name.String,
+				"model":                      model.String,
+				"status":                     status.String,
+				"last_seen_at":               lastSeenStr,
+				"last_config_pulled_at":      lastPulledStr,
+				"last_ip":                    lastIP.String,
+				"agent_version":              agentVersion.String,
+				"open_incidents":             []map[string]string{},
+				"desired_hash":               desiredHash,
+				"observed_hash":              agentVersion.String,
+				"last_rollout_status":        rolloutStatus.String,
+				"last_rollout_at":            formatNullTime(rolloutAt),
+				"last_health_check_at":       formatNullTime(healthCheckAt),
+				"desired_generation":         desiredGeneration,
+				"observed_generation":        observedGeneration,
+				"last_successful_generation": lastSuccessfulGeneration,
 			}
 			switch {
 			case desiredHash == "":
@@ -210,7 +214,8 @@ func GetSiteDriftSummaryHandler(w http.ResponseWriter, r *http.Request) {
 		SELECT id, COALESCE(name, model, id), COALESCE(last_ip, ''),
 		       COALESCE(agent_version, ''), last_seen_at,
 		       COALESCE(last_rollout_status, ''), last_rollout_at,
-		       last_health_check_at
+		       last_health_check_at, desired_generation, observed_generation,
+		       last_successful_generation
 		FROM devices WHERE site_id = $1 ORDER BY id
 	`, siteID)
 	if err != nil {
@@ -220,16 +225,19 @@ func GetSiteDriftSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	type deviceSummary struct {
-		DeviceID          string `json:"device_id"`
-		Name              string `json:"name"`
-		IP                string `json:"ip"`
-		DesiredHash       string `json:"desired_hash"`
-		ObservedHash      string `json:"observed_hash"`
-		DriftStatus       string `json:"drift_status"`
-		LastSeenAt        string `json:"last_seen_at,omitempty"`
-		LastRolloutStatus string `json:"last_rollout_status,omitempty"`
-		LastRolloutAt     string `json:"last_rollout_at,omitempty"`
-		LastHealthCheckAt string `json:"last_health_check_at,omitempty"`
+		DeviceID                 string `json:"device_id"`
+		Name                     string `json:"name"`
+		IP                       string `json:"ip"`
+		DesiredHash              string `json:"desired_hash"`
+		ObservedHash             string `json:"observed_hash"`
+		DriftStatus              string `json:"drift_status"`
+		LastSeenAt               string `json:"last_seen_at,omitempty"`
+		LastRolloutStatus        string `json:"last_rollout_status,omitempty"`
+		LastRolloutAt            string `json:"last_rollout_at,omitempty"`
+		LastHealthCheckAt        string `json:"last_health_check_at,omitempty"`
+		DesiredGeneration        int64  `json:"desired_generation"`
+		ObservedGeneration       int64  `json:"observed_generation"`
+		LastSuccessfulGeneration int64  `json:"last_successful_generation"`
 	}
 
 	devices := make([]deviceSummary, 0)
@@ -237,7 +245,7 @@ func GetSiteDriftSummaryHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var d deviceSummary
 		var lastSeen, rolloutAt, healthAt sql.NullTime
-		if err := rows.Scan(&d.DeviceID, &d.Name, &d.IP, &d.ObservedHash, &lastSeen, &d.LastRolloutStatus, &rolloutAt, &healthAt); err != nil {
+		if err := rows.Scan(&d.DeviceID, &d.Name, &d.IP, &d.ObservedHash, &lastSeen, &d.LastRolloutStatus, &rolloutAt, &healthAt, &d.DesiredGeneration, &d.ObservedGeneration, &d.LastSuccessfulGeneration); err != nil {
 			continue
 		}
 		d.DesiredHash = desiredHash
@@ -250,6 +258,9 @@ func GetSiteDriftSummaryHandler(w http.ResponseWriter, r *http.Request) {
 			d.DriftStatus = "SYNCED"
 		default:
 			d.DriftStatus = "DRIFT"
+		}
+		if d.DesiredGeneration > d.ObservedGeneration {
+			d.DriftStatus = "GENERATION_DRIFT"
 		}
 		if lastSeen.Valid {
 			d.LastSeenAt = lastSeen.Time.Format(time.RFC3339)

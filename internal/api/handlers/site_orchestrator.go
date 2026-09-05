@@ -307,6 +307,10 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"could not create rollout run"}`, http.StatusInternalServerError)
 		return
 	}
+	if err := markDesiredGeneration(r, siteID, generation); err != nil {
+		http.Error(w, `{"error":"could not assign rollout generation"}`, http.StatusInternalServerError)
+		return
+	}
 
 	// Execute the first device as a canary, then process the remaining devices
 	// in bounded batches only after the canary succeeds.
@@ -391,6 +395,10 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	if err := updateRolloutRun(r, rolloutID, rolloutStatus, syncResults); err != nil {
 		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to persist rollout %s: %v", rolloutID, err)
 	}
+	if err := markObservedGenerations(r, generation, syncResults); err != nil {
+		http.Error(w, `{"error":"could not persist device generations"}`, http.StatusInternalServerError)
+		return
+	}
 
 	// Count successes/failures
 	successes, failures := 0, 0
@@ -414,6 +422,43 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		"failures":   failures,
 		"results":    syncResults,
 	})
+}
+
+func markDesiredGeneration(r *http.Request, siteID string, generation int64) error {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		return err
+	}
+	_, err = database.Tx(r.Context()).ExecContext(r.Context(), "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2", generation, siteID)
+	return err
+}
+
+func markObservedGenerations(r *http.Request, generation int64, results []fleetSyncResult) error {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		return err
+	}
+	for _, result := range results {
+		if result.Status == "ABORTED" {
+			continue
+		}
+		status := "FAILED"
+		if result.Status == "SUCCESS" {
+			status = "SUCCESS"
+		}
+		query := "UPDATE " + schema + ".devices SET last_rollout_status = $1, last_rollout_at = CURRENT_TIMESTAMP"
+		args := []any{status, result.DeviceID}
+		if status == "SUCCESS" {
+			query += ", observed_generation = $2, last_successful_generation = $2 WHERE id = $3"
+			args = []any{status, generation, result.DeviceID}
+		} else {
+			query += " WHERE id = $2"
+		}
+		if _, err := database.Tx(r.Context()).ExecContext(r.Context(), query, args...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
