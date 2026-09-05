@@ -436,6 +436,21 @@ func createTenantTables(schema string) error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
+	CREATE TABLE IF NOT EXISTS rollout_runs (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		site_id UUID NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+		generation BIGINT NOT NULL,
+		status VARCHAR(32) NOT NULL,
+		plan_hash CHAR(64) NOT NULL,
+		requested_by VARCHAR(100) NOT NULL DEFAULT '',
+		target_device_ids JSONB NOT NULL DEFAULT '[]',
+		results JSONB NOT NULL DEFAULT '[]',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		UNIQUE(site_id, generation)
+	);
+	CREATE INDEX IF NOT EXISTS idx_rollout_runs_site_created ON rollout_runs(site_id, created_at DESC);
+
 	CREATE TABLE IF NOT EXISTS guest_vouchers (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		site_id UUID REFERENCES sites(id),

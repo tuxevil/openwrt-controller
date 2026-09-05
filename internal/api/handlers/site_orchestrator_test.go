@@ -46,3 +46,24 @@ func TestFleetRolloutPhasesHandlesEmptyFleet(t *testing.T) {
 		t.Fatalf("got phases %v, want nil", got)
 	}
 }
+
+func TestFleetPlanHashIsStable(t *testing.T) {
+	first := fleetPlanHash([]services.RenderResult{{
+		DeviceID: "device-a",
+		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-a"}},
+	}})
+	second := fleetPlanHash([]services.RenderResult{{
+		DeviceID: "device-a",
+		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-a"}},
+	}})
+	if first == "" || first != second {
+		t.Fatalf("plan hash is not stable: %q != %q", first, second)
+	}
+	changed := []services.RenderResult{{
+		DeviceID: "device-a",
+		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-b"}},
+	}}
+	if first == fleetPlanHash(changed) {
+		t.Fatal("different plans must have different hashes")
+	}
+}

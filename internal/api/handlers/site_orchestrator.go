@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -13,6 +14,16 @@ import (
 )
 
 const fleetSyncMaxConcurrency = 4
+
+type fleetSyncResult struct {
+	DeviceID string `json:"device_id"`
+	Hostname string `json:"hostname"`
+	Role     string `json:"role"`
+	Status   string `json:"status"`
+	Output   string `json:"output"`
+	Error    string `json:"error,omitempty"`
+	CmdCount int    `json:"cmd_count"`
+}
 
 // ─── SITE_ORCHESTRATOR Handlers ──────────────────────────────────────────────
 
@@ -289,20 +300,15 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := services.RenderSiteConfig(*sc, devs)
+	rolloutID, generation, err := createRolloutRun(r, siteID, username, results)
+	if err != nil {
+		http.Error(w, `{"error":"could not create rollout run"}`, http.StatusInternalServerError)
+		return
+	}
 
 	// Execute the first device as a canary, then process the remaining devices
 	// in bounded batches only after the canary succeeds.
-	type SyncResult struct {
-		DeviceID string `json:"device_id"`
-		Hostname string `json:"hostname"`
-		Role     string `json:"role"`
-		Status   string `json:"status"`
-		Output   string `json:"output"`
-		Error    string `json:"error,omitempty"`
-		CmdCount int    `json:"cmd_count"`
-	}
-
-	syncResults := make([]SyncResult, len(results))
+	syncResults := make([]fleetSyncResult, len(results))
 	executeBatch := func(indices []int) {
 		jobs := make(chan int)
 		workerCount := fleetSyncMaxConcurrency
@@ -317,7 +323,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 				for idx := range jobs {
 					rr := results[idx]
 
-					sr := SyncResult{
+					sr := fleetSyncResult{
 						DeviceID: rr.DeviceID,
 						Hostname: rr.Hostname,
 						Role:     rr.Role,
@@ -372,13 +378,16 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		rolloutStatus = "canary_failed"
 		for _, phase := range phases[1:] {
 			for _, idx := range phase {
-				syncResults[idx] = SyncResult{DeviceID: results[idx].DeviceID, Hostname: results[idx].Hostname, Role: results[idx].Role, Status: "ABORTED", CmdCount: len(results[idx].Commands), Error: "canary failed; rollout not started"}
+				syncResults[idx] = fleetSyncResult{DeviceID: results[idx].DeviceID, Hostname: results[idx].Hostname, Role: results[idx].Role, Status: "ABORTED", CmdCount: len(results[idx].Commands), Error: "canary failed; rollout not started"}
 			}
 		}
 	} else {
 		for _, phase := range phases[1:] {
 			executeBatch(phase)
 		}
+	}
+	if err := updateRolloutRun(r, rolloutID, rolloutStatus, syncResults); err != nil {
+		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to persist rollout %s: %v", rolloutID, err)
 	}
 
 	// Count successes/failures
@@ -396,11 +405,82 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    rolloutStatus,
-		"successes": successes,
-		"failures":  failures,
-		"results":   syncResults,
+		"status":     rolloutStatus,
+		"rollout_id": rolloutID,
+		"generation": generation,
+		"successes":  successes,
+		"failures":   failures,
+		"results":    syncResults,
 	})
+}
+
+func createRolloutRun(r *http.Request, siteID, username string, results []services.RenderResult) (string, int64, error) {
+	targets := make([]string, len(results))
+	for i, result := range results {
+		targets[i] = result.DeviceID
+	}
+	planHash := fleetPlanHash(results)
+	targetDeviceIDs, err := json.Marshal(targets)
+	if err != nil {
+		return "", 0, err
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		return "", 0, err
+	}
+	tx, err := database.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		return "", 0, err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(r.Context(), "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
+		return "", 0, err
+	}
+	var generation int64
+	err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(MAX(generation), 0) + 1 FROM "+schema+".rollout_runs WHERE site_id = $1", siteID).Scan(&generation)
+	if err != nil {
+		return "", 0, err
+	}
+	var id string
+	err = tx.QueryRowContext(r.Context(), "INSERT INTO "+schema+".rollout_runs (site_id, generation, status, plan_hash, requested_by, target_device_ids) VALUES ($1, $2, 'RUNNING', $3, $4, $5) RETURNING id", siteID, generation, planHash, username, targetDeviceIDs).Scan(&id)
+	if err != nil {
+		return "", 0, err
+	}
+	return id, generation, tx.Commit()
+}
+
+func fleetPlanHash(results []services.RenderResult) string {
+	encoded, _ := json.Marshal(results)
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+}
+
+func updateRolloutRun(r *http.Request, rolloutID, status string, results []fleetSyncResult) error {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(stripFleetSyncOutput(results))
+	if err != nil {
+		return err
+	}
+	tx, err := database.DB.BeginTx(r.Context(), nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err = tx.ExecContext(r.Context(), "UPDATE "+schema+".rollout_runs SET status = $1, results = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3", status, encoded, rolloutID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func stripFleetSyncOutput(results []fleetSyncResult) []fleetSyncResult {
+	clean := make([]fleetSyncResult, len(results))
+	copy(clean, results)
+	for i := range clean {
+		clean[i].Output = ""
+	}
+	return clean
 }
 
 // groupCommandsByConfig splits commands into per-namespace buckets for batch execution.
