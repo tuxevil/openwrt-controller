@@ -94,6 +94,19 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			modelStr = model
 		}
 	}
+	capabilities, hasCapabilities := raw["capabilities"]
+	capabilityPayload := []byte(nil)
+	if hasCapabilities {
+		if _, ok := capabilities.(map[string]interface{}); !ok {
+			http.Error(w, "Bad request: capabilities must be an object", http.StatusBadRequest)
+			return
+		}
+		capabilityPayload, err = json.Marshal(capabilities)
+		if err != nil {
+			http.Error(w, "Bad request: invalid capabilities", http.StatusBadRequest)
+			return
+		}
+	}
 
 	agentVersion := ""
 	if v, ok := raw["agent_version"].(string); ok {
@@ -106,11 +119,16 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Goroutine for PostgreSQL (upsert state and explicit model)
-	go func(devID string, state []byte, mod string, ip string, av string, schema string) {
+	go func(devID string, state, capabilities []byte, mod string, ip string, av string, schema string) {
 		if err := database.UpsertDeviceState(schema, devID, state, mod, ip, av); err != nil {
 			log.Printf("Error upserting device state to postgres: %v\n", err)
 		}
-	}(deviceID, body, modelStr, remoteIP, agentVersion, tenantSchema)
+		if len(capabilities) > 0 {
+			if _, err := database.DB.Exec("UPDATE "+schema+".devices SET capabilities = $1, capabilities_updated_at = CURRENT_TIMESTAMP WHERE id = $2", capabilities, devID); err != nil {
+				log.Printf("Error persisting device capabilities: %v", err)
+			}
+		}
+	}(deviceID, body, capabilityPayload, modelStr, remoteIP, agentVersion, tenantSchema)
 
 	// Extract Metrics cleanly bypassing struct matching
 	var metrics models.DeviceMetrics

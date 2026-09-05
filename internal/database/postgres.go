@@ -216,6 +216,8 @@ func createTenantTables(schema string) error {
 		desired_generation BIGINT NOT NULL DEFAULT 0,
 		observed_generation BIGINT NOT NULL DEFAULT 0,
 		last_successful_generation BIGINT NOT NULL DEFAULT 0,
+		capabilities JSONB,
+		capabilities_updated_at TIMESTAMP WITH TIME ZONE,
 		last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -572,6 +574,8 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS desired_generation BIGINT NOT NULL DEFAULT 0", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS observed_generation BIGINT NOT NULL DEFAULT 0", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_successful_generation BIGINT NOT NULL DEFAULT 0", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS capabilities JSONB", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS capabilities_updated_at TIMESTAMP WITH TIME ZONE", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211k BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211v BOOLEAN DEFAULT false", quotedSchema),

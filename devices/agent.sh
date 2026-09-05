@@ -336,6 +336,7 @@ while true; do
     "timestamp": $(date +%s),
     "board": $BOARD,
     "system": $SYS_INFO,
+    "capabilities": {"openwrt_release": $(ubus call system board 2>/dev/null | jsonfilter -e '@.release.version' 2>/dev/null | sed 's/.*/"&"/' || echo '"unknown"'), "architecture": "$(uname -m 2>/dev/null || echo unknown)", "kernel": "$(uname -r 2>/dev/null || echo unknown)"},
     "wireless_stations": $WIFI_DATA,
     "top_talkers": $TOP_TALKERS,
     "iface_stats": $IFACE_STATS,

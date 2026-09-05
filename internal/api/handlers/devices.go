@@ -79,7 +79,7 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json, last_rollout_status, last_rollout_at, last_health_check_at, desired_generation, observed_generation, last_successful_generation FROM devices WHERE site_id = $1`
+	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json, last_rollout_status, last_rollout_at, last_health_check_at, desired_generation, observed_generation, last_successful_generation, capabilities FROM devices WHERE site_id = $1`
 	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -106,8 +106,9 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		var lastSeen, lastPulled, rolloutAt, healthCheckAt sql.NullTime
 		var rolloutStatus sql.NullString
 		var desiredGeneration, observedGeneration, lastSuccessfulGeneration int64
+		var capabilities []byte
 		var stateJSON []byte
-		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON, &rolloutStatus, &rolloutAt, &healthCheckAt, &desiredGeneration, &observedGeneration, &lastSuccessfulGeneration); err == nil {
+		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON, &rolloutStatus, &rolloutAt, &healthCheckAt, &desiredGeneration, &observedGeneration, &lastSuccessfulGeneration, &capabilities); err == nil {
 			var lastSeenStr, lastPulledStr string
 			if lastSeen.Valid {
 				lastSeenStr = lastSeen.Time.Format(time.RFC3339)
@@ -136,6 +137,12 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 				"desired_generation":         desiredGeneration,
 				"observed_generation":        observedGeneration,
 				"last_successful_generation": lastSuccessfulGeneration,
+			}
+			if len(capabilities) > 0 {
+				var parsedCapabilities map[string]interface{}
+				if json.Unmarshal(capabilities, &parsedCapabilities) == nil {
+					dev["capabilities"] = parsedCapabilities
+				}
 			}
 			switch {
 			case desiredHash == "":
