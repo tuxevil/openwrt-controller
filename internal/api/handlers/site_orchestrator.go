@@ -251,8 +251,8 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// SyncFleetHandler executes the full fleet synchronization.
-// It renders UCI commands per role, then pushes batch scripts to each device in parallel.
+// SyncFleetHandler executes a staged fleet synchronization.
+// It validates one canary device before pushing bounded batches to the rest.
 func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	username := GetUsernameFromReq(r)
@@ -290,7 +290,8 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	results := services.RenderSiteConfig(*sc, devs)
 
-	// Execute in parallel, collect results
+	// Execute the first device as a canary, then process the remaining devices
+	// in bounded batches only after the canary succeeds.
 	type SyncResult struct {
 		DeviceID string `json:"device_id"`
 		Hostname string `json:"hostname"`
@@ -302,68 +303,83 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	syncResults := make([]SyncResult, len(results))
-	type fleetJob struct {
-		idx    int
-		result services.RenderResult
-	}
-	jobs := make(chan fleetJob)
-	workerCount := fleetSyncMaxConcurrency
-	if len(results) < workerCount {
-		workerCount = len(results)
-	}
-	var wg sync.WaitGroup
-	for worker := 0; worker < workerCount; worker++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for job := range jobs {
-				idx, rr := job.idx, job.result
+	executeBatch := func(indices []int) {
+		jobs := make(chan int)
+		workerCount := fleetSyncMaxConcurrency
+		if len(indices) < workerCount {
+			workerCount = len(indices)
+		}
+		var wg sync.WaitGroup
+		for worker := 0; worker < workerCount; worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for idx := range jobs {
+					rr := results[idx]
 
-				sr := SyncResult{
-					DeviceID: rr.DeviceID,
-					Hostname: rr.Hostname,
-					Role:     rr.Role,
-					CmdCount: len(rr.Commands),
-				}
-
-				if len(rr.Commands) == 0 {
-					sr.Status = "SKIPPED"
-					sr.Output = "No commands to execute"
-					syncResults[idx] = sr
-					continue
-				}
-
-				// Group commands by config namespace to build per-namespace batch scripts
-				configGroups := groupCommandsByConfig(rr.Commands)
-				var allOutput string
-				for _, cfg := range sortedConfigNames(configGroups) {
-					cmds := configGroups[cfg]
-					script := services.BuildSafeBatchScript(cfg, cmds, healthTargets)
-					out, err := runSSHScript(rr.DeviceID, script)
-					allOutput += out + "\n"
-					if err != nil {
-						sr.Status = "FAILED"
-						sr.Error = err.Error()
-						sr.Output = allOutput
-						syncResults[idx] = sr
-						break
+					sr := SyncResult{
+						DeviceID: rr.DeviceID,
+						Hostname: rr.Hostname,
+						Role:     rr.Role,
+						CmdCount: len(rr.Commands),
 					}
+
+					if len(rr.Commands) == 0 {
+						sr.Status = "SKIPPED"
+						sr.Output = "No commands to execute"
+						syncResults[idx] = sr
+						continue
+					}
+
+					// Group commands by config namespace to build per-namespace batch scripts
+					configGroups := groupCommandsByConfig(rr.Commands)
+					var allOutput string
+					for _, cfg := range sortedConfigNames(configGroups) {
+						cmds := configGroups[cfg]
+						script := services.BuildSafeBatchScript(cfg, cmds, healthTargets)
+						out, err := runSSHScript(rr.DeviceID, script)
+						allOutput += out + "\n"
+						if err != nil {
+							sr.Status = "FAILED"
+							sr.Error = err.Error()
+							sr.Output = allOutput
+							syncResults[idx] = sr
+							break
+						}
+					}
+					if sr.Status == "FAILED" {
+						continue
+					}
+					sr.Status = "SUCCESS"
+					sr.Output = allOutput
+					syncResults[idx] = sr
+					log.Printf("[SITE_ORCHESTRATOR] Synced %s (%s) - %d commands", rr.Hostname, rr.Role, len(rr.Commands))
 				}
-				if sr.Status == "FAILED" {
-					continue
-				}
-				sr.Status = "SUCCESS"
-				sr.Output = allOutput
-				syncResults[idx] = sr
-				log.Printf("[SITE_ORCHESTRATOR] Synced %s (%s) - %d commands", rr.Hostname, rr.Role, len(rr.Commands))
+			}()
+		}
+		for _, idx := range indices {
+			jobs <- idx
+		}
+		close(jobs)
+		wg.Wait()
+	}
+
+	phases := fleetRolloutPhases(len(results))
+	executeBatch(phases[0])
+	canaryOK := syncResults[phases[0][0]].Status == "SUCCESS"
+	rolloutStatus := "completed"
+	if !canaryOK {
+		rolloutStatus = "canary_failed"
+		for _, phase := range phases[1:] {
+			for _, idx := range phase {
+				syncResults[idx] = SyncResult{DeviceID: results[idx].DeviceID, Hostname: results[idx].Hostname, Role: results[idx].Role, Status: "ABORTED", CmdCount: len(results[idx].Commands), Error: "canary failed; rollout not started"}
 			}
-		}()
+		}
+	} else {
+		for _, phase := range phases[1:] {
+			executeBatch(phase)
+		}
 	}
-	for i, res := range results {
-		jobs <- fleetJob{idx: i, result: res}
-	}
-	close(jobs)
-	wg.Wait()
 
 	// Count successes/failures
 	successes, failures := 0, 0
@@ -380,7 +396,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":    "completed",
+		"status":    rolloutStatus,
 		"successes": successes,
 		"failures":  failures,
 		"results":   syncResults,
@@ -403,4 +419,23 @@ func sortedConfigNames(groups map[string][]services.UciCommand) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func fleetRolloutPhases(deviceCount int) [][]int {
+	if deviceCount == 0 {
+		return nil
+	}
+	phases := [][]int{{0}}
+	for start := 1; start < deviceCount; start += fleetSyncMaxConcurrency {
+		end := start + fleetSyncMaxConcurrency
+		if end > deviceCount {
+			end = deviceCount
+		}
+		phase := make([]int, end-start)
+		for offset := range phase {
+			phase[offset] = start + offset
+		}
+		phases = append(phases, phase)
+	}
+	return phases
 }
