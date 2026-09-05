@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -15,6 +17,19 @@ import (
 	"openwrt-controller/internal/models"
 	"openwrt-controller/internal/services"
 )
+
+func validateDeviceTelemetryToken(storedToken, providedToken string) error {
+	if storedToken == "" {
+		if providedToken == "" {
+			return nil
+		}
+		return fmt.Errorf("device token is not initialized")
+	}
+	if providedToken == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(storedToken)) != 1 {
+		return fmt.Errorf("invalid device token")
+	}
+	return nil
+}
 
 func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	// Method check is redundant — routes.go registers POST only.
@@ -58,16 +73,43 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 
 	var siteKey *string
 	var storedDeviceToken *string
+	var deviceSiteID *string
 	err = database.Tx(r.Context()).QueryRow(`
-		SELECT s.api_key, d.device_token FROM `+tenantSchema+`.sites s
-		JOIN `+tenantSchema+`.devices d ON d.site_id = s.id 
-		WHERE d.id = $1`, deviceID).Scan(&siteKey, &storedDeviceToken)
-	if err == nil && siteKey != nil && *siteKey != "" {
+		SELECT d.site_id, s.api_key, d.device_token FROM `+tenantSchema+`.devices d
+		LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
+		WHERE d.id = $1`, deviceID).Scan(&deviceSiteID, &siteKey, &storedDeviceToken)
+	if err == sql.ErrNoRows {
+		http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
+		return
+	}
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+	assigned := deviceSiteID != nil && *deviceSiteID != ""
+	storedToken := ""
+	if storedDeviceToken != nil {
+		storedToken = *storedDeviceToken
+	}
+	if assigned {
+		if siteKey == nil || *siteKey == "" {
+			http.Error(w, "Forbidden: device site is not configured", http.StatusForbidden)
+			return
+		}
 		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
 			return
 		}
-		if storedDeviceToken != nil && *storedDeviceToken != "" && (providedToken == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(*storedDeviceToken)) != 1) {
+		if storedToken == "" {
+			http.Error(w, "Forbidden: device token is not initialized", http.StatusForbidden)
+			return
+		}
+		if err := validateDeviceTelemetryToken(storedToken, providedToken); err != nil {
+			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
+			return
+		}
+	} else if storedToken != "" {
+		if err := validateDeviceTelemetryToken(storedToken, providedToken); err != nil {
 			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}
@@ -76,7 +118,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	// ── ZERO_TOUCH: Auto-Adoption ─────────────────────────────────────────────
 	// If the device has no site_id yet, check if the X-Site-Key matches a site
 	// with auto_adopt=true. If so, adopt the device automatically.
-	if err != nil && providedKey != "" {
+	if !assigned && storedToken == "" && providedKey != "" {
 		var autoSiteID string
 		var autoAdopt bool
 		zeroTouchErr := database.Tx(r.Context()).QueryRow(`
@@ -84,12 +126,16 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		`, providedKey).Scan(&autoSiteID, &autoAdopt)
 
 		if zeroTouchErr == nil && autoAdopt {
-			_, _ = database.Tx(r.Context()).Exec(
-				"UPDATE "+tenantSchema+".devices SET site_id = $1, status = 'Adopted' WHERE id = $2",
+			result, updateErr := database.Tx(r.Context()).Exec(
+				"UPDATE "+tenantSchema+".devices SET site_id = $1, status = 'Adopted' WHERE id = $2 AND site_id IS NULL",
 				autoSiteID, deviceID,
 			)
-			log.Printf("[ZERO_TOUCH] Device %s auto-adopted to site %s", deviceID, autoSiteID)
-			go database.InsertAuditLog("system", "ZERO_TOUCH_ADOPTION", "DEVICE", deviceID, "auto-adopted to site: "+autoSiteID, r.RemoteAddr)
+			if updateErr == nil {
+				if affected, rowsErr := result.RowsAffected(); rowsErr == nil && affected == 1 {
+					log.Printf("[ZERO_TOUCH] Device %s auto-adopted to site %s", deviceID, autoSiteID)
+					go database.InsertAuditLog("system", "ZERO_TOUCH_ADOPTION", "DEVICE", deviceID, "auto-adopted to site: "+autoSiteID, r.RemoteAddr)
+				}
+			}
 		}
 	}
 	// ─────────────────────────────────────────────────────────────────────────
