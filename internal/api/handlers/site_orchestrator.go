@@ -17,6 +17,7 @@ import (
 
 const fleetSyncMaxConcurrency = 4
 const fleetSyncSequential = true
+const maxRolloutDiagnosticBytes = 4096
 
 type fleetSyncResult struct {
 	DeviceID string `json:"device_id"`
@@ -354,8 +355,8 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 						allOutput += out + "\n"
 						if err != nil {
 							sr.Status = "FAILED"
-							sr.Error = err.Error()
-							sr.Output = allOutput
+							sr.Error = boundedRolloutDiagnostic(err.Error())
+							sr.Output = boundedRolloutDiagnostic(allOutput)
 							syncResults[idx] = sr
 							break
 						}
@@ -364,7 +365,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 						continue
 					}
 					sr.Status = "SUCCESS"
-					sr.Output = allOutput
+					sr.Output = boundedRolloutDiagnostic(allOutput)
 					syncResults[idx] = sr
 					log.Printf("[SITE_ORCHESTRATOR] Synced %s (%s) - %d commands", rr.Hostname, rr.Role, len(rr.Commands))
 				}
@@ -612,6 +613,13 @@ func updateRolloutRun(r *http.Request, rolloutID, status string, results []fleet
 		return err
 	}
 	return tx.Commit()
+}
+
+func boundedRolloutDiagnostic(value string) string {
+	if len(value) <= maxRolloutDiagnosticBytes {
+		return value
+	}
+	return value[:maxRolloutDiagnosticBytes] + "\n[diagnostic output truncated]"
 }
 
 func stripFleetSyncOutput(results []fleetSyncResult) []fleetSyncResult {

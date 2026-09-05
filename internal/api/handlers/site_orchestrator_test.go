@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"strings"
 	"testing"
 
 	"openwrt-controller/internal/services"
@@ -44,6 +45,18 @@ func TestFleetRolloutPhasesUsesFirstDeviceAsCanary(t *testing.T) {
 func TestFleetRolloutPhasesHandlesEmptyFleet(t *testing.T) {
 	if got := fleetRolloutPhases(0); got != nil {
 		t.Fatalf("got phases %v, want nil", got)
+	}
+}
+
+func TestBoundedRolloutDiagnostic(t *testing.T) {
+	short := "script execution failed at line 4"
+	if got := boundedRolloutDiagnostic(short); got != short {
+		t.Fatalf("short diagnostic changed: %q", got)
+	}
+	long := strings.Repeat("x", maxRolloutDiagnosticBytes+100)
+	got := boundedRolloutDiagnostic(long)
+	if len(got) <= maxRolloutDiagnosticBytes || !strings.HasSuffix(got, "[diagnostic output truncated]") {
+		t.Fatalf("long diagnostic was not bounded: length=%d", len(got))
 	}
 }
 
