@@ -83,7 +83,15 @@ const fetchMetrics = async () => {
 }
 
 const syncStatus = (device) => {
-  if (!device.last_config_pulled_at) return 'UNKNOWN'
+	// Generation state is authoritative once a fleet rollout exists. A device
+	// with no desired generation has not been rolled out yet, not drifted.
+	if (Number(device.desired_generation) > 0) {
+		return Number(device.observed_generation) >= Number(device.desired_generation)
+			? 'SYNCED'
+			: 'OUT_OF_SYNC'
+	}
+	if (device.last_rollout_status === 'SUCCESS') return 'SYNCED'
+	if (!device.last_config_pulled_at) return 'UNKNOWN'
   const pulled = new Date(device.last_config_pulled_at).getTime()
   const seen   = new Date(device.last_seen_at).getTime()
   const diffSeconds = (seen - pulled) / 1000
