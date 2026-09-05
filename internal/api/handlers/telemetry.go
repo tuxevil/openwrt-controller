@@ -39,10 +39,11 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	providedKey := r.Header.Get("X-Site-Key")
+	providedToken := r.Header.Get("X-Device-Token")
 
 	// Never write the site key to logs: it authenticates every device in the
 	// site and is sufficient to pull the agent/config endpoints.
-	log.Printf("[DEBUG] Telemetry received from device_id=%s, IP=%s, site_key_present=%t", deviceID, r.RemoteAddr, providedKey != "")
+	log.Printf("[DEBUG] Telemetry received from device_id=%s, IP=%s, site_key_present=%t, device_token_present=%t", deviceID, r.RemoteAddr, providedKey != "", providedToken != "")
 
 	if providedKey == "" {
 		http.Error(w, "Forbidden: missing site key", http.StatusForbidden)
@@ -56,13 +57,18 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var siteKey *string
+	var storedDeviceToken *string
 	err = database.Tx(r.Context()).QueryRow(`
-		SELECT s.api_key FROM `+tenantSchema+`.sites s 
+		SELECT s.api_key, d.device_token FROM `+tenantSchema+`.sites s
 		JOIN `+tenantSchema+`.devices d ON d.site_id = s.id 
-		WHERE d.id = $1`, deviceID).Scan(&siteKey)
+		WHERE d.id = $1`, deviceID).Scan(&siteKey, &storedDeviceToken)
 	if err == nil && siteKey != nil && *siteKey != "" {
 		if subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+			return
+		}
+		if storedDeviceToken != nil && *storedDeviceToken != "" && (providedToken == "" || subtle.ConstantTimeCompare([]byte(providedToken), []byte(*storedDeviceToken)) != 1) {
+			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}
 	}

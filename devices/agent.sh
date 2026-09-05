@@ -380,9 +380,11 @@ EOF
 )
 
     # 6. ENVÍO DE TELEMETRÍA (Con X-Site-Key y comprobación de rollback)
+    TELEMETRY_HEADERS="-H X-Site-Key:$SITE_KEY"
+    [ -n "$DEVICE_TOKEN" ] && TELEMETRY_HEADERS="$TELEMETRY_HEADERS -H X-Device-Token:$DEVICE_TOKEN"
     HTTP_CODE=$(curl -m 5 -s -X POST \
         -H "Content-Type: application/json" \
-        -H "X-Site-Key: $SITE_KEY" \
+        $TELEMETRY_HEADERS \
         -d "$PAYLOAD" \
         "$TELEMETRY_URL" -w "%{http_code}" -o /dev/null)
 
