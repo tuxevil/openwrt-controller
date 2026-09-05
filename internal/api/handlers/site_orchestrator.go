@@ -5,11 +5,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"sync"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
+
+const fleetSyncMaxConcurrency = 4
 
 // ─── SITE_ORCHESTRATOR Handlers ──────────────────────────────────────────────
 
@@ -298,53 +301,68 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		CmdCount int    `json:"cmd_count"`
 	}
 
-	var wg sync.WaitGroup
 	syncResults := make([]SyncResult, len(results))
-
-	for i, res := range results {
-		wg.Add(1)
-		go func(idx int, rr services.RenderResult) {
-			defer wg.Done()
-
-			sr := SyncResult{
-				DeviceID: rr.DeviceID,
-				Hostname: rr.Hostname,
-				Role:     rr.Role,
-				CmdCount: len(rr.Commands),
-			}
-
-			if len(rr.Commands) == 0 {
-				sr.Status = "SKIPPED"
-				sr.Output = "No commands to execute"
-				syncResults[idx] = sr
-				return
-			}
-
-			// Group commands by config namespace to build per-namespace batch scripts
-			configGroups := groupCommandsByConfig(rr.Commands)
-
-			var allOutput string
-			for cfg, cmds := range configGroups {
-				script := services.BuildSafeBatchScript(cfg, cmds, healthTargets)
-				out, err := runSSHScript(rr.DeviceID, script)
-				allOutput += out + "\n"
-				if err != nil {
-					sr.Status = "FAILED"
-					sr.Error = err.Error()
-					sr.Output = allOutput
-					syncResults[idx] = sr
-					return
-				}
-			}
-
-			sr.Status = "SUCCESS"
-			sr.Output = allOutput
-			syncResults[idx] = sr
-
-			log.Printf("[SITE_ORCHESTRATOR] ✓ Synced %s (%s) — %d commands", rr.Hostname, rr.Role, len(rr.Commands))
-		}(i, res)
+	type fleetJob struct {
+		idx    int
+		result services.RenderResult
 	}
+	jobs := make(chan fleetJob)
+	workerCount := fleetSyncMaxConcurrency
+	if len(results) < workerCount {
+		workerCount = len(results)
+	}
+	var wg sync.WaitGroup
+	for worker := 0; worker < workerCount; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for job := range jobs {
+				idx, rr := job.idx, job.result
 
+				sr := SyncResult{
+					DeviceID: rr.DeviceID,
+					Hostname: rr.Hostname,
+					Role:     rr.Role,
+					CmdCount: len(rr.Commands),
+				}
+
+				if len(rr.Commands) == 0 {
+					sr.Status = "SKIPPED"
+					sr.Output = "No commands to execute"
+					syncResults[idx] = sr
+					continue
+				}
+
+				// Group commands by config namespace to build per-namespace batch scripts
+				configGroups := groupCommandsByConfig(rr.Commands)
+				var allOutput string
+				for _, cfg := range sortedConfigNames(configGroups) {
+					cmds := configGroups[cfg]
+					script := services.BuildSafeBatchScript(cfg, cmds, healthTargets)
+					out, err := runSSHScript(rr.DeviceID, script)
+					allOutput += out + "\n"
+					if err != nil {
+						sr.Status = "FAILED"
+						sr.Error = err.Error()
+						sr.Output = allOutput
+						syncResults[idx] = sr
+						break
+					}
+				}
+				if sr.Status == "FAILED" {
+					continue
+				}
+				sr.Status = "SUCCESS"
+				sr.Output = allOutput
+				syncResults[idx] = sr
+				log.Printf("[SITE_ORCHESTRATOR] Synced %s (%s) - %d commands", rr.Hostname, rr.Role, len(rr.Commands))
+			}
+		}()
+	}
+	for i, res := range results {
+		jobs <- fleetJob{idx: i, result: res}
+	}
+	close(jobs)
 	wg.Wait()
 
 	// Count successes/failures
@@ -376,4 +394,13 @@ func groupCommandsByConfig(cmds []services.UciCommand) map[string][]services.Uci
 		groups[cmd.Config] = append(groups[cmd.Config], cmd)
 	}
 	return groups
+}
+
+func sortedConfigNames(groups map[string][]services.UciCommand) []string {
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
