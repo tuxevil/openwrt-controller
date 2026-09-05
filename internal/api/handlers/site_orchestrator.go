@@ -394,6 +394,17 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, phase := range phases[1:] {
 			executeBatch(phase)
+			if syncResults[phase[0]].Status != "SUCCESS" {
+				rolloutStatus = "aborted"
+				for _, laterPhase := range phases[1:] {
+					for _, idx := range laterPhase {
+						if syncResults[idx].Status == "" {
+							syncResults[idx] = fleetSyncResult{DeviceID: results[idx].DeviceID, Hostname: results[idx].Hostname, Role: results[idx].Role, Status: "ABORTED", CmdCount: len(results[idx].Commands), Error: "previous device failed; rollout not started"}
+						}
+					}
+				}
+				break
+			}
 		}
 	}
 	if err := updateRolloutRun(r, rolloutID, rolloutStatus, syncResults); err != nil {

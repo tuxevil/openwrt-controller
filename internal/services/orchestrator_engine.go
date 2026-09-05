@@ -82,7 +82,7 @@ type DeviceCapabilities struct {
 }
 
 func resolveResources(capabilities DeviceCapabilities) (string, string, string) {
-	radioSection, radioDevice := "default_radio0", "radio0"
+	radioSection, radioDevice := "cfg_radio0_0", "radio0"
 	if len(capabilities.WirelessIfaceSections) > 0 && capabilities.WirelessIfaceSections[0] != "" {
 		radioSection = capabilities.WirelessIfaceSections[0]
 	}

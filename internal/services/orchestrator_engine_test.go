@@ -18,7 +18,7 @@ func TestResolveResourcesUsesReportedCapabilities(t *testing.T) {
 
 func TestResolveResourcesPreservesLegacyFallback(t *testing.T) {
 	radioSection, radioDevice, sqmInterface := resolveResources(DeviceCapabilities{})
-	if radioSection != "default_radio0" || radioDevice != "radio0" || sqmInterface != "eth1" {
+	if radioSection != "cfg_radio0_0" || radioDevice != "radio0" || sqmInterface != "eth1" {
 		t.Fatalf("got %q, %q, %q", radioSection, radioDevice, sqmInterface)
 	}
 }
