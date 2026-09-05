@@ -8,28 +8,35 @@ import * as d3 from 'd3'
 import api from '../services/api'
 
 const COLORS = {
+  starlink: '#ffd700',
   gateway: '#00ff41',
   ap: '#ffffff',
   client: '#00ffff',
   alert: '#ff003c',
+  edgeWan: '#ffd700',
   edgeWired: '#00ffff',
   edgeWireless: '#b026ff',
 }
 
 const nodeColor = (d) => {
   if (d.has_alert) return COLORS.alert
+  if (d.type === 'wan' || d.id === 'starlink') return COLORS.starlink
   if (d.type === 'gateway') return COLORS.gateway
   if (d.type === 'ap') return COLORS.ap
   return COLORS.client
 }
 
 const nodeRadius = (d) => {
-  if (d.type === 'gateway') return 25
+  if (d.type === 'wan' || d.id === 'starlink') return 28
+  if (d.type === 'gateway') return 24
   if (d.type === 'ap') return 18
   return 10
 }
 
-const edgeColor = (d) => (d.type === 'wired' ? COLORS.edgeWired : COLORS.edgeWireless)
+const edgeColor = (d) => {
+  if (d.type === 'wan') return COLORS.edgeWan
+  return d.type === 'wired' ? COLORS.edgeWired : COLORS.edgeWireless
+}
 
 export function useEchoLocation(siteId) {
   const router = useRouter()
@@ -73,8 +80,8 @@ export function useEchoLocation(siteId) {
       .data(graphData.links)
       .join('line')
       .attr('stroke', edgeColor)
-      .attr('stroke-dasharray', (d) => (d.type === 'wireless' ? '4 4' : 'none'))
-      .attr('stroke-width', 2)
+      .attr('stroke-dasharray', (d) => (d.type === 'wan' ? '6 3' : d.type === 'wireless' ? '4 4' : 'none'))
+      .attr('stroke-width', (d) => (d.type === 'wan' ? 3 : 2))
 
     const node = g.append('g')
       .selectAll('g')

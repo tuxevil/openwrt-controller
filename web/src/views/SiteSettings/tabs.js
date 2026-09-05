@@ -60,6 +60,20 @@ export const SITE_SETTINGS_TABS = [
     color: '#f59e0b',
     badge: 'Admin',
   },
+  {
+    id: 'baselines',
+    label: 'PERFORMANCE BASELINES',
+    icon: 'M3 12h18M12 3v18M5 5l14 14M19 5L5 19',
+    color: '#22d3ee',
+    badge: 'Site',
+  },
+  {
+    id: 'topology',
+    label: 'TOPOLOGY METADATA',
+    icon: 'M4 6h16M4 12h16M4 18h16M8 6v12M16 6v12',
+    color: '#facc15',
+    badge: 'Site',
+  },
 ]
 
 export const DEFAULT_TAB = 'wired'

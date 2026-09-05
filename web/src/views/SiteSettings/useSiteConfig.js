@@ -40,6 +40,8 @@ const defaultConfig = () => ({
   tailscale_enabled: false,
   tailscale_auth_key: '',
   secure_tunnel_enabled: true,
+  benchmark_baseline: {},
+  health_checks: ['1.1.1.1'],
 })
 
 // JSON-shaped fields are stored in DB as strings; on load we parse

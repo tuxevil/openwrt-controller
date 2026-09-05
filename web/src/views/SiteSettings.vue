@@ -19,6 +19,8 @@ import SdwanTab from './SiteSettings/tabs/SdwanTab.vue'
 import QosTab from './SiteSettings/tabs/QosTab.vue'
 import PortalTab from './SiteSettings/tabs/PortalTab.vue'
 import CredentialsTab from './SiteSettings/tabs/CredentialsTab.vue'
+import BaselinesTab from './SiteSettings/tabs/BaselinesTab.vue'
+import TopologyMetadataTab from './SiteSettings/tabs/TopologyMetadataTab.vue'
 
 const props = defineProps(['site_id'])
 
@@ -190,6 +192,18 @@ async function applyRevision() {
             :site-id="props.site_id"
             @error="error = $event"
             @success="successMsg = $event"
+          />
+          <BaselinesTab
+            v-else-if="activeTab === 'baselines'"
+            :config="config"
+            :devices="devices"
+            @mark-dirty="dirty = true"
+          />
+          <TopologyMetadataTab
+            v-else-if="activeTab === 'topology'"
+            :config="config"
+            :devices="devices"
+            @mark-dirty="dirty = true"
           />
         </div>
       </main>

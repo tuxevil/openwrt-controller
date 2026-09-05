@@ -57,7 +57,10 @@ type SiteConfig struct {
 	AllowPublicSurveys   bool            `json:"allow_public_surveys"`
 	// SD-WAN: array of WAN uplinks for mwan3 multi-WAN / failover orchestration.
 	// If len >= 2 the Gateway will receive a full mwan3 ruleset.
-	WANInterfaces json.RawMessage `json:"wan_interfaces"`
+	WANInterfaces     json.RawMessage `json:"wan_interfaces"`
+	BenchmarkBaseline json.RawMessage `json:"benchmark_baseline"`
+	TopologyMetadata  json.RawMessage `json:"topology_metadata"`
+	HealthChecks      json.RawMessage `json:"health_checks"`
 }
 
 // DeviceRoleInfo holds the device identity and role for rendering.
@@ -430,7 +433,9 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 		       COALESCE(threat_shield_enabled, false),
 		       COALESCE(guest_portal_enabled, false),
 		       COALESCE(wan_interfaces, '[]'::jsonb),
-		       COALESCE(allow_public_surveys, false)
+		       COALESCE(allow_public_surveys, false),
+		       COALESCE(benchmark_baseline, '{}'::jsonb)
+		       , COALESCE(topology_metadata, '{}'::jsonb), COALESCE(health_checks, '[]'::jsonb)
 		FROM site_configs WHERE site_id = $1
 	`, siteID).Scan(
 		&sc.ID, &sc.SiteID, &sc.EnableGlobalSSID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
@@ -440,7 +445,7 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 		&sc.DropbearPort, &sc.DropbearPasswordAuth,
 		&sc.DHCPReservations, &sc.PortForwardingRules,
 		&sc.ThreatShieldEnabled, &sc.GuestPortalEnabled,
-		&sc.WANInterfaces, &sc.AllowPublicSurveys,
+		&sc.WANInterfaces, &sc.AllowPublicSurveys, &sc.BenchmarkBaseline, &sc.TopologyMetadata, &sc.HealthChecks,
 	)
 	if err != nil {
 		return nil, err
@@ -453,6 +458,15 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 	if len(sc.WANInterfaces) == 0 {
 		sc.WANInterfaces = json.RawMessage(`[]`)
 	}
+	if len(sc.BenchmarkBaseline) == 0 {
+		sc.BenchmarkBaseline = json.RawMessage(`{}`)
+	}
+	if len(sc.TopologyMetadata) == 0 {
+		sc.TopologyMetadata = json.RawMessage(`{}`)
+	}
+	if len(sc.HealthChecks) == 0 {
+		sc.HealthChecks = json.RawMessage(`[]`)
+	}
 	_, err := database.Tx(ctx).Exec(`
 		INSERT INTO site_configs (
 			site_id, enable_global_ssid, global_ssid, global_wpa_key, global_encryption,
@@ -461,12 +475,12 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 			firewall_syn_flood, firewall_drop_invalid,
 			dropbear_port, dropbear_password_auth,
 			dhcp_reservations, port_forwarding_rules, threat_shield_enabled, guest_portal_enabled,
-			wan_interfaces, allow_public_surveys, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,CURRENT_TIMESTAMP)
+			wan_interfaces, allow_public_surveys, benchmark_baseline, topology_metadata, health_checks, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
 			enable_global_ssid=EXCLUDED.enable_global_ssid, global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
 			global_encryption=EXCLUDED.global_encryption,
-			lan_ipaddr=EXCLUDED.lan_ipaddr, sqm_cake_enabled=EXCLUDED.sqm_cake_enabled, sqm_download=EXCLUDED.sqm_download, sqm_upload=EXCLUDED.sqm_upload, dpi_enabled=EXCLUDED.dpi_enabled, secure_tunnel_enabled=EXCLUDED.secure_tunnel_enabled, tailscale_enabled, tailscale_auth_key, lan_netmask=EXCLUDED.lan_netmask,
+			lan_ipaddr=EXCLUDED.lan_ipaddr, sqm_cake_enabled=EXCLUDED.sqm_cake_enabled, sqm_download=EXCLUDED.sqm_download, sqm_upload=EXCLUDED.sqm_upload, dpi_enabled=EXCLUDED.dpi_enabled, secure_tunnel_enabled=EXCLUDED.secure_tunnel_enabled, tailscale_enabled=EXCLUDED.tailscale_enabled, tailscale_auth_key=EXCLUDED.tailscale_auth_key, lan_netmask=EXCLUDED.lan_netmask,
 			dhcp_start=EXCLUDED.dhcp_start, dhcp_limit=EXCLUDED.dhcp_limit,
 			dhcp_leasetime=EXCLUDED.dhcp_leasetime,
 			dns_primary=EXCLUDED.dns_primary, dns_secondary=EXCLUDED.dns_secondary,
@@ -480,6 +494,9 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 			threat_shield_enabled=EXCLUDED.threat_shield_enabled,
 			guest_portal_enabled=EXCLUDED.guest_portal_enabled,
 			wan_interfaces=EXCLUDED.wan_interfaces,
+			benchmark_baseline=EXCLUDED.benchmark_baseline,
+			topology_metadata=EXCLUDED.topology_metadata,
+			health_checks=EXCLUDED.health_checks,
 			allow_public_surveys=EXCLUDED.allow_public_surveys,
 			updated_at=CURRENT_TIMESTAMP
 	`, sc.SiteID, sc.EnableGlobalSSID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
@@ -488,7 +505,7 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 		sc.FirewallSynFlood, sc.FirewallDropInvalid,
 		sc.DropbearPort, sc.DropbearPasswordAuth,
 		sc.DHCPReservations, sc.PortForwardingRules, sc.ThreatShieldEnabled, sc.GuestPortalEnabled,
-		sc.WANInterfaces, sc.AllowPublicSurveys,
+		sc.WANInterfaces, sc.AllowPublicSurveys, sc.BenchmarkBaseline, sc.TopologyMetadata, sc.HealthChecks,
 	)
 	return err
 }

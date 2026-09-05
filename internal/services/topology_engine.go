@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 
 	"openwrt-controller/internal/database"
 )
@@ -54,14 +55,14 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 		var stateJSON []byte
 		var role string
 		if err := rows.Scan(&id, &stateJSON, &role); err == nil {
-			knownRouters[id] = true
+			knownRouters[strings.ToLower(id)] = true
 			if role == "Gateway" {
-				gatewayMACs[id] = true
+				gatewayMACs[strings.ToLower(id)] = true
 			}
 			if len(stateJSON) > 0 {
 				var payload map[string]interface{}
 				if err := json.Unmarshal(stateJSON, &payload); err == nil {
-					payload["_id"] = id
+					payload["_id"] = strings.ToLower(id)
 					allDevices = append(allDevices, payload)
 				}
 			}
@@ -143,6 +144,25 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 			CPULoad:  cpuLoad,
 		}
 
+		// Starlink WAN Root Node for Gateway
+		if _, ok := dev["wan"]; ok || devMAC == "e8:9f:80:14:69:c5" || nodeType == "gateway" {
+			if _, exists := nodesMap["starlink"]; !exists {
+				nodesMap["starlink"] = EchoNode{
+					ID:       "starlink",
+					Name:     "Starlink Mini",
+					Type:     "wan",
+					Hostname: "192.168.100.1",
+					HasAlert: false,
+				}
+				graph.Links = append(graph.Links, EchoEdge{
+					Source: "starlink",
+					Target: devMAC,
+					Type:   "wan",
+					Speed:  "120M Sat",
+				})
+			}
+		}
+
 		var bridgeTable []interface{}
 		if neighborStats, ok := dev["neighbor_stats"].(map[string]interface{}); ok {
 			if bt, ok := neighborStats["bridge_table"].([]interface{}); ok {
@@ -155,10 +175,11 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 		for _, entry := range bridgeTable {
 			if brEntry, ok := entry.(map[string]interface{}); ok {
 				childMAC, okMac := brEntry["mac"].(string)
+				childMAC = strings.ToLower(childMAC)
 				isLocal, _ := brEntry["is_local"].(string)
-				if okMac && knownRouters[childMAC] && childMAC != devMAC && isLocal == "no" {
+				if okMac && knownRouters[childMAC] && childMAC != strings.ToLower(devMAC) && isLocal == "no" {
 					graph.Links = append(graph.Links, EchoEdge{
-						Source: devMAC,
+						Source: strings.ToLower(devMAC),
 						Target: childMAC,
 						Type:   "wired",
 					})

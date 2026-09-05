@@ -82,6 +82,9 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		TailscaleEnabled     bool            `json:"tailscale_enabled"`
 		TailscaleAuthKey     string          `json:"tailscale_auth_key"`
 		AllowPublicSurveys   bool            `json:"allow_public_surveys"`
+		BenchmarkBaseline    json.RawMessage `json:"benchmark_baseline"`
+		TopologyMetadata     json.RawMessage `json:"topology_metadata"`
+		HealthChecks         json.RawMessage `json:"health_checks"`
 	}
 	if !readBody(w, r, &dto) {
 		return
@@ -127,6 +130,9 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		PortForwardingRules:  pfRules,
 		ThreatShieldEnabled:  dto.ThreatShieldEnabled,
 		AllowPublicSurveys:   dto.AllowPublicSurveys,
+		BenchmarkBaseline:    dto.BenchmarkBaseline,
+		TopologyMetadata:     dto.TopologyMetadata,
+		HealthChecks:         dto.HealthChecks,
 	}
 
 	if err := services.UpsertSiteConfig(r.Context(), sc); err != nil {
