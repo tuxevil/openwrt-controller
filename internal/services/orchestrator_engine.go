@@ -302,16 +302,8 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 				)
 			}
 
-			// ── DEEP PACKET INSPECTION (nDPI) (Gateway only) ────────────
-			if cfg.DPIEnabled {
-				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "dpi_enabled", Value: "1"},
-				)
-			} else {
-				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "dpi_enabled", Value: "0"},
-				)
-			}
+			// DPI requires package-specific firewall includes and is not a
+			// standard firewall.@defaults option. Do not emit an invalid UCI key.
 
 			// ── GUEST PORTAL (Gateway only) ──────────────────────────────
 			if cfg.GuestPortalEnabled {

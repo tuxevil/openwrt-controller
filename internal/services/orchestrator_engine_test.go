@@ -32,3 +32,12 @@ func TestLogicalNetworkSectionUsesExplicitMapping(t *testing.T) {
 		t.Fatalf("got %q, want legacy lan", got)
 	}
 }
+
+func TestRenderSiteConfigDoesNotEmitUnsupportedDPIOption(t *testing.T) {
+	results := RenderSiteConfig(SiteConfig{DPIEnabled: true, GlobalSSID: "test"}, []DeviceRoleInfo{{DeviceID: "gateway", Role: "Gateway"}})
+	for _, command := range results[0].Commands {
+		if command.Config == "firewall" && command.Option == "dpi_enabled" {
+			t.Fatal("renderer emitted unsupported firewall dpi_enabled option")
+		}
+	}
+}
