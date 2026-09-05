@@ -52,6 +52,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad request: missing device_id", http.StatusBadRequest)
 		return
 	}
+	canonicalDeviceID := deviceID
 
 	providedKey := r.Header.Get("X-Site-Key")
 	providedToken := r.Header.Get("X-Device-Token")
@@ -84,8 +85,28 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
 		WHERE d.id = $1`, deviceID).Scan(&deviceSiteID, &siteKey, &storedDeviceToken)
 	if err == sql.ErrNoRows {
-		http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
-		return
+		if !allowLegacyProvision() {
+			http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
+			return
+		}
+		remoteIP := r.RemoteAddr
+		if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
+			remoteIP = host
+		}
+		var legacyID string
+		legacyErr := database.Tx(r.Context()).QueryRow(`
+			SELECT id FROM `+tenantSchema+`.devices
+			WHERE site_id IS NOT NULL AND last_ip = $1
+			ORDER BY last_seen_at DESC NULLS LAST LIMIT 1`, remoteIP).Scan(&legacyID)
+		if legacyErr != nil {
+			http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
+			return
+		}
+		canonicalDeviceID = legacyID
+		err = database.Tx(r.Context()).QueryRow(`
+			SELECT d.site_id, s.api_key, d.device_token FROM `+tenantSchema+`.devices d
+			LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
+			WHERE d.id = $1`, canonicalDeviceID).Scan(&deviceSiteID, &siteKey, &storedDeviceToken)
 	}
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
@@ -190,7 +211,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("Error persisting device capabilities: %v", err)
 			}
 		}
-	}(deviceID, body, capabilityPayload, modelStr, remoteIP, agentVersion, tenantSchema)
+	}(canonicalDeviceID, body, capabilityPayload, modelStr, remoteIP, agentVersion, tenantSchema)
 
 	// Extract Metrics cleanly bypassing struct matching
 	var metrics models.DeviceMetrics

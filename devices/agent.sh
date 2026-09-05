@@ -7,8 +7,16 @@ CONTROLLER_IP="REPLACE_WITH_CONTROLLER_IP"
 PORT="3000"
 BASE_URL="http://$CONTROLLER_IP:$PORT/api"
 TELEMETRY_URL="$BASE_URL/telemetry"
-# Obtener MAC de la interfaz puente como ID único
-DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]' || cat /sys/class/net/eth0/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
+DEVICE_ID_FILE="/etc/nerve-device-id"
+DEVICE_ID="$(cat "$DEVICE_ID_FILE" 2>/dev/null || true)"
+if [ -z "$DEVICE_ID" ]; then
+    # Seed identity once. A bridge MAC can change when a NIC is added later.
+    DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]' || cat /sys/class/net/eth0/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
+    if [ -n "$DEVICE_ID" ]; then
+        printf '%s\n' "$DEVICE_ID" > "$DEVICE_ID_FILE"
+        chmod 600 "$DEVICE_ID_FILE"
+    fi
+fi
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 DEVICE_TOKEN_FILE="/etc/nerve-device-token"
 DEVICE_TOKEN="$(cat "$DEVICE_TOKEN_FILE" 2>/dev/null || true)"
