@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -9,6 +11,22 @@ import (
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
+
+func validateAIEngineBaseURL(raw string) (string, error) {
+	if raw == "" {
+		raw = "https://api.openai.com/v1"
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil || parsed.Host == "" {
+		return "", fmt.Errorf("AI engine base URL is invalid")
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	privateHTTP := parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || (ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast())))
+	if parsed.Scheme != "https" && !privateHTTP {
+		return "", fmt.Errorf("AI engine base URL must use HTTPS, except private providers")
+	}
+	return strings.TrimRight(raw, "/"), nil
+}
 
 func GetPlatformSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -39,21 +57,17 @@ func UpdatePlatformSettingsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	current := database.GetPlatformSettings()
+	var err error
 	apiKey := s.AIEngineAPIKey
 	keyChanged := apiKey != "" && apiKey != "********"
 	if !keyChanged {
 		apiKey = current.AIEngineAPIKey
 	}
-	if s.AIEngineBaseURL == "" {
-		s.AIEngineBaseURL = "https://api.openai.com/v1"
-	}
-	parsedURL, err := url.Parse(s.AIEngineBaseURL)
-	localHTTP := parsedURL.Scheme == "http" && (parsedURL.Hostname() == "localhost" || parsedURL.Hostname() == "127.0.0.1" || parsedURL.Hostname() == "::1")
-	if err != nil || parsedURL.Host == "" || (parsedURL.Scheme != "https" && !localHTTP) {
-		http.Error(w, `{"error":"AI engine base URL must use HTTPS, except local providers"}`, http.StatusBadRequest)
+	s.AIEngineBaseURL, err = validateAIEngineBaseURL(s.AIEngineBaseURL)
+	if err != nil {
+		http.Error(w, `{"error":"invalid AI engine base URL"}`, http.StatusBadRequest)
 		return
 	}
-	s.AIEngineBaseURL = strings.TrimRight(s.AIEngineBaseURL, "/")
 	if keyChanged {
 		sealed, err := services.SealAIKey(apiKey)
 		if err != nil {

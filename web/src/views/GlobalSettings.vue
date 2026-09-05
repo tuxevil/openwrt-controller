@@ -132,11 +132,14 @@ const saveSettings = async () => {
       },
       body: JSON.stringify(settings.value)
     });
-    if (res.ok) {
-      // Optional toast/notification logic here
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Save failed (${res.status})`);
     }
+    alert('AI engine settings saved');
   } catch (e) {
     console.error('Failed to save settings:', e);
+    alert(`Failed to save settings: ${e.message}`);
   } finally {
     setTimeout(() => saving.value = false, 500);
   }
