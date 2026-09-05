@@ -150,6 +150,25 @@ jobs:
       - name: Build
         run: npm run build
 
+  contracts:
+    name: Device and Compose Contracts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose file
+        env:
+          POSTGRES_PASSWORD: ci-postgres-password
+          INFLUXDB_PASSWORD: ci-influx-password
+          INFLUX_TOKEN: ci-influx-token
+          JWT_SECRET: ci-jwt-secret-012345678901234567890123456789
+        run: docker compose config --quiet
+      - name: Validate agent shell contracts
+        run: |
+          sh -n devices/agent.sh
+          sh -n devices/99-nerve-center-bootstrap
+          devices/agent_contract_test.sh
+          devices/agent_log_collection_test.sh
+
       - name: Upload dist
         uses: actions/upload-artifact@v4
         with:

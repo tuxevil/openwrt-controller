@@ -46,6 +46,12 @@ id_rsa*
 id_ed25519*
 id_controller*
 known_hosts
+*.zip
+*.tar.gz
+*.tgz
+pi-hole*
+teleporter*
+backup*
 
 # ── Documentación interna / contexto privado ─────────────────────────────────
 AGENTS.md
