@@ -14,6 +14,17 @@ import (
 	"openwrt-controller/internal/database"
 )
 
+func qualifyChatOpsQuery(schema, query string) (string, error) {
+	safeSchema, err := database.SafeSchemaIdent(schema)
+	if err != nil {
+		return "", fmt.Errorf("invalid tenant schema: %w", err)
+	}
+	for _, table := range []string{"devices", "shaping_rules", "incidents"} {
+		query = strings.Replace(query, "FROM "+table, "FROM "+safeSchema+"."+table, 1)
+	}
+	return query, nil
+}
+
 // ChatOpsIntent represents the structured output expected from the LLM
 type ChatOpsIntent struct {
 	Intent       string `json:"intent"`
@@ -131,7 +142,11 @@ func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 			q += " ORDER BY last_seen_at DESC LIMIT 20"
 		}
 
-		rows, err := database.DB.Query(q, args...)
+		qualified, err := qualifyChatOpsQuery(schema, q)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := database.DB.Query(qualified, args...)
 		if err != nil {
 			return nil, fmt.Errorf("database err: %w", err)
 		}
@@ -161,7 +176,11 @@ func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 	case "GET_TRAFFIC_STATS":
 		// Query shaping limits from PostgreSQL
 		q := "SELECT device_id, mac, rate_mbytes, created_at FROM shaping_rules ORDER BY created_at DESC LIMIT 20"
-		rows, err := database.DB.Query(q)
+		qualified, err := qualifyChatOpsQuery(schema, q)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := database.DB.Query(qualified)
 		if err != nil {
 			return nil, fmt.Errorf("database err: %w", err)
 		}
@@ -185,7 +204,11 @@ func ProcessChatOpsQuery(schema, query string) (*ChatOpsResponse, error) {
 
 	case "GET_RECENT_THREATS":
 		q := "SELECT id, device_id, incident_type, severity, status, created_at FROM incidents ORDER BY created_at DESC LIMIT 10"
-		rows, err := database.DB.Query(q)
+		qualified, err := qualifyChatOpsQuery(schema, q)
+		if err != nil {
+			return nil, err
+		}
+		rows, err := database.DB.Query(qualified)
 		if err != nil {
 			return nil, fmt.Errorf("database err: %w", err)
 		}
