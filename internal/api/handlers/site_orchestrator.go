@@ -626,7 +626,7 @@ func stripFleetSyncOutput(results []fleetSyncResult) []fleetSyncResult {
 	clean := make([]fleetSyncResult, len(results))
 	copy(clean, results)
 	for i := range clean {
-		clean[i].Output = ""
+		clean[i].Output = boundedRolloutDiagnostic(clean[i].Output)
 	}
 	return clean
 }
