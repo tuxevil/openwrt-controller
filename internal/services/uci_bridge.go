@@ -238,6 +238,7 @@ rollback() {
   logger -t central_luci "CENTRAL_LUCI: ROLLBACK — restoring '%s' from snapshot"
   uci import %s < /tmp/central_luci_bak_%s.conf 2>/dev/null || true
   uci commit %s
+  %s
   exit 1
 }
 
@@ -260,8 +261,8 @@ uci show %s > /dev/null 2>&1 || {
 logger -t central_luci "CENTRAL_LUCI: batch push complete for '%s'"
 rm -f /tmp/central_luci_bak_%s.conf
 exit 0
-`, config, config, config, config, config, config, config, config,
-		sb.String(), config, config, config, restartCmd, config, config)
+	`, config, config, config, config, config, config, config, config,
+		restartCmd, sb.String(), config, config, config, restartCmd, config, config)
 }
 
 // BuildSafeBatchScript adds a post-apply connectivity check to the normal
@@ -280,7 +281,18 @@ func BuildSafeBatchScript(config string, commands []UciCommand, healthTargets []
 		healthCheck.WriteString(fmt.Sprintf("ping -c 1 -W 2 %s >/dev/null 2>&1 || rollback\n", shellQuote(target)))
 	}
 	healthCheck.WriteString("\n")
-	return strings.Replace(script, "# Phase 5: Service restart", healthCheck.String()+"# Phase 6: Service restart", 1)
+	const marker = "# Phase 5: Service restart\n"
+	markerStart := strings.Index(script, marker)
+	if markerStart == -1 {
+		return script
+	}
+	restartStart := markerStart + len(marker)
+	restartEnd := strings.IndexByte(script[restartStart:], '\n')
+	if restartEnd == -1 {
+		return script
+	}
+	restartEnd += restartStart
+	return script[:restartEnd+1] + healthCheck.String() + script[restartEnd+1:]
 }
 
 // BuildDryRunScript validates the batch without committing or restarting a

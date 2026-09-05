@@ -1,6 +1,9 @@
 package services
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestEscapeVal(t *testing.T) {
 	cases := []struct {
@@ -41,6 +44,41 @@ func TestBuildBatchScript_ValidatesConfig(t *testing.T) {
 	}
 	if !contains(script, "uci set wireless.wifi0.ssid='TestNet'") {
 		t.Error("script missing the expected uci set line")
+	}
+}
+
+func TestBuildSafeBatchScriptRestartsBeforeHealthCheck(t *testing.T) {
+	script := BuildSafeBatchScript("wireless", []UciCommand{
+		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
+	}, []string{"192.0.2.1"})
+
+	restart := "wifi && logger -t central_luci 'wireless service restarted'"
+	healthCheck := "ping -c 1 -W 2 '192.0.2.1'"
+	if strings.Index(script, restart) == -1 || strings.Index(script, healthCheck) == -1 {
+		t.Fatalf("safe script missing restart or health check:\n%s", script)
+	}
+	if strings.Index(script, restart) > strings.Index(script, healthCheck) {
+		t.Fatalf("health check runs before service restart:\n%s", script)
+	}
+}
+
+func TestBuildBatchScriptRollsBackAndRestartsService(t *testing.T) {
+	script := BuildBatchScript("wireless", []UciCommand{
+		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
+	})
+
+	restore := "uci import wireless < /tmp/central_luci_bak_wireless.conf"
+	commit := "uci commit wireless"
+	restart := "wifi && logger -t central_luci 'wireless service restarted'"
+	rollback := strings.Index(script, "rollback()")
+	if rollback == -1 {
+		t.Fatalf("script missing rollback function:\n%s", script)
+	}
+	for _, fragment := range []string{restore, commit, restart} {
+		position := strings.Index(script[rollback:], fragment)
+		if position == -1 {
+			t.Fatalf("rollback missing %q:\n%s", fragment, script)
+		}
 	}
 }
 
