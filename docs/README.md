@@ -16,7 +16,7 @@ Related references:
 - [OpenAPI contract](../openapi.yaml)
 - [Operator security checklist](../SECURITY.md)
 - [Contribution workflow](../CONTRIBUTING.md)
-- [Log conventions](CONTRIBUTING_LOGS.md)
-- [OpenWrt capability notes](OpenWrt_Capabilities.md)
+- [Changelog](../CHANGELOG.md)
+- [OpenWrt capability notes](OpenWrt_Capabilities.md) (reference material when present)
 
 Documentation describes the current repository behavior. When a guide and implementation disagree, treat the code and tests as the source of truth and open an issue to correct the documentation.

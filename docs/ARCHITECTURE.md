@@ -8,7 +8,7 @@
 | Vue SPA | Dashboard and operator workflows | REST API and WebSocket tickets |
 | PostgreSQL | Users, tenants, sites, desired state, audit and vault metadata | Tenant schemas plus `public` |
 | InfluxDB | Device telemetry, signal history and benchmark measurements | Influx line protocol and Flux |
-| OpenWrt agent | Heartbeat, configuration pull, telemetry and local safeguards | HTTPS with site/device headers |
+| OpenWrt agent | Heartbeat, configuration pull, telemetry and local safeguards | HTTP by default; use a private network, VPN or TLS proxy |
 | FreeRADIUS | Optional WPA-Enterprise and VLAN identity service | RADIUS, PostgreSQL |
 
 ## Request Flow
@@ -18,6 +18,8 @@
 3. Read operations query the tenant schema or InfluxDB.
 4. Mutating operations validate identifiers, write an audit event and use the SSH/UCI boundary.
 5. Device operations resolve the device inside the authorized tenant, verify its host key and execute a constrained script.
+
+The shipped agent currently builds an `http://` controller URL. Protect that hop before using site keys or device tokens across an untrusted network.
 
 ## Desired State
 

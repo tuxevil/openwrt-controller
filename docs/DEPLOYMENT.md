@@ -36,7 +36,7 @@ The unit should use `EnvironmentFile=`, a dedicated service account, restrictive
 
 ## Production Preparation
 
-1. Set `REQUIRE_TLS=true` and provide readable certificate and key files, or terminate TLS at a trusted reverse proxy.
+1. For direct controller TLS, set `REQUIRE_TLS=true` and provide readable certificate and key files. For TLS termination at a reverse proxy, keep the internal hop private and do not set `REQUIRE_TLS=true` unless the controller also has certificates.
 2. Restrict `WS_ALLOWED_ORIGINS` to the dashboard origin.
 3. Keep database ports private and expose only the controller entry point.
 4. Set `ALLOW_LEGACY_PROVISION=false` after deploying an agent that supports device tokens.

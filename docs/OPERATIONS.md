@@ -9,7 +9,7 @@ For a single device, use `POST /api/devices/{device_id}/safe-rollout`:
 3. Repeat with `confirm=true` only after verifying the device and change.
 4. Confirm the response and the device rollout status in the dashboard.
 
-The controller creates a Vault backup before applying a confirmed change. The remote batch traps failures, checks connectivity and rolls back when a health target fails.
+The controller creates a Vault backup before applying a confirmed change. The remote batch traps failures, checks connectivity and rolls back when its health target fails. The single-device endpoint uses `1.1.1.1` by default; configured site targets are applied by fleet sync.
 
 ## Fleet Sync
 
