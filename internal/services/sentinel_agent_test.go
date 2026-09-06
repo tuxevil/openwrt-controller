@@ -105,3 +105,31 @@ func TestBuildSentinelInvestigationPromptIncludesCurrentSite(t *testing.T) {
 		t.Fatalf("site context missing from prompt: %s", prompt)
 	}
 }
+
+func TestSentinelPromptRoutesHardwareQuestionsToDeviceStatus(t *testing.T) {
+	prompt := buildSentinelInvestigationPromptForSite(nil, "What hardware do the nodes have?", "site-123")
+	for _, expected := range []string{"hardware", "get_device_status", "state.board", "capabilities"} {
+		if !strings.Contains(strings.ToLower(prompt+sentinelAgentSystemPrompt), strings.ToLower(expected)) {
+			t.Fatalf("hardware routing guidance missing %q", expected)
+		}
+	}
+}
+
+func TestNormalizeSentinelHardwareSummarizesBoardAndCapabilities(t *testing.T) {
+	state := json.RawMessage(`{
+		"board":{"model":"Netgear WNDR3800CH","system":"Atheros AR7161 rev 2","hostname":"wndr3800ch","release":{"version":"25.12.5","description":"OpenWrt 25.12.5 r33051"}},
+		"system":{"memory":{"total":123633664,"free":63516672}},
+		"capabilities":{"architecture":"mips_24kc","kernel":"6.6.110","ram_mb":128,"flash_mb":16,"radios":["radio0"]}
+	}`)
+	hardware := normalizeSentinelHardware("Netgear WNDR3800CH", state, nil)
+	encoded, err := json.Marshal(hardware)
+	if err != nil {
+		t.Fatalf("marshal hardware summary: %v", err)
+	}
+	text := string(encoded)
+	for _, expected := range []string{"Netgear WNDR3800CH", "Atheros AR7161 rev 2", "OpenWrt 25.12.5 r33051", "mips_24kc", "128"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("hardware summary missing %q: %s", expected, text)
+		}
+	}
+}
