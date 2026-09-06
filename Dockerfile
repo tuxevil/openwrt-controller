@@ -67,7 +67,7 @@ ENV PORT=3000 \
 # The TLS probe deliberately skips certificate validation because it runs
 # against loopback; external clients must validate the configured certificate.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD-SHELL if [ "$${REQUIRE_TLS:-false}" = "true" ]; then wget --no-check-certificate -qO- "https://127.0.0.1:$${HTTPS_PORT:-8443}/healthz"; else wget -qO- "http://127.0.0.1:$${PORT:-3000}/healthz"; fi || exit 1
+    CMD if [ "$${REQUIRE_TLS:-false}" = "true" ]; then wget --no-check-certificate -qO- "https://127.0.0.1:$${HTTPS_PORT:-8443}/healthz"; else wget -qO- "http://127.0.0.1:$${PORT:-3000}/healthz"; fi || exit 1
 
 # Run application
 ENTRYPOINT ["/app/openwrt-controller"]
