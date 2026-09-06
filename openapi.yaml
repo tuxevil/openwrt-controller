@@ -40,6 +40,8 @@ tags:
     description: Platform-wide operations (SuperAdmin)
   - name: chatops
     description: LLM / chat-driven device queries
+  - name: sentinel
+    description: Sentinel investigations and operator-approved proposals
   - name: probes
     description: Container liveness / readiness (anonymous)
   - name: metrics
@@ -377,6 +379,16 @@ paths:
         '202':
           $ref: '#/components/responses/QueuedDeviceOperation'
 
+  /api/sentinel/proposals/{proposal_id}/approve:
+    post:
+      tags: [sentinel]
+      summary: Approve a Sentinel proposal and queue its device operation
+      parameters:
+        - $ref: '#/components/parameters/ProposalID'
+      responses:
+        '200':
+          $ref: '#/components/responses/ApprovedSentinelProposal'
+
   /api/devices/{device_id}/iperf:
     post:
       tags: [devices]
@@ -542,6 +554,11 @@ components:
       name: config
       required: true
       schema: { type: string }
+    ProposalID:
+      in: path
+      name: proposal_id
+      required: true
+      schema: { type: string, format: uuid }
 
   responses:
     Unauthorized:
@@ -559,6 +576,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/QueuedDeviceOperation' }
+    ApprovedSentinelProposal:
+      description: Sentinel proposal approved and queued
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ApprovedSentinelProposal' }
 
   schemas:
     Error:
@@ -583,6 +605,15 @@ components:
           minimum: 1
           description: Device configuration revision reserved for this operation
         message: { type: string }
+    ApprovedSentinelProposal:
+      type: object
+      required: [status, proposal_id, operation_id, plan_hash, generation]
+      properties:
+        status: { type: string, enum: [APPROVED] }
+        proposal_id: { type: string, format: uuid }
+        operation_id: { type: string }
+        plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        generation: { type: integer, format: int64, minimum: 1 }
     UciOperationRequest:
       type: object
       required: [commands]

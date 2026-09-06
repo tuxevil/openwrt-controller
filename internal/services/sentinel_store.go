@@ -715,10 +715,10 @@ func GetSentinelProposal(schema, proposalID string) (SentinelProposal, error) {
 	return item, err
 }
 
-func ApproveSentinelProposal(ctx context.Context, schema, proposalID, username string) error {
+func ApproveSentinelProposal(ctx context.Context, schema, proposalID, username string) (DeviceOperationPlan, error) {
 	safeSchema, err := sentinelSchema(schema)
 	if err != nil {
-		return err
+		return DeviceOperationPlan{}, err
 	}
 	var deviceID, status string
 	var plan []byte
@@ -726,18 +726,25 @@ func ApproveSentinelProposal(ctx context.Context, schema, proposalID, username s
         WHERE id = $1 AND status = 'PENDING' AND expires_at > CURRENT_TIMESTAMP
         RETURNING device_id, status, plan`, safeSchema), proposalID).Scan(&deviceID, &status, &plan)
 	if err == sql.ErrNoRows {
-		return fmt.Errorf("proposal is no longer pending, expired, or blocked")
+		return DeviceOperationPlan{}, fmt.Errorf("proposal is no longer pending, expired, or blocked")
 	}
 	if err != nil {
-		return err
+		return DeviceOperationPlan{}, err
 	}
-	if _, err := database.QueueDeviceOperation(ctx, schema, deviceID, plan); err != nil {
+	var operation DeviceOperationPlan
+	if err := json.Unmarshal(plan, &operation); err != nil {
 		_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'FAILED', blocked_reason = $1 WHERE id = $2`, safeSchema), err.Error(), proposalID)
-		return err
+		return DeviceOperationPlan{}, fmt.Errorf("invalid proposal operation: %w", err)
 	}
+	queuedGeneration, err := database.QueueDeviceOperation(ctx, schema, deviceID, plan)
+	if err != nil {
+		_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'FAILED', blocked_reason = $1 WHERE id = $2`, safeSchema), err.Error(), proposalID)
+		return DeviceOperationPlan{}, err
+	}
+	operation.Generation = queuedGeneration
 	_, err = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'APPROVED', approved_by = $1,
         approved_at = CURRENT_TIMESTAMP WHERE id = $2`, safeSchema), username, proposalID)
-	return err
+	return operation, err
 }
 
 func RejectSentinelProposal(schema, proposalID, username, reason string) error {

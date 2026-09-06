@@ -175,8 +175,14 @@ func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan jso
 			if lastIdentity.PlanHash != "" && lastIdentity.PlanHash != identity.PlanHash {
 				return 0, fmt.Errorf("operation id already used for a different plan")
 			}
-			if identity.Generation > 0 && lastIdentity.Generation != identity.Generation {
-				return 0, fmt.Errorf("%w: last operation is generation %d, requested %d", ErrDeviceOperationGenerationConflict, lastIdentity.Generation, identity.Generation)
+			if identity.Generation > 0 {
+				if lastIdentity.Generation > 0 && lastIdentity.Generation != identity.Generation {
+					return 0, fmt.Errorf("%w: last operation is generation %d, requested %d", ErrDeviceOperationGenerationConflict, lastIdentity.Generation, identity.Generation)
+				}
+				if desiredGeneration != identity.Generation {
+					return 0, fmt.Errorf("%w: device is at generation %d, requested %d", ErrDeviceOperationGenerationConflict, desiredGeneration, identity.Generation)
+				}
+				return identity.Generation, nil
 			}
 			return lastIdentity.Generation, nil
 		}
@@ -235,7 +241,9 @@ func RecordDeviceOperationStatus(ctx context.Context, schema, deviceID string, s
 	lastMatch := `(last_operation->>'id' = $3
 	    AND (($6 <> '' AND last_operation->>'plan_hash' = $6)
 	         OR ($6 = '' AND COALESCE(last_operation->>'generation', '') = ''))
-	    AND ($7 = '' OR last_operation->>'generation' = $7))`
+	    AND ($7 = '' OR last_operation->>'generation' = $7)
+	    AND (COALESCE(last_operation->>'state', '') NOT IN ('COMMITTED', 'RESTORED')
+	         OR last_operation->>'state' = $4::text))`
 	result, err := Tx(ctx).Exec(fmt.Sprintf(`
 		UPDATE %s.devices
 		SET last_operation = $1,
@@ -243,15 +251,15 @@ func RecordDeviceOperationStatus(ctx context.Context, schema, deviceID string, s
 		        WHEN $2 = true AND %s THEN NULL
 		        ELSE pending_operation
 		    END,
-		    last_rollout_status = $4,
+		    last_rollout_status = $4::text,
 		    last_health_check_at = CASE WHEN $2 = true THEN CURRENT_TIMESTAMP ELSE last_health_check_at END,
 		    observed_generation = CASE
-		        WHEN $2 = true AND $4 = 'COMMITTED' AND $8 > 0
+			    WHEN $2::boolean = true AND $4::text = 'COMMITTED' AND $8::bigint > 0
 		        THEN GREATEST(observed_generation, $8)
 		        ELSE observed_generation
 		    END,
 		    last_successful_generation = CASE
-		        WHEN $2 = true AND $4 = 'COMMITTED' AND $8 > 0
+			    WHEN $2::boolean = true AND $4::text = 'COMMITTED' AND $8::bigint > 0
 		        THEN GREATEST(last_successful_generation, $8)
 		        ELSE last_successful_generation
 		    END,

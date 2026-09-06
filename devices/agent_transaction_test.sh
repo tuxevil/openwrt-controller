@@ -84,6 +84,29 @@ PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation
 test "$(cat "$NERVE_TRANSACTION_ROOT/retry-operation/state")" = "COMMITTED"
 test ! -e "$NERVE_TRANSACTION_ROOT/active"
 
+SELF_TEST_OPERATION_JSON='{"operation_id":"retry-operation","plan_hash":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","config":"wireless","commands":[{"action":"set","config":"wireless","section":"wifi0","option":"ssid","value":"retry"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation
+if SELF_TEST_OPERATION_JSON='{"operation_id":"retry-operation","plan_hash":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"changed-namespace"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation; then
+    echo "committed operation accepted a different config namespace"
+    exit 1
+fi
+if SELF_TEST_OPERATION_JSON='{"operation_id":"retry-operation","plan_hash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","config":"wireless","commands":[{"action":"set","config":"wireless","section":"wifi0","option":"ssid","value":"retry"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation; then
+    echo "committed operation accepted a different plan hash"
+    exit 1
+fi
+if SELF_TEST_OPERATION_JSON='{"operation_id":"retry-operation","plan_hash":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee","generation":42,"config":"wireless","commands":[{"action":"set","config":"wireless","section":"wifi0","option":"ssid","value":"retry"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation; then
+    echo "committed operation accepted a different generation"
+    exit 1
+fi
+
+SELF_TEST_OPERATION_JSON='{"operation_id":"bound-retry","plan_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","generation":42,"config":"wireless","commands":[{"action":"set","config":"wireless","section":"wifi0","option":"ssid","value":"bound"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation
+SELF_TEST_OPERATION_JSON='{"operation_id":"bound-retry","plan_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","config":"wireless","commands":[{"action":"set","config":"wireless","section":"wifi0","option":"ssid","value":"bound"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation
+
 mkdir -p "$NERVE_TRANSACTION_ROOT/old-terminal"
 printf '%s\n' system > "$NERVE_TRANSACTION_ROOT/old-terminal/config"
 printf '%s\n' COMMITTED > "$NERVE_TRANSACTION_ROOT/old-terminal/state"
@@ -133,6 +156,7 @@ printf '%s\n' PENDING_CONFIRM > "$NERVE_TRANSACTION_ROOT/recovery-operation/stat
 printf '%s\n' 'wireless.baseline=1' > "$NERVE_TRANSACTION_ROOT/recovery-operation/backup"
 cp "$NERVE_TRANSACTION_ROOT/recovery-operation/backup" "$ROOT/expected-wireless"
 printf '%s\n' 'wireless.unconfirmed=1' > "$ROOT/etc/config/wireless"
+printf '%s\n' retry-operation > "$NERVE_OPERATION_STATUS_FILE"
 
 PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --recover-transactions
 
@@ -141,12 +165,16 @@ test "$(cat "$NERVE_TRANSACTION_ROOT/recovery-operation/state")" = "RESTORED"
 test ! -e "$NERVE_TRANSACTION_ROOT/active"
 test ! -e "$NERVE_TRANSACTION_ROOT/recovery-operation/backup"
 test "$(cat "$NERVE_TRANSACTION_ROOT/last")" = "recovery-operation"
-rm -f "$NERVE_OPERATION_STATUS_FILE"
 STATUS_JSON=$(PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-status)
 case "$STATUS_JSON" in
     *'"id":"recovery-operation"'*'"plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"'*'"generation":42'*) ;;
     *) echo "restored operation status lost its own identity"; exit 1 ;;
 esac
+if SELF_TEST_OPERATION_JSON='{"operation_id":"recovery-operation","plan_hash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","generation":42,"config":"wireless","commands":[{"action":"set","config":"wireless","section":"wifi0","option":"ssid","value":"changed-retry"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation; then
+    echo "restored operation accepted a different plan hash"
+    exit 1
+fi
 
 mkdir -p "$NERVE_TRANSACTION_ROOT/orphan-operation"
 printf '%s\n' wireless > "$NERVE_TRANSACTION_ROOT/orphan-operation/config"

@@ -48,6 +48,16 @@ func writeSentinelError(w http.ResponseWriter, status int, code, message string)
 	writeSentinelJSON(w, status, map[string]interface{}{"error": map[string]string{"code": code, "message": message}})
 }
 
+func writeApprovedSentinelProposalResponse(w http.ResponseWriter, proposalID string, operation services.DeviceOperationPlan) {
+	writeSentinelJSON(w, http.StatusOK, map[string]interface{}{
+		"status":       "APPROVED",
+		"proposal_id":  proposalID,
+		"operation_id": operation.OperationID,
+		"plan_hash":    operation.PlanHash,
+		"generation":   operation.Generation,
+	})
+}
+
 func parseSentinelID(w http.ResponseWriter, raw string) bool {
 	if _, err := uuid.Parse(raw); err != nil {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_ID", "invalid Sentinel resource id")
@@ -282,11 +292,12 @@ func ApproveSentinelProposalHandler(w http.ResponseWriter, r *http.Request) {
 	if !parseSentinelID(w, proposalID) {
 		return
 	}
-	if err := services.ApproveSentinelProposal(r.Context(), sentinelSchemaFromRequest(r), proposalID, GetUsernameFromReq(r)); err != nil {
+	operation, err := services.ApproveSentinelProposal(r.Context(), sentinelSchemaFromRequest(r), proposalID, GetUsernameFromReq(r))
+	if err != nil {
 		writeSentinelError(w, http.StatusConflict, "APPROVAL_FAILED", err.Error())
 		return
 	}
-	writeSentinelJSON(w, http.StatusOK, map[string]string{"status": "APPROVED", "proposal_id": proposalID})
+	writeApprovedSentinelProposalResponse(w, proposalID, operation)
 }
 
 func RejectSentinelProposalHandler(w http.ResponseWriter, r *http.Request) {

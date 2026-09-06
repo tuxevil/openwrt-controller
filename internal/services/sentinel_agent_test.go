@@ -208,3 +208,41 @@ func TestIsSentinelHardwareQueryRecognizesInventoryQuestions(t *testing.T) {
 		}
 	}
 }
+
+func TestApproveSentinelProposalReturnsQueuedOperationIdentity(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := database.DB
+	database.DB = db
+	t.Cleanup(func() {
+		database.DB = previous
+		_ = db.Close()
+	})
+
+	planHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	plan := `{"operation_id":"operation-1","plan_hash":"` + planHash + `","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":false}`
+	boundPlan := `{"operation_id":"operation-1","plan_hash":"` + planHash + `","generation":42,"config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":false}`
+
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.sentinel_proposals SET status = 'APPROVING'")).
+		WithArgs("proposal-1").
+		WillReturnRows(sqlmock.NewRows([]string{"device_id", "status", "plan"}).AddRow("device-1", "APPROVING", []byte(plan)))
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices")).
+		WithArgs(sqlmock.AnyArg(), "device-1", "operation-1", int64(0)).
+		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_operation"}).AddRow(int64(42), []byte(boundPlan)))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tenant_demo.sentinel_proposals SET status = 'APPROVED'")).
+		WithArgs("operator", "proposal-1").
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	operation, err := ApproveSentinelProposal(t.Context(), "tenant_demo", "proposal-1", "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.OperationID != "operation-1" || operation.PlanHash != planHash || operation.Generation != 42 {
+		t.Fatalf("queued operation = %#v", operation)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

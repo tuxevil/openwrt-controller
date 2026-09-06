@@ -114,6 +114,38 @@ transaction_valid_config() {
     return 1
 }
 
+transaction_identity_matches() {
+    local transaction_path="$1"
+    local transaction_config="$2"
+    local expected_generation="${3:-}"
+    local expected_plan_hash="${4:-}"
+    local stored_config stored_generation stored_plan_hash
+
+    stored_config=$(cat "$transaction_path/config" 2>/dev/null || true)
+    if [ -n "$stored_config" ] && [ "$stored_config" != "$transaction_config" ]; then
+        return 1
+    fi
+
+    if [ -f "$transaction_path/plan_hash" ]; then
+        stored_plan_hash=$(cat "$transaction_path/plan_hash" 2>/dev/null || true)
+    else
+        stored_plan_hash=$(cat "$NERVE_TRANSACTION_ROOT/operation_${transaction_config}.hash" 2>/dev/null || true)
+    fi
+    if [ -n "$expected_plan_hash" ]; then
+        [ "$stored_plan_hash" = "$expected_plan_hash" ] || return 1
+    fi
+
+    stored_generation=$(cat "$transaction_path/generation" 2>/dev/null || true)
+    if [ -n "$expected_generation" ]; then
+        if [ -n "$stored_generation" ]; then
+            [ "$stored_generation" = "$expected_generation" ] || return 1
+        elif [ "$expected_generation" -gt 0 ] 2>/dev/null; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
 transaction_write_atomic() {
     local transaction_file="$1"
     local transaction_value="$2"
@@ -268,6 +300,7 @@ transaction_recover_one() {
     fi
     rm -f "$transaction_path/backup" "$transaction_path/backup_exists"
     transaction_write_atomic "$NERVE_TRANSACTION_ROOT/last" "$transaction_id" || return 1
+    transaction_write_atomic "$NERVE_OPERATION_STATUS_FILE" "$transaction_id" || return 1
     logger -t agent "TRANSACTION_RECOVERED: restored $transaction_config for $transaction_id"
 }
 
@@ -342,6 +375,7 @@ transaction_begin() {
         if [ -f "$NERVE_TRANSACTION_ROOT/active" ]; then
             active_state=$(cat "$(transaction_dir "$active_id")/state" 2>/dev/null || true)
             if [ "$active_id" = "$transaction_id" ] && [ "$active_state" = "COMMITTED" ]; then
+                transaction_identity_matches "$(transaction_dir "$transaction_id")" "$transaction_config" "$transaction_generation" "$transaction_plan_hash" || return 1
                 return 10
             fi
             return 1
@@ -353,12 +387,14 @@ transaction_begin() {
         transaction_state=$(cat "$transaction_path/state" 2>/dev/null || true)
         case "$transaction_state" in
             COMMITTED)
+                transaction_identity_matches "$transaction_path" "$transaction_config" "$transaction_generation" "$transaction_plan_hash" || return 1
                 return 10
                 ;;
             APPLYING|PENDING_CONFIRM|ROLLING_BACK)
                 return 1
                 ;;
             RESTORED)
+                transaction_identity_matches "$transaction_path" "$transaction_config" "$transaction_generation" "$transaction_plan_hash" || return 1
                 rm -rf "$transaction_path"
                 ;;
         esac
