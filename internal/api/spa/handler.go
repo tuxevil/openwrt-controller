@@ -27,11 +27,10 @@ import (
 func NewHandler(distDir string) http.Handler {
 	fs := http.FileServer(http.Dir(distDir))
 	indexPath := filepath.Join(distDir, "index.html")
-	spaIndex, _ := readFile(indexPath)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setCacheHeaders(w, r.URL.Path)
 		if r.URL.Path == "/" || r.URL.Path == "" {
-			serveIndex(w, spaIndex)
+			serveIndexFile(w, indexPath)
 			return
 		}
 		// Real on-disk file? serve as-is (FileServer handles Range, etc.)
@@ -48,7 +47,7 @@ func NewHandler(distDir string) http.Handler {
 			return
 		}
 		// SPA history-mode fallback.
-		serveIndex(w, spaIndex)
+		serveIndexFile(w, indexPath)
 	})
 }
 
@@ -70,6 +69,19 @@ func serveIndex(w http.ResponseWriter, body []byte) {
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(body)
+}
+
+// serveIndexFile reads index.html for each navigation request. Deployments
+// that rebuild web/dist in place can replace the file while the controller
+// process stays alive; caching its bytes at startup would leave the browser
+// with references to bundles that no longer exist on disk.
+func serveIndexFile(w http.ResponseWriter, indexPath string) {
+	body, err := readFile(indexPath)
+	if err != nil {
+		http.Error(w, "frontend not built (index.html missing)", http.StatusNotFound)
+		return
+	}
+	serveIndex(w, body)
 }
 
 // fileExists reports whether p (interpreted relative to distDir) maps

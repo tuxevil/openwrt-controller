@@ -1,6 +1,8 @@
 package spa
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,5 +27,31 @@ func TestFileExistsDoesNotEscapeDistributionDirectory(t *testing.T) {
 
 	if fileExists(distDir, "../secret.txt") {
 		t.Fatal("fileExists accepted a path outside the distribution directory")
+	}
+}
+
+func TestHandlerReloadsIndexAfterFrontendBuild(t *testing.T) {
+	distDir := t.TempDir()
+	indexPath := filepath.Join(distDir, "index.html")
+	oldIndex := []byte(`<script type="module" src="/assets/old.js"></script>`)
+	newIndex := []byte(`<script type="module" src="/assets/new.js"></script>`)
+	if err := os.WriteFile(indexPath, oldIndex, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewHandler(distDir)
+	if err := os.WriteFile(indexPath, newIndex, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/site/example", nil)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", res.Code)
+	}
+	if got := res.Body.Bytes(); string(got) != string(newIndex) {
+		t.Fatalf("handler served stale index.html: got %q, want %q", got, newIndex)
 	}
 }
