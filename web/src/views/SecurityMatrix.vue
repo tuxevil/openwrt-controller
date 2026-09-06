@@ -40,11 +40,13 @@
         <input v-model="noteForm.device_id" placeholder="Device ID (optional)" class="neon-input note-input" />
         <input v-model="noteForm.title" placeholder="Note title" class="neon-input note-input" required />
         <textarea v-model="noteForm.content" placeholder="Role, dependency, service expectation..." class="note-textarea" required></textarea>
-        <button class="action-btn neon-btn" type="submit" :disabled="savingNote">Save note</button>
+        <button class="action-btn neon-btn" type="submit" :disabled="savingNote">{{ editingNoteId ? 'Update note' : 'Save note' }}</button>
+        <button v-if="editingNoteId" class="note-delete" type="button" @click="cancelEdit">Cancel</button>
       </form>
       <div v-for="note in operatorNotes" :key="note.id" class="operator-note">
         <div><strong>{{ note.title }}</strong> <span class="operator-case-status">{{ note.site_id || note.device_id || 'fleet' }}</span></div>
         <p>{{ note.content }}</p>
+        <button class="note-delete" @click="startEdit(note)">Edit</button>
         <button class="note-delete" @click="deleteNote(note)">Delete</button>
       </div>
     </div>
@@ -116,6 +118,7 @@ const operatorCases = ref([]);
 const proposals = ref([]);
 const operatorNotes = ref([]);
 const savingNote = ref(false);
+const editingNoteId = ref('');
 const noteForm = ref({ site_id: '', device_id: '', title: '', content: '' });
 
 const fetchInsights = async () => {
@@ -155,14 +158,37 @@ const createNote = async () => {
   if (savingNote.value) return;
   savingNote.value = true;
   try {
-    await api.client.post('/sentinel/notes', noteForm.value);
+    if (editingNoteId.value) {
+      await api.client.patch(`/sentinel/notes/${editingNoteId.value}`, {
+        title: noteForm.value.title,
+        content: noteForm.value.content
+      });
+    } else {
+      await api.client.post('/sentinel/notes', noteForm.value);
+    }
     noteForm.value = { site_id: '', device_id: '', title: '', content: '' };
+    editingNoteId.value = '';
     await fetchOperatorState();
   } catch (e) {
     triggerError.value = e.response?.data?.error?.message || e.message;
   } finally {
     savingNote.value = false;
   }
+};
+
+const startEdit = (note) => {
+  editingNoteId.value = note.id;
+  noteForm.value = {
+    site_id: note.site_id || '',
+    device_id: note.device_id || '',
+    title: note.title,
+    content: note.content
+  };
+};
+
+const cancelEdit = () => {
+  editingNoteId.value = '';
+  noteForm.value = { site_id: '', device_id: '', title: '', content: '' };
 };
 
 const deleteNote = async (note) => {

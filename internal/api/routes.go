@@ -68,6 +68,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sentinel/cases/{case_id}", middleware.WithAuth(handlers.GetSentinelCaseHandler))
 	mux.HandleFunc("GET /api/sentinel/notes", middleware.WithAuth(handlers.ListSentinelNotesHandler))
 	mux.HandleFunc("POST /api/sentinel/notes", middleware.WithAuth(handlers.CreateSentinelNoteHandler))
+	mux.HandleFunc("PATCH /api/sentinel/notes/{note_id}", middleware.WithAuth(handlers.UpdateSentinelNoteHandler))
 	mux.HandleFunc("DELETE /api/sentinel/notes/{note_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteSentinelNoteHandler)))
 	mux.HandleFunc("GET /api/sentinel/proposals", middleware.WithAuth(handlers.ListSentinelProposalsHandler))
 	mux.HandleFunc("POST /api/sentinel/proposals/{proposal_id}/approve", middleware.WithAuth(middleware.RequireAdmin(handlers.ApproveSentinelProposalHandler)))

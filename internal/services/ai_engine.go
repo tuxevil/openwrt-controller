@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -63,6 +64,10 @@ func ParseAICompletion(content string) (string, error) {
 }
 
 func completeAI(systemPrompt, userPrompt string, jsonMode bool) (string, string, int, error) {
+	return completeAIContext(context.Background(), systemPrompt, userPrompt, jsonMode)
+}
+
+func completeAIContext(ctx context.Context, systemPrompt, userPrompt string, jsonMode bool) (string, string, int, error) {
 	settings := database.GetPlatformSettings()
 	baseURL := strings.TrimRight(settings.AIEngineBaseURL, "/")
 	if baseURL == "" {
@@ -88,7 +93,7 @@ func completeAI(systemPrompt, userPrompt string, jsonMode bool) (string, string,
 	if err != nil {
 		return "", "", 0, err
 	}
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", "", 0, err
 	}

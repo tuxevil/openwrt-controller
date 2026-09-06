@@ -431,6 +431,22 @@ func DeleteSentinelNote(schema, noteID string) error {
 	return err
 }
 
+func UpdateSentinelNote(schema, noteID, title, content string) (SentinelNote, error) {
+	safeSchema, err := sentinelSchema(schema)
+	if err != nil {
+		return SentinelNote{}, err
+	}
+	if strings.TrimSpace(title) == "" || strings.TrimSpace(content) == "" || len(content) > 20000 {
+		return SentinelNote{}, fmt.Errorf("note title and content are required")
+	}
+	var note SentinelNote
+	err = database.DB.QueryRow(fmt.Sprintf(`UPDATE %s.sentinel_notes SET title = $1, content = $2,
+        updated_at = CURRENT_TIMESTAMP WHERE id = $3
+        RETURNING id::text, COALESCE(site_id::text,''), COALESCE(device_id,''), title, content, created_by, created_at, updated_at`, safeSchema), title, content, noteID).
+		Scan(&note.ID, &note.SiteID, &note.DeviceID, &note.Title, &note.Content, &note.CreatedBy, &note.CreatedAt, &note.UpdatedAt)
+	return note, err
+}
+
 func CreateSentinelProposal(schema, conversationID, caseID, createdBy string, draft *SentinelProposalDraft) (SentinelProposal, error) {
 	safeSchema, err := sentinelSchema(schema)
 	if err != nil {

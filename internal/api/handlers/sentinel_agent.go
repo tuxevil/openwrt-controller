@@ -199,6 +199,28 @@ func DeleteSentinelNoteHandler(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func UpdateSentinelNoteHandler(w http.ResponseWriter, r *http.Request) {
+	noteID := r.PathValue("note_id")
+	if !parseSentinelID(w, noteID) {
+		return
+	}
+	var req sentinelNoteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeSentinelError(w, http.StatusBadRequest, "INVALID_JSON", "invalid Sentinel note payload")
+		return
+	}
+	note, err := services.UpdateSentinelNote(sentinelSchemaFromRequest(r), noteID, req.Title, req.Content)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel note not found")
+		return
+	}
+	if err != nil {
+		writeSentinelError(w, http.StatusBadRequest, "INVALID_NOTE", err.Error())
+		return
+	}
+	writeSentinelJSON(w, http.StatusOK, note)
+}
+
 func ListSentinelProposalsHandler(w http.ResponseWriter, r *http.Request) {
 	proposals, err := services.ListSentinelProposals(sentinelSchemaFromRequest(r), r.URL.Query().Get("status"), parseSentinelLimit(r))
 	if err != nil {
