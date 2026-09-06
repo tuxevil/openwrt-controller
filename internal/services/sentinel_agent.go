@@ -221,7 +221,8 @@ func runSentinelInvestigation(schema string, history []SentinelStoredMessage, qu
 			encoded, _ := json.Marshal(toolResult)
 			encodedText := redactSentinelSecrets(string(encoded))
 			if len(encodedText) > sentinelMaxResultLen {
-				encodedText = encodedText[:sentinelMaxResultLen] + "...[truncated]"
+				truncated, _ := json.Marshal(map[string]string{"truncated_result": encodedText[:sentinelMaxResultLen]})
+				encodedText = string(truncated)
 			}
 			result.Evidence = append(result.Evidence, SentinelEvidence{Tool: call.Name, Args: originalArguments, Result: json.RawMessage(encodedText)})
 			prompt += fmt.Sprintf("\nTOOL RESULT %s:\n%s", call.Name, encodedText)

@@ -171,6 +171,16 @@ func ResolveIncident(schema, incidentType, deviceID string) {
 	if err != nil {
 		log.Printf("[THE SIGNAL] Failed to resolve incident: %v", err)
 	}
+	// Close the corresponding proactive case when the deterministic incident
+	// has recovered. The investigation and evidence remain available in the
+	// case history.
+	if _, caseErr := database.DB.Exec(fmt.Sprintf(`
+		UPDATE %s.sentinel_cases SET status = 'RESOLVED', resolved_at = CURRENT_TIMESTAMP,
+		       updated_at = CURRENT_TIMESTAMP
+		WHERE source = 'incident' AND device_id = $1 AND title LIKE $2 AND status IN ('OPEN','INVESTIGATING')
+	`, schema), deviceID, incidentType+" on %"); caseErr != nil {
+		log.Printf("[SENTINEL_AI] Failed to resolve proactive case: %v", caseErr)
+	}
 }
 
 func notifyTelegram(message string) {
