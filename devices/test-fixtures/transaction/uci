@@ -1,0 +1,66 @@
+#!/bin/sh
+
+if [ -n "${UCI_FIXTURE_STATE:-}" ]; then
+    : "${UCI_FIXTURE_LOG:?UCI_FIXTURE_LOG is required}"
+    mkdir -p "$(dirname "$UCI_FIXTURE_STATE")"
+    touch "$UCI_FIXTURE_STATE" "$UCI_FIXTURE_LOG"
+    printf '%s\n' "$*" >> "$UCI_FIXTURE_LOG"
+
+    if [ "${1:-}" = "-q" ]; then
+        shift
+    fi
+
+    action="${1:-}"
+    case "$action" in
+        show)
+            cat "$UCI_FIXTURE_STATE"
+            ;;
+        add)
+            next=$(awk -F'[][]' '/^dhcp\.@host\[[0-9]+\]/{ if ($2 >= n) n=$2 + 1 } END { print n + 0 }' "$UCI_FIXTURE_STATE")
+            printf '%s\n' "@host[$next]" > "$UCI_FIXTURE_STATE.last"
+            ;;
+        set)
+            assignment="${2:-}"
+            path=${assignment%%=*}
+            value=${assignment#*=}
+            if printf '%s' "$path" | grep -q '@host\[-1\]'; then
+                last_ref=$(cat "$UCI_FIXTURE_STATE.last")
+                path=$(printf '%s' "$path" | sed "s/@host\[-1\]/$last_ref/")
+            fi
+            tmp="$UCI_FIXTURE_STATE.$$"
+            awk -v prefix="$path=" '!index($0, prefix) { print }' "$UCI_FIXTURE_STATE" > "$tmp"
+            printf '%s=%s\n' "$path" "$value" >> "$tmp"
+            mv "$tmp" "$UCI_FIXTURE_STATE"
+            ;;
+        delete)
+            path="${2:-}"
+            if printf '%s' "$path" | grep -q '@host\[-1\]'; then
+                last_ref=$(cat "$UCI_FIXTURE_STATE.last")
+                path=$(printf '%s' "$path" | sed "s/@host\[-1\]/$last_ref/")
+            fi
+            if ! grep -F -q "$path" "$UCI_FIXTURE_STATE"; then
+                exit 1
+            fi
+            tmp="$UCI_FIXTURE_STATE.$$"
+            awk -v prefix="$path=" '!index($0, prefix) { print }' "$UCI_FIXTURE_STATE" > "$tmp"
+            mv "$tmp" "$UCI_FIXTURE_STATE"
+            ;;
+        add_list)
+            assignment="${2:-}"
+            path=${assignment%%=*}
+            value=${assignment#*=}
+            if printf '%s' "$path" | grep -q '@host\[-1\]'; then
+                last_ref=$(cat "$UCI_FIXTURE_STATE.last")
+                path=$(printf '%s' "$path" | sed "s/@host\[-1\]/$last_ref/")
+            fi
+            printf '%s=%s\n' "$path" "$value" >> "$UCI_FIXTURE_STATE"
+            ;;
+    commit|revert|rename)
+        ;;
+        *)
+            ;;
+    esac
+    exit 0
+fi
+
+exit 0

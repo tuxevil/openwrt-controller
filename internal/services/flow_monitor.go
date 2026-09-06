@@ -42,6 +42,17 @@ const threatConnectionThreshold = 50
 // ProcessFlowSense is called from TelemetryHandler for each telemetry push.
 // It enriches flows with threat flags and triggers Sentinel AI if warranted.
 func ProcessFlowSense(deviceID string, rawFlows []interface{}, controllerIP string) []FlowEntry {
+	return processFlowSense("", "", deviceID, rawFlows, controllerIP)
+}
+
+// ProcessFlowSenseForSchema is the tenant-aware entry point used by telemetry.
+// The legacy ProcessFlowSense wrapper remains for callers that only need the
+// enrichment result and cannot create a tenant-scoped Sentinel case.
+func ProcessFlowSenseForSchema(schema, siteID, deviceID string, rawFlows []interface{}, controllerIP string) []FlowEntry {
+	return processFlowSense(schema, siteID, deviceID, rawFlows, controllerIP)
+}
+
+func processFlowSense(schema, siteID, deviceID string, rawFlows []interface{}, controllerIP string) []FlowEntry {
 	if len(rawFlows) == 0 {
 		return nil
 	}
@@ -138,14 +149,14 @@ func ProcessFlowSense(deviceID string, rawFlows []interface{}, controllerIP stri
 		flowSentinelMu.Unlock()
 
 		if shouldRun {
-			go escalateFlowToSentinel(deviceID, suspicious)
+			go escalateFlowToSentinel(schema, siteID, deviceID, suspicious)
 		}
 	}
 
 	return enriched
 }
 
-func escalateFlowToSentinel(deviceID string, suspicious []FlowEntry) {
+func escalateFlowToSentinel(schema, siteID, deviceID string, suspicious []FlowEntry) {
 	// Build a readable context for the LLM
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("[FLOW_SENSE ALERT] Device: %s\n", deviceID))
@@ -160,6 +171,15 @@ func escalateFlowToSentinel(deviceID string, suspicious []FlowEntry) {
 
 	contextStr := sb.String()
 	log.Printf("[FLOW_SENSE] Escalating %d suspicious flows to Sentinel AI for device %s", len(suspicious), deviceID)
+	if schema != "" {
+		caseID, caseErr := OpenSentinelCase(schema, "flow_sense", siteID, deviceID, "HIGH",
+			"Suspicious outbound flow activity", contextStr, suspicious)
+		if caseErr == nil {
+			QueueSentinelCaseInvestigation(schema, caseID)
+		} else {
+			log.Printf("[FLOW_SENSE] failed to persist Sentinel case: %v", caseErr)
+		}
+	}
 
 	diagnosis, severity, involvedDevices, llmModel, tokensUsed, err := AnalyzeFleetContext(contextStr)
 	if err != nil {

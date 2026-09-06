@@ -16,6 +16,37 @@ const history = ref([
   { type: 'system', text: 'ORACLE RAG INITIALIZED. Awaiting cognitive input...' }
 ])
 const isProcessing = ref(false)
+const conversationId = ref(localStorage.getItem('sentinel_conversation_id') || '')
+
+function restoreConversation(historyItems) {
+  if (!historyItems || historyItems.length === 0) return
+  history.value = [
+    { type: 'system', text: 'SENTINEL AI CONVERSATION RESTORED.' },
+    ...historyItems.map(item => ({
+      type: item.role === 'user' ? 'user' : 'oracle_summary',
+      text: item.role === 'user' ? `> ${item.content}` : item.content
+    }))
+  ]
+}
+
+async function restorePersistedConversation() {
+  if (!conversationId.value) return
+  try {
+    const res = await api.client.get(`/sentinel/conversations/${conversationId.value}`)
+    restoreConversation(res.data.messages)
+  } catch (err) {
+    localStorage.removeItem('sentinel_conversation_id')
+    conversationId.value = ''
+  }
+}
+
+async function ensureConversation() {
+  if (conversationId.value) return conversationId.value
+  const res = await api.client.post('/sentinel/conversations', { title: 'Operator session' })
+  conversationId.value = res.data.id
+  localStorage.setItem('sentinel_conversation_id', conversationId.value)
+  return conversationId.value
+}
 
 function close() {
   emit('update:modelValue', false)
@@ -41,6 +72,7 @@ function handleGlobalKeydown(e) {
 
 onMounted(() => {
   window.addEventListener('keydown', handleGlobalKeydown)
+  restorePersistedConversation()
 })
 
 onUnmounted(() => {
@@ -56,19 +88,24 @@ async function executeCommand() {
   isProcessing.value = true
 
   try {
-    const res = await api.client.post('/chatops/query', { query })
-    const { summary, data } = res.data
+    const id = await ensureConversation()
+    const res = await api.client.post(`/sentinel/conversations/${id}/messages`, { query })
+    const { answer, evidence, proposal } = res.data
 
-    history.value.push({ type: 'oracle_summary', text: summary })
+    history.value.push({ type: 'oracle_summary', text: answer })
 
-    if (data && Array.isArray(data) && data.length > 0) {
-      history.value.push({ type: 'oracle_data', data })
-    } else if (data && typeof data === 'object') {
-       history.value.push({ type: 'oracle_data', data: [data] })
+    if (evidence && evidence.length > 0) {
+      history.value.push({ type: 'oracle_data', data: evidence.map(item => ({
+        tool: item.tool,
+        result: item.result
+      })) })
+    }
+    if (proposal) {
+      history.value.push({ type: 'oracle_proposal', proposal })
     }
   } catch (err) {
     const backendMsg = err.response?.data?.error || err.message
-    history.value.push({ type: 'error', text: `[SYSTEM ERROR] Cognitive link severed: ${backendMsg}` })
+    history.value.push({ type: 'error', text: `[SYSTEM ERROR] Sentinel investigation failed: ${backendMsg}` })
   } finally {
     isProcessing.value = false
     nextTick(() => scrollBottom())
@@ -141,6 +178,15 @@ function renderTable(rows) {
             <pre class="m-0 leading-tight whitespace-pre">{{ renderTable(item.data) }}</pre>
           </div>
 
+          <!-- Approval-gated proposal -->
+          <div v-else-if="item.type === 'oracle_proposal'" class="text-yellow-300 text-xs mt-2 bg-yellow-300/5 p-3 border border-yellow-300/30 clip-chamfer">
+            <div class="font-bold tracking-widest">[ACTION PROPOSAL: {{ item.proposal.status }}]</div>
+            <div class="mt-1">{{ item.proposal.summary }}</div>
+            <div class="opacity-80 mt-1">Device: {{ item.proposal.device_id }} · Config: {{ item.proposal.config }}</div>
+            <div v-if="item.proposal.blocked_reason" class="text-red-400 mt-1">Blocked: {{ item.proposal.blocked_reason }}</div>
+            <div v-else class="opacity-80 mt-1">Review and approve from Sentinel proposals before execution.</div>
+          </div>
+
           <!-- Error -->
           <div v-else-if="item.type === 'error'" class="text-red-500 text-sm">
             {{ item.text }}
@@ -149,7 +195,7 @@ function renderTable(rows) {
         </div>
         
         <div v-if="isProcessing" class="text-neon-cyan text-sm flex items-center gap-2 animate-pulse">
-          <span class="opacity-70">[ORACLE]</span> <span>Synthesizing intent...</span>
+          <span class="opacity-70">[SENTINEL]</span> <span>Investigating infrastructure evidence...</span>
         </div>
       </div>
 

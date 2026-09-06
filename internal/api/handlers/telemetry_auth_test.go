@@ -1,6 +1,10 @@
 package handlers
 
-import "testing"
+import (
+	"context"
+	"net/http/httptest"
+	"testing"
+)
 
 func TestValidateDeviceTelemetryToken(t *testing.T) {
 	tests := []struct {
@@ -22,5 +26,21 @@ func TestValidateDeviceTelemetryToken(t *testing.T) {
 				t.Fatalf("valid=%t, error=%v", tt.valid, err)
 			}
 		})
+	}
+}
+
+func TestTelemetryPersistenceContextSurvivesRequestCancellation(t *testing.T) {
+	r := httptest.NewRequest("POST", "/api/telemetry", nil)
+	requestContext, cancelRequest := context.WithCancel(r.Context())
+	r = r.WithContext(requestContext)
+	cancelRequest()
+
+	persistenceContext, cancelPersistence := telemetryPersistenceContext(r)
+	defer cancelPersistence()
+	if err := persistenceContext.Err(); err != nil {
+		t.Fatalf("persistence context inherited request cancellation: %v", err)
+	}
+	if _, ok := persistenceContext.Deadline(); !ok {
+		t.Fatal("persistence context must have a bounded deadline")
 	}
 }

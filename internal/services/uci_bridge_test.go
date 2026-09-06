@@ -1,6 +1,7 @@
 package services
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -21,6 +22,20 @@ func TestEscapeVal(t *testing.T) {
 		if got != c.want {
 			t.Errorf("escapeVal(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestParseMACList(t *testing.T) {
+	macs, err := ParseMACList("0c:a6:4c:f2:f2:77' '0c:a6:4c:92:be:06")
+	if err != nil {
+		t.Fatalf("ParseMACList returned an error: %v", err)
+	}
+	want := []string{"0C:A6:4C:F2:F2:77", "0C:A6:4C:92:BE:06"}
+	if strings.Join(macs, ",") != strings.Join(want, ",") {
+		t.Fatalf("ParseMACList = %#v, want %#v", macs, want)
+	}
+	if _, err := ParseMACList("not-a-mac"); err == nil {
+		t.Fatal("ParseMACList should reject invalid input")
 	}
 }
 
@@ -62,22 +77,146 @@ func TestBuildSafeBatchScriptRestartsBeforeHealthCheck(t *testing.T) {
 	}
 }
 
+func TestBuildSafeBatchScriptRetriesAndReportsHealthCheckFailures(t *testing.T) {
+	script := BuildSafeBatchScript("wireless", []UciCommand{
+		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
+	}, []string{"192.0.2.1"})
+
+	if !strings.Contains(script, "for health_attempt in 1 2 3") {
+		t.Fatalf("health check should retry transient failures:\n%s", script)
+	}
+	if !strings.Contains(script, "CENTRAL_LUCI: health check failed for target") {
+		t.Fatalf("health check should report the failed target:\n%s", script)
+	}
+}
+
 func TestBuildBatchScriptRollsBackAndRestartsService(t *testing.T) {
 	script := BuildBatchScript("wireless", []UciCommand{
 		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
 	})
 
-	restore := "uci import wireless < /tmp/central_luci_bak_wireless.conf"
-	commit := "uci commit wireless"
+	restore := "cp /tmp/central_luci_bak_wireless.conf /etc/config/wireless"
+	revert := "uci revert wireless"
 	restart := "wifi && logger -t central_luci 'wireless service restarted'"
 	rollback := strings.Index(script, "rollback()")
 	if rollback == -1 {
 		t.Fatalf("script missing rollback function:\n%s", script)
 	}
-	for _, fragment := range []string{restore, commit, restart} {
+	for _, fragment := range []string{restore, revert, restart} {
 		position := strings.Index(script[rollback:], fragment)
 		if position == -1 {
 			t.Fatalf("rollback missing %q:\n%s", fragment, script)
+		}
+	}
+}
+
+func TestBuildBatchScriptRollbackRestoresRawConfigFile(t *testing.T) {
+	script := BuildBatchScript("wireless", []UciCommand{
+		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
+	})
+
+	for _, fragment := range []string{
+		"cp /etc/config/wireless /tmp/central_luci_bak_wireless.conf",
+		"cp /tmp/central_luci_bak_wireless.conf /etc/config/wireless",
+		"uci revert wireless",
+	} {
+		if !strings.Contains(script, fragment) {
+			t.Fatalf("rollback missing raw config restoration step %q:\n%s", fragment, script)
+		}
+	}
+	if strings.Contains(script, "uci import wireless < /tmp/central_luci_bak_wireless.conf") {
+		t.Fatal("rollback must not rely on uci import to remove committed anonymous sections")
+	}
+}
+
+func TestBuildBatchScriptKeepsRestartCommandsInTheirPhases(t *testing.T) {
+	script := BuildBatchScript("wireless", []UciCommand{
+		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
+	})
+	restart := "wifi && logger -t central_luci 'wireless service restarted'"
+	if strings.Count(script, restart) != 2 {
+		t.Fatalf("expected restart in rollback and normal phases, got %d:\n%s", strings.Count(script, restart), script)
+	}
+	if strings.Contains(script, "\nwireless || true") || strings.Contains(script, "\n.conf\n") {
+		t.Fatalf("format arguments shifted into executable lines:\n%s", script)
+	}
+}
+
+func TestBuildSafeBatchScriptHasValidShellSyntax(t *testing.T) {
+	script := BuildSafeBatchScript("dhcp", []UciCommand{
+		{Action: "ensure_host", Config: "dhcp", Section: "living room", Option: "AA:BB:CC:DD:EE:FF", Value: "192.0.2.10"},
+	}, []string{"192.0.2.1"})
+
+	command := exec.Command("sh", "-n")
+	command.Stdin = strings.NewReader(script)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("generated safe batch is not valid shell: %v\n%s", err, output)
+	}
+}
+
+func TestBuildBatchScriptEnsuresDHCPHostIdempotently(t *testing.T) {
+	script := BuildBatchScript("dhcp", []UciCommand{
+		{Action: "ensure_host", Config: "dhcp", Section: "living room", Option: "AA:BB:CC:DD:EE:FF", Value: "192.0.2.10"},
+	})
+
+	for _, fragment := range []string{
+		"host_macs='AA:BB:CC:DD:EE:FF'",
+		"host_ip='192.0.2.10'",
+		"host_name='living room'",
+		"host_ref=$(uci show dhcp",
+		"if [ -n \"$host_ref\" ]; then",
+		"uci add dhcp host",
+	} {
+		if !strings.Contains(script, fragment) {
+			t.Fatalf("idempotent DHCP host script missing %q:\n%s", fragment, script)
+		}
+	}
+	if strings.Index(script, "uci add dhcp host") < strings.Index(script, "if [ -n \"$host_ref\" ]; then") {
+		t.Fatalf("DHCP host creation must remain in the missing-host branch:\n%s", script)
+	}
+}
+
+func TestBuildBatchScriptLooksUpDHCPHostByMACOrIPValue(t *testing.T) {
+	script := BuildBatchScript("dhcp", []UciCommand{
+		{Action: "ensure_host", Config: "dhcp", Section: "living room", Option: "AA:BB:CC:DD:EE:FF", Value: "192.0.2.10"},
+	})
+
+	for _, fragment := range []string{
+		`grep -i -F "$host_mac" | grep -F ".mac="`,
+		`host_value=$(printf '%s' "$host_value" | sed "s/^'//; s/'$//")`,
+		`if [ "$host_value" = "$host_ip" ]; then`,
+	} {
+		if !strings.Contains(script, fragment) {
+			t.Fatalf("DHCP host lookup missing %q:\n%s", fragment, script)
+		}
+	}
+}
+
+func TestBuildBatchScriptHandlesMultipleDHCPHostMACs(t *testing.T) {
+	script := BuildBatchScript("dhcp", []UciCommand{
+		{Action: "ensure_host", Config: "dhcp", Section: "living room", Option: "AA:BB:CC:DD:EE:FF' '11:22:33:44:55:66", Value: "192.0.2.10"},
+	})
+
+	for _, fragment := range []string{
+		"host_macs='AA:BB:CC:DD:EE:FF 11:22:33:44:55:66'",
+		"host_mac_count=2",
+		"for host_mac in $host_macs; do",
+		"uci -q delete \"dhcp.$host_ref.mac\" || true",
+		"uci add_list \"dhcp.$host_ref.mac=$host_mac\"",
+	} {
+		if !strings.Contains(script, fragment) {
+			t.Fatalf("multi-MAC DHCP host script missing %q:\n%s", fragment, script)
+		}
+	}
+}
+
+func TestDeleteCommandsIgnoreMissingEntries(t *testing.T) {
+	for _, command := range []string{
+		Delete("dhcp", "@host[-1]"),
+		DeleteOption("dhcp", "@dnsmasq[0]", "server"),
+	} {
+		if !strings.HasSuffix(command, " || true") {
+			t.Fatalf("delete command should be idempotent: %q", command)
 		}
 	}
 }

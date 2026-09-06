@@ -59,6 +59,19 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/global/settings", middleware.WithAuth(handlers.GetPlatformSettingsHandler))
 	mux.HandleFunc("POST /api/global/settings", middleware.WithAuth(handlers.UpdatePlatformSettingsHandler))
 	mux.HandleFunc("POST /api/chatops/query", middleware.WithAuth(handlers.ChatOpsQueryHandler))
+	// ── SENTINEL AI operator ────────────────────────────────────────────────
+	mux.HandleFunc("GET /api/sentinel/conversations", middleware.WithAuth(handlers.ListSentinelConversationsHandler))
+	mux.HandleFunc("POST /api/sentinel/conversations", middleware.WithAuth(handlers.CreateSentinelConversationHandler))
+	mux.HandleFunc("GET /api/sentinel/conversations/{conversation_id}", middleware.WithAuth(handlers.GetSentinelConversationHandler))
+	mux.HandleFunc("POST /api/sentinel/conversations/{conversation_id}/messages", middleware.WithAuth(handlers.PostSentinelMessageHandler))
+	mux.HandleFunc("GET /api/sentinel/cases", middleware.WithAuth(handlers.ListSentinelCasesHandler))
+	mux.HandleFunc("GET /api/sentinel/cases/{case_id}", middleware.WithAuth(handlers.GetSentinelCaseHandler))
+	mux.HandleFunc("GET /api/sentinel/notes", middleware.WithAuth(handlers.ListSentinelNotesHandler))
+	mux.HandleFunc("POST /api/sentinel/notes", middleware.WithAuth(handlers.CreateSentinelNoteHandler))
+	mux.HandleFunc("DELETE /api/sentinel/notes/{note_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteSentinelNoteHandler)))
+	mux.HandleFunc("GET /api/sentinel/proposals", middleware.WithAuth(handlers.ListSentinelProposalsHandler))
+	mux.HandleFunc("POST /api/sentinel/proposals/{proposal_id}/approve", middleware.WithAuth(middleware.RequireAdmin(handlers.ApproveSentinelProposalHandler)))
+	mux.HandleFunc("POST /api/sentinel/proposals/{proposal_id}/reject", middleware.WithAuth(middleware.RequireAdmin(handlers.RejectSentinelProposalHandler)))
 	mux.HandleFunc("GET /api/sites", middleware.WithAuth(handlers.GetSitesHandler))
 	mux.HandleFunc("PUT /api/sites/{site_id}/location", middleware.WithAuth(handlers.UpdateSiteLocationHandler))
 	mux.HandleFunc("POST /api/sites", middleware.WithAuth(handlers.CreateSiteHandler))
@@ -149,11 +162,11 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── EDGE_NEXUS / L3 Edge Management ──────────────────────────────────────
 	mux.HandleFunc("GET /api/devices/{id}/edge-network", middleware.WithAuth(handlers.GetEdgeNetworkHandler))
-	mux.HandleFunc("PUT /api/devices/{id}/edge-network", middleware.WithAuth(handlers.PutEdgeNetworkHandler))
+	mux.HandleFunc("PUT /api/devices/{id}/edge-network", middleware.WithAuth(middleware.RequireAdmin(handlers.PutEdgeNetworkHandler)))
 	mux.HandleFunc("GET /api/devices/{id}/edge-dhcp", middleware.WithAuth(handlers.GetEdgeDHCPHandler))
-	mux.HandleFunc("PUT /api/devices/{id}/edge-dhcp", middleware.WithAuth(handlers.PutEdgeDHCPHandler))
+	mux.HandleFunc("PUT /api/devices/{id}/edge-dhcp", middleware.WithAuth(middleware.RequireAdmin(handlers.PutEdgeDHCPHandler)))
 	mux.HandleFunc("GET /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.GetEdgeFirewallHandler))
-	mux.HandleFunc("PUT /api/devices/{id}/edge-firewall", middleware.WithAuth(handlers.PutEdgeFirewallHandler))
+	mux.HandleFunc("PUT /api/devices/{id}/edge-firewall", middleware.WithAuth(middleware.RequireAdmin(handlers.PutEdgeFirewallHandler)))
 
 	// ── OMADA_MIGRATOR / State Migration Bridge ──────────────────────────────
 	mux.HandleFunc("POST /api/migration/omada/analyze", middleware.WithAuth(handlers.AnalyzeOmadaBackup))
@@ -168,6 +181,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/devices/{device_id}/central-configs", middleware.WithAuth(middleware.RequireAdmin(handlers.ListCentralConfigsHandler)))
 	mux.HandleFunc("PUT /api/devices/{device_id}/central-config", middleware.WithAuth(middleware.RequireAdmin(handlers.PutCentralConfigHandler)))
 	mux.HandleFunc("POST /api/devices/{device_id}/safe-rollout", middleware.WithAuth(middleware.RequireAdmin(handlers.SafeRolloutHandler)))
+	mux.HandleFunc("GET /api/devices/{device_id}/operation", middleware.WithAuth(middleware.RequireAdmin(handlers.GetDeviceOperationHandler)))
 	mux.HandleFunc("GET /api/devices/{device_id}/drift", middleware.WithAuth(middleware.RequireAdmin(handlers.GetDeviceDriftHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/drift-summary", middleware.WithAuth(middleware.RequireAdmin(handlers.GetSiteDriftSummaryHandler)))
 	mux.HandleFunc("POST /api/central-config/preview", middleware.WithAuth(middleware.RequireAdmin(handlers.PreviewCentralConfigHandler)))

@@ -35,6 +35,15 @@ func isAllowedUciConfig(s string) bool {
 	return ok
 }
 
+func requiresDeviceOperation(config string) bool {
+	switch config {
+	case "wireless", "network", "dhcp", "firewall", "dropbear", "system", "sqm":
+		return true
+	default:
+		return false
+	}
+}
+
 // GetUciHandler retrieves the current configuration using `ubus call uci get`
 // which directly yields structured JSON ready for the frontend.
 func GetUciHandler(w http.ResponseWriter, r *http.Request) {
@@ -49,7 +58,6 @@ func GetUciHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "config namespace not allowed"}`, http.StatusBadRequest)
 		return
 	}
-
 	// Fetch via ubus — config is now constrained to the allowlist.
 	cmd := fmt.Sprintf("ubus call uci get '{\"config\": \"%s\"}'", config)
 	out, err := runSSHCommand(deviceID, cmd)
@@ -80,6 +88,10 @@ func PutUciHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !isAllowedUciConfig(config) {
 		http.Error(w, `{"error": "config namespace not allowed"}`, http.StatusBadRequest)
+		return
+	}
+	if requiresDeviceOperation(config) {
+		http.Error(w, `{"error":"writes to this namespace require the typed device operation path"}`, http.StatusConflict)
 		return
 	}
 

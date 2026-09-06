@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -118,6 +119,29 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		pfRules = []byte("[]")
 	}
 
+	if dto.EnableGlobalSSID && dto.GlobalSSID != "" {
+		schema, schemaErr := getTenantSchema(r)
+		if schemaErr != nil {
+			http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+			return
+		}
+		conflicts, conflictErr := siteWLANPolicyConflicts(r.Context(), schema, siteID, dto.GlobalSSID, dto.GlobalEncryption, dto.GlobalWPAKey)
+		if conflictErr != nil {
+			http.Error(w, `{"error":"could not validate canonical WLAN policy"}`, http.StatusInternalServerError)
+			return
+		}
+		if len(conflicts) > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":     "site WLAN fields conflict with canonical WLAN rows",
+				"conflicts": conflicts,
+				"next_step": "update the WLAN row first; site global_* fields are compatibility fields",
+			})
+			return
+		}
+	}
+
 	sc := services.SiteConfig{
 		SQMCakeEnabled:       dto.SQMCakeEnabled,
 		SqmDownload:          dto.SqmDownload,
@@ -167,6 +191,36 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 }
 
+func siteWLANPolicyConflicts(ctx context.Context, schema, siteID, siteSSID, siteEncryption, sitePassword string) ([]string, error) {
+	rows, err := database.Tx(ctx).Query(`
+		SELECT security, COALESCE(password, '')
+		FROM `+schema+`.wlans
+		WHERE site_id = $1 AND ssid = $2 AND enabled = true
+	`, siteID, siteSSID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var conflicts []string
+	seen := make(map[string]struct{})
+	for rows.Next() {
+		var security, password string
+		if err := rows.Scan(&security, &password); err != nil {
+			return nil, err
+		}
+		resolution := services.ResolveCanonicalWLAN(siteSSID, siteEncryption, sitePassword, siteSSID, security, password)
+		for _, field := range resolution.Conflicts {
+			if _, ok := seen[field]; ok {
+				continue
+			}
+			seen[field] = struct{}{}
+			conflicts = append(conflicts, field)
+		}
+	}
+	return conflicts, rows.Err()
+}
+
 // GetSiteDeviceRolesHandler returns devices with their assigned roles.
 func GetSiteDeviceRolesHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
@@ -183,6 +237,18 @@ func GetSiteDeviceRolesHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"devices": devs,
 	})
+}
+
+func selectRolloutDevices(devs []services.DeviceRoleInfo, targetID string) ([]services.DeviceRoleInfo, error) {
+	if targetID == "" {
+		return devs, nil
+	}
+	for _, dev := range devs {
+		if dev.DeviceID == targetID {
+			return []services.DeviceRoleInfo{dev}, nil
+		}
+	}
+	return nil, fmt.Errorf("target device not found in site")
 }
 
 // PutDeviceRoleHandler updates a device's role (Gateway, AP, IoT_Node).
@@ -234,8 +300,19 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
 		return
 	}
+	targetDeviceID := r.URL.Query().Get("target_device_id")
+	devs, err = selectRolloutDevices(devs, targetDeviceID)
+	if err != nil {
+		http.Error(w, `{"error":"target device not found in site"}`, http.StatusBadRequest)
+		return
+	}
 
 	results := services.RenderSiteConfig(*sc, devs)
+	results, err = preflightRenderedResults(results)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
 
 	// Convert to preview strings per device
 	type DevicePreview struct {
@@ -260,14 +337,16 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"site_id": siteID,
-		"devices": previews,
-		"total":   len(previews),
+		"site_id":          siteID,
+		"target_device_id": targetDeviceID,
+		"devices":          previews,
+		"total":            len(previews),
 	})
 }
 
 // SyncFleetHandler executes a staged fleet synchronization.
 // It validates one canary device before pushing bounded batches to the rest.
+// An explicit target_device_id query limits the run to one selected device.
 func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	username := GetUsernameFromReq(r)
@@ -283,6 +362,12 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	targetDeviceID := r.URL.Query().Get("target_device_id")
+	devs, err = selectRolloutDevices(devs, targetDeviceID)
+	if err != nil {
+		http.Error(w, `{"error":"target device not found in site"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -304,12 +389,25 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := services.RenderSiteConfig(*sc, devs)
+	results, err = preflightRenderedResults(results)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+	if err := rejectUnsafeNetworkMutations(results); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusConflict)
+		return
+	}
 	rolloutID, generation, err := createRolloutRun(r, siteID, username, results)
 	if err != nil {
 		http.Error(w, `{"error":"could not create rollout run"}`, http.StatusInternalServerError)
 		return
 	}
-	if err := markDesiredGeneration(r, siteID, generation); err != nil {
+	targetDeviceIDs := make([]string, len(results))
+	for i, result := range results {
+		targetDeviceIDs[i] = result.DeviceID
+	}
+	if err := markDesiredGeneration(r, siteID, generation, targetDeviceIDs); err != nil {
 		http.Error(w, `{"error":"could not assign rollout generation"}`, http.StatusInternalServerError)
 		return
 	}
@@ -355,7 +453,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 						allOutput += out + "\n"
 						if err != nil {
 							sr.Status = "FAILED"
-							sr.Error = boundedRolloutDiagnostic(err.Error())
+							sr.Error = boundedRolloutDiagnostic(fmt.Sprintf("config namespace %s: %v\n%s", cfg, err, out))
 							sr.Output = boundedRolloutDiagnostic(allOutput)
 							syncResults[idx] = sr
 							break
@@ -383,7 +481,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		phases = sequentialFleetRolloutPhases(results)
 	}
 	executeBatch(phases[0])
-	canaryOK := syncResults[phases[0][0]].Status == "SUCCESS"
+	canaryOK := rolloutResultSuccess(syncResults[phases[0][0]].Status)
 	rolloutStatus := "completed"
 	if !canaryOK {
 		rolloutStatus = "canary_failed"
@@ -395,7 +493,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		for _, phase := range phases[1:] {
 			executeBatch(phase)
-			if syncResults[phase[0]].Status != "SUCCESS" {
+			if !rolloutResultSuccess(syncResults[phase[0]].Status) {
 				rolloutStatus = "aborted"
 				for _, laterPhase := range phases[1:] {
 					for _, idx := range laterPhase {
@@ -413,9 +511,11 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
 		return
 	}
+	persistCtx, persistCancel := rolloutPersistenceContext(r)
+	defer persistCancel()
 	for _, result := range syncResults {
 		if result.Status == "ABORTED" {
-			if _, err := database.Tx(r.Context()).ExecContext(r.Context(), "UPDATE "+rolloutSchema+".devices SET last_rollout_status = 'ABORTED', last_rollout_at = CURRENT_TIMESTAMP WHERE id = $1", result.DeviceID); err != nil {
+			if _, err := database.DB.ExecContext(persistCtx, "UPDATE "+rolloutSchema+".devices SET last_rollout_status = 'ABORTED', last_rollout_at = CURRENT_TIMESTAMP WHERE id = $1", result.DeviceID); err != nil {
 				log.Printf("[SITE_ORCHESTRATOR][WARN] failed to mark aborted device %s: %v", result.DeviceID, err)
 			}
 		}
@@ -443,22 +543,40 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":     rolloutStatus,
-		"rollout_id": rolloutID,
-		"generation": generation,
-		"successes":  successes,
-		"failures":   failures,
-		"results":    syncResults,
+		"status":           rolloutStatus,
+		"rollout_id":       rolloutID,
+		"generation":       generation,
+		"target_device_id": targetDeviceID,
+		"successes":        successes,
+		"failures":         failures,
+		"results":          syncResults,
 	})
 }
 
-func markDesiredGeneration(r *http.Request, siteID string, generation int64) error {
+func markDesiredGeneration(r *http.Request, siteID string, generation int64, deviceIDs []string) error {
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return err
 	}
-	_, err = database.Tx(r.Context()).ExecContext(r.Context(), "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2", generation, siteID)
-	return err
+	ctx, cancel := rolloutPersistenceContext(r)
+	defer cancel()
+	tx, err := database.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if len(deviceIDs) == 0 {
+		if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2", generation, siteID); err != nil {
+			return err
+		}
+		return tx.Commit()
+	}
+	for _, deviceID := range deviceIDs {
+		if _, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND id = $3", generation, siteID, deviceID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func markObservedGenerations(r *http.Request, generation int64, results []fleetSyncResult) error {
@@ -466,12 +584,19 @@ func markObservedGenerations(r *http.Request, generation int64, results []fleetS
 	if err != nil {
 		return err
 	}
+	ctx, cancel := rolloutPersistenceContext(r)
+	defer cancel()
+	tx, err := database.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
 	for _, result := range results {
 		if result.Status == "ABORTED" {
 			continue
 		}
 		status := "FAILED"
-		if result.Status == "SUCCESS" {
+		if rolloutResultSuccess(result.Status) {
 			status = "SUCCESS"
 		}
 		query := "UPDATE " + schema + ".devices SET last_rollout_status = $1, last_rollout_at = CURRENT_TIMESTAMP"
@@ -482,11 +607,11 @@ func markObservedGenerations(r *http.Request, generation int64, results []fleetS
 		} else {
 			query += " WHERE id = $2"
 		}
-		if _, err := database.Tx(r.Context()).ExecContext(r.Context(), query, args...); err != nil {
+		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
 			return err
 		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -569,21 +694,23 @@ func createRolloutRun(r *http.Request, siteID, username string, results []servic
 	if err != nil {
 		return "", 0, err
 	}
-	tx, err := database.DB.BeginTx(r.Context(), nil)
+	ctx, cancel := rolloutPersistenceContext(r)
+	defer cancel()
+	tx, err := database.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return "", 0, err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(r.Context(), "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
+	if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
 		return "", 0, err
 	}
 	var generation int64
-	err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(MAX(generation), 0) + 1 FROM "+schema+".rollout_runs WHERE site_id = $1", siteID).Scan(&generation)
+	err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(generation), 0) + 1 FROM "+schema+".rollout_runs WHERE site_id = $1", siteID).Scan(&generation)
 	if err != nil {
 		return "", 0, err
 	}
 	var id string
-	err = tx.QueryRowContext(r.Context(), "INSERT INTO "+schema+".rollout_runs (site_id, generation, status, plan_hash, requested_by, target_device_ids) VALUES ($1, $2, 'RUNNING', $3, $4, $5) RETURNING id", siteID, generation, planHash, username, targetDeviceIDs).Scan(&id)
+	err = tx.QueryRowContext(ctx, "INSERT INTO "+schema+".rollout_runs (site_id, generation, status, plan_hash, requested_by, target_device_ids) VALUES ($1, $2, 'RUNNING', $3, $4, $5) RETURNING id", siteID, generation, planHash, username, targetDeviceIDs).Scan(&id)
 	if err != nil {
 		return "", 0, err
 	}
@@ -604,12 +731,14 @@ func updateRolloutRun(r *http.Request, rolloutID, status string, results []fleet
 	if err != nil {
 		return err
 	}
-	tx, err := database.DB.BeginTx(r.Context(), nil)
+	ctx, cancel := rolloutPersistenceContext(r)
+	defer cancel()
+	tx, err := database.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(r.Context(), "UPDATE "+schema+".rollout_runs SET status = $1, results = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3", status, encoded, rolloutID); err != nil {
+	if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".rollout_runs SET status = $1, results = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3", status, encoded, rolloutID); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -620,6 +749,10 @@ func boundedRolloutDiagnostic(value string) string {
 		return value
 	}
 	return value[:maxRolloutDiagnosticBytes] + "\n[diagnostic output truncated]"
+}
+
+func rolloutResultSuccess(status string) bool {
+	return status == "SUCCESS" || status == "SKIPPED"
 }
 
 func stripFleetSyncOutput(results []fleetSyncResult) []fleetSyncResult {
@@ -638,6 +771,52 @@ func groupCommandsByConfig(cmds []services.UciCommand) map[string][]services.Uci
 		groups[cmd.Config] = append(groups[cmd.Config], cmd)
 	}
 	return groups
+}
+
+func filterUCICommandsByObservedState(commands []services.UciCommand, sections []UCISection) []services.UciCommand {
+	filtered := make([]services.UciCommand, 0, len(commands))
+	for index, command := range commands {
+		if command.Option != "" &&
+			(uciCommandMatchesObservedInPlan(index, command, commands, sections) || isDefaultDifference(command, sections)) {
+			continue
+		}
+		filtered = append(filtered, command)
+	}
+	return filtered
+}
+
+func rejectUnsafeNetworkMutations(results []services.RenderResult) error {
+	for _, result := range results {
+		for _, command := range result.Commands {
+			if command.Config == "network" {
+				return fmt.Errorf("network mutation for device %s is blocked until a transport-safe executor is available", result.DeviceID)
+			}
+		}
+	}
+	return nil
+}
+
+func preflightRenderedResults(results []services.RenderResult) ([]services.RenderResult, error) {
+	filtered := make([]services.RenderResult, len(results))
+	copy(filtered, results)
+	for index, result := range filtered {
+		groups := groupCommandsByConfig(result.Commands)
+		commands := make([]services.UciCommand, 0, len(result.Commands))
+		for _, config := range sortedConfigNames(groups) {
+			observed, err := runSSHCommand(result.DeviceID, "uci show "+config+" 2>&1")
+			if err != nil {
+				return nil, fmt.Errorf("preflight failed for device %s config %s: %w", result.DeviceID, config, err)
+			}
+			sections := parseUciShow(observed, config)
+			commands = append(commands, filterUCICommandsByObservedState(groups[config], sections)...)
+		}
+		filtered[index].Commands = commands
+	}
+	return filtered, nil
+}
+
+func rolloutPersistenceContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Second)
 }
 
 func sortedConfigNames(groups map[string][]services.UciCommand) []string {

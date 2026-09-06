@@ -34,7 +34,7 @@ func ValidateHealthTargets(targets []string) ([]string, error) {
 
 // UciCommand represents a single UCI mutation.
 type UciCommand struct {
-	Action  string `json:"action"`  // "set", "delete", "add_list", "del_list", "add", "rename", "reorder"
+	Action  string `json:"action"`  // "set", "delete", "add_list", "del_list", "add", "ensure_host", "rename", "reorder"
 	Config  string `json:"config"`  // namespace: "network", "wireless", "firewall", etc.
 	Section string `json:"section"` // section name or @type[N] anonymous ref
 	Option  string `json:"option"`  // option key (empty for section-level ops)
@@ -42,9 +42,35 @@ type UciCommand struct {
 }
 
 var (
-	uciNamePattern    = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	uciSectionPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_-]+|@[A-Za-z0-9_-]+(?:\[-?[0-9]+\])?)$`)
+	uciNamePattern       = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+	uciSectionPattern    = regexp.MustCompile(`^(?:[A-Za-z0-9_-]+|@[A-Za-z0-9_-]+(?:\[-?[0-9]+\])?)$`)
+	uciMACAddressPattern = regexp.MustCompile(`(?i)(?:[0-9a-f]{2}:){5}[0-9a-f]{2}`)
 )
+
+// ParseMACList accepts a single MAC or the UCI list representation stored by
+// the importer, for example "AA:...:01' 'AA:...:02".
+func ParseMACList(raw string) ([]string, error) {
+	macs := uciMACAddressPattern.FindAllString(raw, -1)
+	if len(macs) == 0 {
+		return nil, fmt.Errorf("invalid MAC address list")
+	}
+	remainder := uciMACAddressPattern.ReplaceAllString(raw, "")
+	remainder = strings.NewReplacer("'", "", `"`, "", " ", "", "\t", "", "\r", "", "\n", "").Replace(remainder)
+	if remainder != "" {
+		return nil, fmt.Errorf("invalid MAC address list")
+	}
+	result := make([]string, 0, len(macs))
+	seen := make(map[string]struct{}, len(macs))
+	for _, mac := range macs {
+		mac = strings.ToUpper(mac)
+		if _, ok := seen[mac]; ok {
+			continue
+		}
+		seen[mac] = struct{}{}
+		result = append(result, mac)
+	}
+	return result, nil
+}
 
 func validUCIName(value string) bool {
 	return uciNamePattern.MatchString(value)
@@ -139,21 +165,22 @@ func DelList(config, section, option, value string) string {
 	return fmt.Sprintf("uci del_list %s.%s.%s='%s'", config, section, option, escapeVal(value))
 }
 
-// Delete generates: uci delete <config>.<section>[.<option>]
+// Delete generates an idempotent delete for a section. OpenWrt's -q flag
+// suppresses the missing-entry message but still returns a non-zero status.
 // Ref: uci.md — "Delete the given section or option"
 func Delete(config, section string) string {
 	if !validUCIName(config) || !validUCISection(section) {
 		return ""
 	}
-	return fmt.Sprintf("uci -q delete %s.%s", config, section)
+	return fmt.Sprintf("uci -q delete %s.%s || true", config, section)
 }
 
-// DeleteOption generates: uci delete <config>.<section>.<option>
+// DeleteOption generates an idempotent delete for an option.
 func DeleteOption(config, section, option string) string {
 	if !validUCIName(config) || !validUCISection(section) || !validUCIName(option) {
 		return ""
 	}
-	return fmt.Sprintf("uci -q delete %s.%s.%s", config, section, option)
+	return fmt.Sprintf("uci -q delete %s.%s.%s || true", config, section, option)
 }
 
 // AddAnonymousSection generates: uci add <config> <section-type>
@@ -167,7 +194,7 @@ func AddAnonymousSection(config, sectionType string) string {
 
 // Rename generates: uci rename <config>.<section>[.<option>]=<name>
 func Rename(config, section, option, newName string) string {
-	if !validUCIName(config) || !validUCISection(section) || (option != "" && !validUCIName(option)) {
+	if !validUCIName(config) || !validUCISection(section) || (option != "" && !validUCIName(option)) || !validUCIName(newName) {
 		return ""
 	}
 	if option == "" {
@@ -188,7 +215,7 @@ func Reorder(config, section string, position int) string {
 
 // BuildBatchScript takes a list of UciCommand structs and produces a single
 // atomic shell script that:
-//  1. Snapshots current config via `uci export`
+//  1. Snapshots the raw config file for rollback
 //  2. Applies all mutations inside a trap-guarded block
 //  3. Runs `uci commit`
 //  4. Validates with `uci show`
@@ -232,13 +259,25 @@ set -e
 logger -t central_luci "CENTRAL_LUCI: starting batch push for '%s'"
 
 # Phase 1: Snapshot current state for rollback
-uci export %s > /tmp/central_luci_bak_%s.conf 2>/dev/null || true
+backup_exists=0
+if [ -f /etc/config/%s ]; then
+  cp /etc/config/%s /tmp/central_luci_bak_%s.conf
+  backup_exists=1
+else
+  : > /tmp/central_luci_bak_%s.conf
+fi
 
 	rollback() {
   logger -t central_luci "CENTRAL_LUCI: ROLLBACK — restoring '%s' from snapshot"
-  uci import %s < /tmp/central_luci_bak_%s.conf 2>/dev/null || true
-  uci commit %s
-  %s
+  uci revert %s 2>/dev/null || true
+  if [ "$backup_exists" -eq 1 ]; then
+    cp /tmp/central_luci_bak_%s.conf /etc/config/%s
+  else
+    rm -f /etc/config/%s
+  fi
+  uci revert %s 2>/dev/null || true
+  %s || true
+  rm -f /tmp/central_luci_bak_%s.conf
   exit 1
 }
 
@@ -261,8 +300,11 @@ uci show %s > /dev/null 2>&1 || {
 logger -t central_luci "CENTRAL_LUCI: batch push complete for '%s'"
 rm -f /tmp/central_luci_bak_%s.conf
 exit 0
-	`, config, config, config, config, config, config, config, config,
-		restartCmd, sb.String(), config, config, config, restartCmd, config, config)
+`, config, config, config, config, config, config,
+		config, config, config, config, config, config,
+		restartCmd, config,
+		sb.String(), config, config, config,
+		restartCmd, config, config)
 }
 
 // BuildSafeBatchScript adds a post-apply connectivity check to the normal
@@ -278,7 +320,19 @@ func BuildSafeBatchScript(config string, commands []UciCommand, healthTargets []
 	var healthCheck strings.Builder
 	healthCheck.WriteString("\n")
 	for _, target := range healthTargets {
-		healthCheck.WriteString(fmt.Sprintf("ping -c 1 -W 2 %s >/dev/null 2>&1 || rollback\n", shellQuote(target)))
+		healthCheck.WriteString(fmt.Sprintf("health_target=%s\n", shellQuote(target)))
+		healthCheck.WriteString("health_ok=0\n")
+		healthCheck.WriteString("for health_attempt in 1 2 3; do\n")
+		healthCheck.WriteString(fmt.Sprintf("  if ping -c 1 -W 2 %s >/dev/null 2>&1; then\n", shellQuote(target)))
+		healthCheck.WriteString("    health_ok=1\n")
+		healthCheck.WriteString("    break\n")
+		healthCheck.WriteString("  fi\n")
+		healthCheck.WriteString("  sleep 1\n")
+		healthCheck.WriteString("done\n")
+		healthCheck.WriteString("if [ \"$health_ok\" -ne 1 ]; then\n")
+		healthCheck.WriteString("  printf 'CENTRAL_LUCI: health check failed for target %s\\n' \"$health_target\" >&2\n")
+		healthCheck.WriteString("  rollback\n")
+		healthCheck.WriteString("fi\n")
 	}
 	healthCheck.WriteString("\n")
 	const marker = "# Phase 5: Service restart\n"
@@ -332,11 +386,77 @@ func translateCommand(cmd UciCommand) string {
 		return DelList(cmd.Config, cmd.Section, cmd.Option, cmd.Value)
 	case "add":
 		return AddAnonymousSection(cmd.Config, cmd.Value) // value = section-type
+	case "ensure_host":
+		return ensureDHCPHost(cmd)
+	case "delete_all":
+		if !validUCIName(cmd.Config) || !validUCIName(cmd.Section) || cmd.Option != "" || cmd.Value != "" {
+			return ""
+		}
+		return fmt.Sprintf("while uci -q delete %s.@%s[0]; do :; done", cmd.Config, cmd.Section)
 	case "rename":
 		return Rename(cmd.Config, cmd.Section, cmd.Option, cmd.Value)
 	default:
 		return ""
 	}
+}
+
+// ensureDHCPHost renders an idempotent static lease mutation. Section is the
+// friendly host name, Option is the MAC address, and Value is the IP address.
+// Existing leases are updated by MAC (or IP as a fallback); only missing leases
+// create a new anonymous host section.
+func ensureDHCPHost(cmd UciCommand) string {
+	parsedIP := net.ParseIP(cmd.Value)
+	if cmd.Config != "dhcp" || cmd.Section == "" || len(cmd.Section) > 128 ||
+		strings.ContainsAny(cmd.Section, "\r\n") || cmd.Option == "" || parsedIP == nil || parsedIP.To4() == nil {
+		return ""
+	}
+	macs, err := ParseMACList(cmd.Option)
+	if err != nil {
+		return ""
+	}
+	name := shellQuote(cmd.Section)
+	macList := shellQuote(strings.Join(macs, " "))
+	ip := shellQuote(cmd.Value)
+	return fmt.Sprintf(`host_ip=%s
+host_name=%s
+host_macs=%s
+host_mac_count=%d
+host_ref=
+for host_mac in $host_macs; do
+  host_ref=$(uci show dhcp | grep -i -F "$host_mac" | grep -F ".mac=" | cut -d= -f1 | cut -d. -f2 | head -n 1)
+  if [ -n "$host_ref" ]; then
+    break
+  fi
+done
+if [ -z "$host_ref" ]; then
+  host_ref=$(
+    uci show dhcp | grep -F ".ip=" | while IFS= read -r host_line; do
+      host_path=${host_line%%=*}
+      host_value=${host_line#*=}
+      host_value=$(printf '%%s' "$host_value" | sed "s/^'//; s/'$//")
+      if [ "$host_value" = "$host_ip" ]; then
+        host_path=${host_path#dhcp.}
+        host_path=${host_path%%.ip}
+        printf '%%s\n' "$host_path"
+        break
+      fi
+    done
+  )
+fi
+if [ -z "$host_ref" ]; then
+  uci add dhcp host
+  host_ref=@host[-1]
+fi
+uci set "dhcp.$host_ref.name=$host_name"
+uci -q delete "dhcp.$host_ref.mac" || true
+if [ "$host_mac_count" -eq 1 ]; then
+  uci set "dhcp.$host_ref.mac=$host_macs"
+else
+  for host_mac in $host_macs; do
+    uci add_list "dhcp.$host_ref.mac=$host_mac"
+  done
+fi
+uci set "dhcp.$host_ref.ip=$host_ip"`, ip, name, macList, len(macs))
 }
 
 // escapeVal prevents single-quote injection in UCI values.

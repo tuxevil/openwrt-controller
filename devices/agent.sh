@@ -7,7 +7,7 @@ CONTROLLER_IP="REPLACE_WITH_CONTROLLER_IP"
 PORT="3000"
 BASE_URL="http://$CONTROLLER_IP:$PORT/api"
 TELEMETRY_URL="$BASE_URL/telemetry"
-DEVICE_ID_FILE="/etc/nerve-device-id"
+DEVICE_ID_FILE="${DEVICE_ID_FILE:-/etc/nerve-device-id}"
 DEVICE_ID="$(cat "$DEVICE_ID_FILE" 2>/dev/null || true)"
 if [ -z "$DEVICE_ID" ]; then
     # Seed identity once. A bridge MAC can change when a NIC is added later.
@@ -18,9 +18,574 @@ if [ -z "$DEVICE_ID" ]; then
     fi
 fi
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
-DEVICE_TOKEN_FILE="/etc/nerve-device-token"
+DEVICE_TOKEN_FILE="${DEVICE_TOKEN_FILE:-/etc/nerve-device-token}"
 DEVICE_TOKEN="$(cat "$DEVICE_TOKEN_FILE" 2>/dev/null || true)"
 AGENT_UPDATE_PUBLIC_KEY="REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64"
+NERVE_TRANSACTION_ROOT="${NERVE_TRANSACTION_ROOT:-/etc/nerve/transactions}"
+NERVE_CONFIG_ROOT="${NERVE_CONFIG_ROOT:-/etc/config}"
+NERVE_WIFI_HASH_FILE="${NERVE_WIFI_HASH_FILE:-$NERVE_TRANSACTION_ROOT/wifi_config.hash}"
+NERVE_WG_HASH_FILE="${NERVE_WG_HASH_FILE:-$NERVE_TRANSACTION_ROOT/wg_config.hash}"
+NERVE_OPERATION_STATUS_FILE="${NERVE_OPERATION_STATUS_FILE:-$NERVE_TRANSACTION_ROOT/operation_status}"
+
+transaction_valid_id() {
+    case "$1" in
+        ''|*[!A-Za-z0-9._-]*) return 1 ;;
+    esac
+    [ "$1" != "." ] && [ "$1" != ".." ] || return 1
+    [ "${#1}" -le 128 ]
+}
+
+transaction_valid_config() {
+    case "$1" in
+        wireless|network|dhcp|firewall|dropbear|system|sqm) return 0 ;;
+    esac
+    return 1
+}
+
+transaction_write_atomic() {
+    local transaction_file="$1"
+    local transaction_value="$2"
+    local transaction_tmp="$transaction_file.$$"
+    printf '%s\n' "$transaction_value" > "$transaction_tmp" || return 1
+    chmod 600 "$transaction_tmp" 2>/dev/null || return 1
+    mv "$transaction_tmp" "$transaction_file" || return 1
+    if command -v sync >/dev/null 2>&1; then
+        sync
+    fi
+    return 0
+}
+
+transaction_dir() {
+    printf '%s/%s\n' "$NERVE_TRANSACTION_ROOT" "$1"
+}
+
+transaction_restart_config() {
+    case "$1" in
+        wireless)
+            if command -v wifi >/dev/null 2>&1; then wifi reload; fi
+            ;;
+        network)
+            if [ -x /etc/init.d/network ]; then /etc/init.d/network reload; fi
+            ;;
+        dhcp)
+            if [ -x /etc/init.d/dnsmasq ]; then /etc/init.d/dnsmasq reload; fi
+            ;;
+        firewall)
+            if [ -x /etc/init.d/firewall ]; then /etc/init.d/firewall reload; fi
+            ;;
+        dropbear)
+            if [ -x /etc/init.d/dropbear ]; then /etc/init.d/dropbear reload; fi
+            ;;
+        sqm)
+            if [ -x /etc/init.d/sqm ]; then /etc/init.d/sqm reload; fi
+            ;;
+        system)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+transaction_recover_one() {
+    local transaction_id="$1"
+    local transaction_path transaction_state transaction_config transaction_tmp
+    if ! transaction_valid_id "$transaction_id"; then
+        logger -t agent "TRANSACTION_RECOVERY_FAILED: invalid active operation id"
+        return 1
+    fi
+
+    transaction_path=$(transaction_dir "$transaction_id")
+    transaction_state=$(cat "$transaction_path/state" 2>/dev/null || true)
+    case "$transaction_state" in
+        COMMITTED|RESTORED)
+            if [ "$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)" = "$transaction_id" ]; then
+                rm -f "$NERVE_TRANSACTION_ROOT/active"
+            fi
+            return 0
+            ;;
+        APPLYING|PENDING_CONFIRM|ROLLING_BACK)
+            ;;
+        *)
+            logger -t agent "TRANSACTION_RECOVERY_FAILED: unknown state $transaction_state"
+            return 1
+            ;;
+    esac
+
+    transaction_config=$(cat "$transaction_path/config" 2>/dev/null || true)
+    if ! transaction_valid_config "$transaction_config"; then
+        logger -t agent "TRANSACTION_RECOVERY_FAILED: invalid config namespace"
+        return 1
+    fi
+
+    transaction_write_atomic "$transaction_path/state" ROLLING_BACK || return 1
+    if [ "$(cat "$transaction_path/backup_exists" 2>/dev/null || true)" = "1" ]; then
+        transaction_tmp="$NERVE_CONFIG_ROOT/$transaction_config.$$"
+        cp "$transaction_path/backup" "$transaction_tmp" || return 1
+        mv "$transaction_tmp" "$NERVE_CONFIG_ROOT/$transaction_config" || return 1
+    else
+        rm -f "$NERVE_CONFIG_ROOT/$transaction_config"
+    fi
+    if command -v uci >/dev/null 2>&1; then
+        uci revert "$transaction_config" 2>/dev/null || true
+        uci commit "$transaction_config" || return 1
+    fi
+    transaction_restart_config "$transaction_config" || return 1
+    transaction_write_atomic "$transaction_path/state" RESTORED || return 1
+    if [ "$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)" = "$transaction_id" ]; then
+        rm -f "$NERVE_TRANSACTION_ROOT/active"
+    fi
+    rm -f "$transaction_path/backup" "$transaction_path/backup_exists"
+    transaction_write_atomic "$NERVE_TRANSACTION_ROOT/last" "$transaction_id" || return 1
+    logger -t agent "TRANSACTION_RECOVERED: restored $transaction_config for $transaction_id"
+}
+
+transaction_recover_pending() {
+    local transaction_id transaction_path transaction_state
+    if [ -f "$NERVE_TRANSACTION_ROOT/active" ]; then
+        transaction_id=$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)
+        transaction_recover_one "$transaction_id" || return 1
+    fi
+
+    # A crash between the journal state write and the active marker must not
+    # leave an APPLYING transaction permanently blocking future changes.
+    for transaction_path in "$NERVE_TRANSACTION_ROOT"/*; do
+        [ -d "$transaction_path" ] || continue
+        transaction_id=${transaction_path##*/}
+        transaction_state=$(cat "$transaction_path/state" 2>/dev/null || true)
+        case "$transaction_state" in
+            APPLYING|PENDING_CONFIRM|ROLLING_BACK)
+                if [ "$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)" != "$transaction_id" ]; then
+                    transaction_recover_one "$transaction_id" || return 1
+                fi
+                ;;
+        esac
+    done
+}
+
+transaction_prune_terminal() {
+    local transaction_path transaction_id transaction_state last_id operation_id active_id
+    last_id=$(cat "$NERVE_TRANSACTION_ROOT/last" 2>/dev/null || true)
+    operation_id=$(cat "$NERVE_OPERATION_STATUS_FILE" 2>/dev/null || true)
+    active_id=$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)
+    for transaction_path in "$NERVE_TRANSACTION_ROOT"/*; do
+        [ -d "$transaction_path" ] || continue
+        transaction_id=${transaction_path##*/}
+        [ "$transaction_id" = "$last_id" ] && continue
+        [ "$transaction_id" = "$operation_id" ] && continue
+        [ "$transaction_id" = "$active_id" ] && continue
+        transaction_state=$(cat "$transaction_path/state" 2>/dev/null || true)
+        case "$transaction_state" in
+            COMMITTED|RESTORED) rm -rf "$transaction_path" ;;
+        esac
+    done
+}
+
+transaction_begin() {
+    local transaction_config="$1"
+    local transaction_id="$2"
+    local active_id active_state transaction_path transaction_state transaction_tmp
+    transaction_valid_config "$transaction_config" || return 1
+    transaction_valid_id "$transaction_id" || return 1
+    mkdir -p "$NERVE_TRANSACTION_ROOT" || return 1
+    chmod 700 "$NERVE_TRANSACTION_ROOT" 2>/dev/null || return 1
+
+    if [ -f "$NERVE_TRANSACTION_ROOT/active" ]; then
+        active_id=$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)
+        if [ "$active_id" != "$transaction_id" ]; then
+            transaction_recover_pending || return 1
+        else
+            active_state=$(cat "$(transaction_dir "$active_id")/state" 2>/dev/null || true)
+            if [ "$active_state" != "COMMITTED" ]; then
+                transaction_recover_pending || return 1
+            fi
+        fi
+        if [ -f "$NERVE_TRANSACTION_ROOT/active" ]; then
+            active_state=$(cat "$(transaction_dir "$active_id")/state" 2>/dev/null || true)
+            if [ "$active_id" = "$transaction_id" ] && [ "$active_state" = "COMMITTED" ]; then
+                return 10
+            fi
+            return 1
+        fi
+    fi
+
+    transaction_path=$(transaction_dir "$transaction_id")
+    if [ -f "$transaction_path/state" ]; then
+        transaction_state=$(cat "$transaction_path/state" 2>/dev/null || true)
+        case "$transaction_state" in
+            COMMITTED)
+                return 10
+                ;;
+            APPLYING|PENDING_CONFIRM|ROLLING_BACK)
+                return 1
+                ;;
+            RESTORED)
+                rm -rf "$transaction_path"
+                ;;
+        esac
+    fi
+
+    mkdir -p "$transaction_path" || return 1
+    chmod 700 "$transaction_path" 2>/dev/null || return 1
+    if [ -f "$NERVE_CONFIG_ROOT/$transaction_config" ]; then
+        transaction_tmp="$transaction_path/backup.$$"
+        cp "$NERVE_CONFIG_ROOT/$transaction_config" "$transaction_tmp" || return 1
+        chmod 600 "$transaction_tmp" 2>/dev/null || return 1
+        mv "$transaction_tmp" "$transaction_path/backup" || return 1
+        command -v sync >/dev/null 2>&1 && sync
+        transaction_write_atomic "$transaction_path/backup_exists" 1 || return 1
+    else
+        transaction_write_atomic "$transaction_path/backup_exists" 0 || return 1
+    fi
+    transaction_write_atomic "$transaction_path/config" "$transaction_config" || return 1
+    transaction_write_atomic "$transaction_path/state" APPLYING || return 1
+    transaction_write_atomic "$NERVE_TRANSACTION_ROOT/active" "$transaction_id" || return 1
+}
+
+transaction_mark_pending() {
+    local transaction_config="$1"
+    local transaction_id="$2"
+    transaction_valid_config "$transaction_config" || return 1
+    transaction_valid_id "$transaction_id" || return 1
+    transaction_write_atomic "$(transaction_dir "$transaction_id")/state" PENDING_CONFIRM
+}
+
+transaction_commit() {
+    local transaction_config="$1"
+    local transaction_id="$2"
+    local transaction_hash_file="$3"
+    local transaction_hash="$4"
+    local transaction_path
+    transaction_valid_config "$transaction_config" || return 1
+    transaction_valid_id "$transaction_id" || return 1
+    transaction_path=$(transaction_dir "$transaction_id")
+    transaction_write_atomic "$transaction_path/state" COMMITTED || return 1
+    transaction_write_atomic "$transaction_hash_file" "$transaction_hash" || return 1
+    rm -f "$NERVE_TRANSACTION_ROOT/active" "$transaction_path/backup" "$transaction_path/backup_exists"
+    transaction_write_atomic "$NERVE_TRANSACTION_ROOT/last" "$transaction_id"
+}
+
+transaction_status_json() {
+    local transaction_id transaction_path transaction_config transaction_state
+    transaction_id=$(cat "$NERVE_OPERATION_STATUS_FILE" 2>/dev/null || true)
+    if [ -n "$transaction_id" ] && ! transaction_valid_id "$transaction_id"; then
+        transaction_id=""
+    fi
+    if [ -n "$transaction_id" ] && [ ! -f "$(transaction_dir "$transaction_id")/state" ]; then
+        transaction_id=""
+    fi
+    [ -n "$transaction_id" ] || transaction_id=$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)
+    [ -n "$transaction_id" ] || transaction_id=$(cat "$NERVE_TRANSACTION_ROOT/last" 2>/dev/null || true)
+    if ! transaction_valid_id "$transaction_id"; then
+        printf '{}'
+        return 0
+    fi
+    transaction_path=$(transaction_dir "$transaction_id")
+    transaction_config=$(cat "$transaction_path/config" 2>/dev/null || true)
+    transaction_state=$(cat "$transaction_path/state" 2>/dev/null || true)
+    if ! transaction_valid_config "$transaction_config"; then
+        printf '{}'
+        return 0
+    fi
+    printf '{"id":"%s","config":"%s","state":"%s"}' "$transaction_id" "$transaction_config" "$transaction_state"
+}
+
+operation_valid_name() {
+    case "$1" in
+        ''|*[!A-Za-z0-9_-]*) return 1 ;;
+    esac
+}
+
+operation_valid_section() {
+    printf '%s\n' "$1" | grep -Eq '^([A-Za-z0-9_-]+|@[A-Za-z0-9_-]+\[-?[0-9]+\])$'
+}
+
+operation_valid_mac() {
+    case "$1" in
+        [A-Fa-f0-9][A-Fa-f0-9]:[A-Fa-f0-9][A-Fa-f0-9]:[A-Fa-f0-9][A-Fa-f0-9]:[A-Fa-f0-9][A-Fa-f0-9]:[A-Fa-f0-9][A-Fa-f0-9]:[A-Fa-f0-9][A-Fa-f0-9]) return 0 ;;
+    esac
+    return 1
+}
+
+operation_valid_ipv4() {
+    local operation_ip="$1"
+    local operation_old_ifs="$IFS"
+    local operation_octet
+    local operation_count=0
+    case "$operation_ip" in
+        ''|*[!0-9.]*) return 1 ;;
+    esac
+    IFS=.
+    set -- $operation_ip
+    IFS="$operation_old_ifs"
+    [ "$#" -eq 4 ] || return 1
+    for operation_octet in "$@"; do
+        case "$operation_octet" in
+            ''|*[!0-9]*) return 1 ;;
+        esac
+        [ "$operation_octet" -le 255 ] 2>/dev/null || return 1
+        operation_count=$((operation_count + 1))
+    done
+    [ "$operation_count" -eq 4 ]
+}
+
+operation_apply_ensure_host() {
+    local operation_name="$1"
+    local operation_macs_raw="$2"
+    local operation_ip="$3"
+    local operation_macs operation_mac operation_host_ref operation_mac_count
+
+    [ -n "$operation_name" ] && [ "${#operation_name}" -le 128 ] || return 1
+    if printf '%s' "$operation_name" | grep -q '[[:cntrl:]]'; then
+        return 1
+    fi
+    operation_valid_ipv4 "$operation_ip" || return 1
+    operation_macs=$(printf '%s' "$operation_macs_raw" | sed "s/'//g; s/\"//g")
+    [ -n "$operation_macs" ] || return 1
+    for operation_mac in $operation_macs; do
+        operation_valid_mac "$operation_mac" || return 1
+    done
+
+    operation_host_ref=""
+    for operation_mac in $operation_macs; do
+        operation_host_ref=$(uci show dhcp 2>/dev/null | grep -i -F "$operation_mac" | grep -F ".mac=" | cut -d= -f1 | cut -d. -f2 | head -n 1)
+        [ -n "$operation_host_ref" ] && break
+    done
+    if [ -z "$operation_host_ref" ]; then
+        operation_host_ref=$(
+            uci show dhcp 2>/dev/null | grep -F ".ip=" | while IFS= read -r operation_host_line; do
+                operation_host_path=${operation_host_line%%=*}
+                operation_host_value=${operation_host_line#*=}
+                operation_host_value=$(printf '%s' "$operation_host_value" | sed "s/^'//; s/'$//")
+                if [ "$operation_host_value" = "$operation_ip" ]; then
+                    operation_host_path=${operation_host_path#dhcp.}
+                    operation_host_path=${operation_host_path%.ip}
+                    printf '%s\n' "$operation_host_path"
+                    break
+                fi
+            done
+        )
+    fi
+    if [ -z "$operation_host_ref" ]; then
+        uci add dhcp host
+        operation_host_ref=@host[-1]
+    fi
+
+    uci set "dhcp.$operation_host_ref.name=$operation_name"
+    uci -q delete "dhcp.$operation_host_ref.mac" || true
+    operation_mac_count=0
+    for operation_mac in $operation_macs; do
+        operation_mac_count=$((operation_mac_count + 1))
+    done
+    if [ "$operation_mac_count" -eq 1 ]; then
+        uci set "dhcp.$operation_host_ref.mac=$operation_macs"
+    else
+        for operation_mac in $operation_macs; do
+            uci add_list "dhcp.$operation_host_ref.mac=$operation_mac"
+        done
+    fi
+    uci set "dhcp.$operation_host_ref.ip=$operation_ip"
+}
+
+operation_apply_command() {
+    local operation_action="$1"
+    local operation_config="$2"
+    local operation_section="$3"
+    local operation_option="$4"
+    local operation_value="$5"
+    local operation_path
+
+    transaction_valid_config "$operation_config" || return 1
+    case "$operation_action" in
+        set)
+            operation_valid_section "$operation_section" || return 1
+            if [ -n "$operation_option" ]; then
+                operation_valid_name "$operation_option" || return 1
+                operation_path="$operation_config.$operation_section.$operation_option"
+            else
+                operation_path="$operation_config.$operation_section"
+            fi
+            uci set "$operation_path=$operation_value"
+            ;;
+        delete)
+            operation_valid_section "$operation_section" || return 1
+            if [ -n "$operation_option" ]; then
+                operation_valid_name "$operation_option" || return 1
+                operation_path="$operation_config.$operation_section.$operation_option"
+            else
+                operation_path="$operation_config.$operation_section"
+            fi
+            uci -q delete "$operation_path" || true
+            ;;
+        add_list|del_list)
+            operation_valid_section "$operation_section" || return 1
+            operation_valid_name "$operation_option" || return 1
+            operation_path="$operation_config.$operation_section.$operation_option"
+            if [ "$operation_action" = "add_list" ]; then
+                uci add_list "$operation_path=$operation_value"
+            else
+                uci del_list "$operation_path=$operation_value"
+            fi
+            ;;
+        add)
+            operation_valid_name "$operation_value" || return 1
+            uci add "$operation_config" "$operation_value"
+            ;;
+        delete_all)
+            [ "$operation_config" = "firewall" ] || return 1
+            [ "$operation_section" = "redirect" ] && [ -z "$operation_option" ] && [ -z "$operation_value" ] || return 1
+            while uci -q delete "$operation_config.@$operation_section[0]"; do :; done
+            ;;
+        ensure_host)
+            [ "$operation_config" = "dhcp" ] || return 1
+            operation_apply_ensure_host "$operation_section" "$operation_option" "$operation_value"
+            ;;
+        rename)
+            operation_valid_section "$operation_section" || return 1
+            if [ -n "$operation_option" ]; then
+                operation_valid_name "$operation_option" || return 1
+                operation_path="$operation_config.$operation_section.$operation_option"
+            else
+                operation_path="$operation_config.$operation_section"
+            fi
+            operation_valid_name "$operation_value" || return 1
+            uci rename "$operation_path=$operation_value"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+operation_health_check() {
+    local operation_json="$1"
+    local operation_config="$2"
+    local operation_target_count operation_index operation_target
+    operation_target_count=$(printf '%s' "$operation_json" | jsonfilter -e '@.health_checks[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
+    if [ "$operation_config" = "network" ] && [ "$operation_target_count" -eq 0 ]; then
+        return 1
+    fi
+    operation_index=0
+    while [ "$operation_index" -lt "$operation_target_count" ]; do
+        operation_target=$(printf '%s' "$operation_json" | jsonfilter -e "@.health_checks[$operation_index]" 2>/dev/null)
+        [ -n "$operation_target" ] || return 1
+        ping -c 1 -W 2 "$operation_target" >/dev/null 2>&1 || return 1
+        operation_index=$((operation_index + 1))
+    done
+    return 0
+}
+
+apply_pending_operation() {
+    local operation_json="$1"
+    local operation_id operation_config operation_hash operation_count operation_index
+    local operation_action operation_command_config operation_section operation_option operation_value
+    local transaction_status operation_status
+    operation_id=$(printf '%s' "$operation_json" | jsonfilter -e '@.operation_id' 2>/dev/null)
+    operation_config=$(printf '%s' "$operation_json" | jsonfilter -e '@.config' 2>/dev/null)
+    operation_hash=$(printf '%s' "$operation_json" | jsonfilter -e '@.plan_hash' 2>/dev/null)
+    operation_count=$(printf '%s' "$operation_json" | jsonfilter -e '@.commands[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
+    transaction_valid_id "$operation_id" || return 1
+    transaction_valid_id "$operation_hash" || return 1
+    [ "$operation_hash" = "$operation_id" ] || return 1
+    transaction_valid_config "$operation_config" || return 1
+    [ "$operation_count" -gt 0 ] || return 1
+
+    transaction_begin "$operation_config" "$operation_id"
+    transaction_status=$?
+    if [ "$transaction_status" -eq 10 ]; then
+        return 0
+    fi
+    [ "$transaction_status" -eq 0 ] || return 1
+
+    (
+        set -e
+        operation_index=0
+        while [ "$operation_index" -lt "$operation_count" ]; do
+            operation_action=$(printf '%s' "$operation_json" | jsonfilter -e "@.commands[$operation_index].action" 2>/dev/null)
+            operation_command_config=$(printf '%s' "$operation_json" | jsonfilter -e "@.commands[$operation_index].config" 2>/dev/null)
+            operation_section=$(printf '%s' "$operation_json" | jsonfilter -e "@.commands[$operation_index].section" 2>/dev/null)
+            operation_option=$(printf '%s' "$operation_json" | jsonfilter -e "@.commands[$operation_index].option" 2>/dev/null)
+            operation_value=$(printf '%s' "$operation_json" | jsonfilter -e "@.commands[$operation_index].value" 2>/dev/null)
+            [ "$operation_command_config" = "$operation_config" ] || exit 1
+            operation_apply_command "$operation_action" "$operation_config" "$operation_section" "$operation_option" "$operation_value"
+            operation_index=$((operation_index + 1))
+        done
+        uci commit "$operation_config"
+    )
+    operation_status=$?
+    if [ "$operation_status" -ne 0 ]; then
+        transaction_recover_pending || true
+        transaction_write_atomic "$NERVE_OPERATION_STATUS_FILE" "$operation_id" || true
+        return 1
+    fi
+
+    transaction_mark_pending "$operation_config" "$operation_id" || {
+        transaction_recover_pending || true
+        return 1
+    }
+    transaction_restart_config "$operation_config" || {
+        transaction_recover_pending || true
+        return 1
+    }
+    uci show "$operation_config" >/dev/null 2>&1 || {
+        transaction_recover_pending || true
+        return 1
+    }
+    operation_health_check "$operation_json" "$operation_config" || {
+        logger -t agent "TRANSACTION_HEALTH_FAILED: restoring $operation_config for $operation_id"
+        transaction_recover_pending || true
+        return 1
+    }
+    transaction_commit "$operation_config" "$operation_id" "$NERVE_TRANSACTION_ROOT/operation_${operation_config}.hash" "$operation_hash" || {
+        transaction_recover_pending || true
+        transaction_write_atomic "$NERVE_OPERATION_STATUS_FILE" "$operation_id" || true
+        return 1
+    }
+    transaction_write_atomic "$NERVE_OPERATION_STATUS_FILE" "$operation_id" || return 1
+    logger -t agent "TRANSACTION_COMMITTED: $operation_config operation $operation_id"
+    return 0
+}
+
+if [ "${1:-}" = "--self-test-transaction" ]; then
+    transaction_begin wireless self-test-operation || exit 1
+    printf '%s\n' self-test-mutated > "$NERVE_CONFIG_ROOT/wireless"
+    transaction_mark_pending wireless self-test-operation || exit 1
+    transaction_commit wireless self-test-operation "$NERVE_WIFI_HASH_FILE" self-test-hash || exit 1
+    exit 0
+fi
+
+if [ "${1:-}" = "--self-test-operation" ]; then
+    if [ -n "${SELF_TEST_OPERATION_JSON:-}" ]; then
+        SELF_TEST_OPERATION="$SELF_TEST_OPERATION_JSON"
+    else
+        SELF_TEST_OPERATION='{"operation_id":"self-operation","plan_hash":"self-operation-hash","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":true}'
+    fi
+    apply_pending_operation "$SELF_TEST_OPERATION" || exit 1
+    exit 0
+fi
+
+if [ "${1:-}" = "--self-test-status" ]; then
+    transaction_status_json
+    exit 0
+fi
+
+if [ "${1:-}" = "--recover-transactions" ]; then
+    transaction_recover_pending
+    exit $?
+fi
+
+if [ "${1:-}" = "--prune-transactions" ]; then
+    transaction_prune_terminal
+    exit $?
+fi
+
+# Recover before the first network request. A transaction left in APPLYING or
+# PENDING_CONFIRM is never trusted after a process crash or reboot.
+if ! transaction_recover_pending; then
+    logger -t agent "Persistent transaction recovery failed; refusing to start"
+    exit 1
+fi
 
 bootstrap_agent() {
     [ -n "$DEVICE_TOKEN" ] && return 0
@@ -423,6 +988,7 @@ while true; do
     "dhcp": $DHCP_LEASES,
     "flow_sense": $FLOW_SENSE_DATA,
     "logs": "$SYS_LOGS",
+    "transaction": $(transaction_status_json),
     "survey_id": "$SURVEY_ID",
     "neighbor_aps": $NEIGHBOR_APS
 }
@@ -460,14 +1026,41 @@ EOF
     # 7. OBTENCIÓN DE CONFIGURACIÓN E INYECCIÓN DE LLAVE SSH
     # El controlador envía la llave pública en la respuesta de configuración
     CONFIG_HEADERS="-H X-Device-Token:$DEVICE_TOKEN"
-    CONFIG_RESPONSE=$(curl -m 5 -s -X GET $CONFIG_HEADERS "$CONFIG_URL")
+    CONFIG_RESPONSE_FILE="/tmp/nerve-agent-config.$$"
+    CONFIG_HTTP_CODE=$(curl -m 5 -s -X GET $CONFIG_HEADERS "$CONFIG_URL" -w "%{http_code}" -o "$CONFIG_RESPONSE_FILE")
+    CONFIG_RESPONSE=$(cat "$CONFIG_RESPONSE_FILE" 2>/dev/null || true)
+    rm -f "$CONFIG_RESPONSE_FILE"
+    if [ "$CONFIG_HTTP_CODE" != "200" ]; then
+        logger -t agent "Config pull failed ($CONFIG_HTTP_CODE); preserving pending operation state."
+        sleep 10
+        continue
+    fi
 
-NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_token' 2>/dev/null)
+    NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_token' 2>/dev/null)
     if [ -n "$NEW_DEVICE_TOKEN" ] && [ "$NEW_DEVICE_TOKEN" != "$DEVICE_TOKEN" ]; then
         printf '%s\n' "$NEW_DEVICE_TOKEN" > "$DEVICE_TOKEN_FILE"
         chmod 600 "$DEVICE_TOKEN_FILE"
         DEVICE_TOKEN="$NEW_DEVICE_TOKEN"
     fi
+
+    # Controller-originated typed operations are applied locally. This is the
+    # transport-safe path for changes that may interrupt the connection.
+    PENDING_OPERATION_CONFIG=""
+    PENDING_OPERATION_RESULT=0
+    PENDING_OPERATION=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.apply_operation' 2>/dev/null)
+    if [ -z "$PENDING_OPERATION" ] && [ -f "$NERVE_OPERATION_STATUS_FILE" ]; then
+        rm -f "$NERVE_OPERATION_STATUS_FILE"
+    fi
+    if [ -n "$PENDING_OPERATION" ]; then
+        PENDING_OPERATION_CONFIG=$(echo "$PENDING_OPERATION" | jsonfilter -e '@.config' 2>/dev/null)
+        PENDING_OPERATION_RESULT=1
+        if apply_pending_operation "$PENDING_OPERATION"; then
+            logger -t agent "Controller operation processed: $PENDING_OPERATION_CONFIG"
+        else
+            logger -t agent "Controller operation failed or was deferred: $PENDING_OPERATION_CONFIG"
+        fi
+    fi
+    transaction_prune_terminal
 
     # 7.0 WIFI_SURVEY: detect survey mode from controller. When active:
     #   - telemetry interval drops to 2s (vs 10s normal)
@@ -529,15 +1122,33 @@ NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_toke
 
         # 7.5 CONFIGURACIÓN WIRELESS CENTRALIZADA
         NEW_WIFI_HASH=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireless' 2>/dev/null | sha256sum | awk '{print $1}')
-        OLD_WIFI_HASH=$(cat /tmp/wifi_config.hash 2>/dev/null)
+        OLD_WIFI_HASH=$(cat "$NERVE_WIFI_HASH_FILE" 2>/dev/null)
         
-        if [ -n "$NEW_WIFI_HASH" ] && [ "$NEW_WIFI_HASH" != "$OLD_WIFI_HASH" ]; then
+        if [ "$PENDING_OPERATION_RESULT" -eq 0 ] && [ -n "$NEW_WIFI_HASH" ] && [ "$NEW_WIFI_HASH" != "$OLD_WIFI_HASH" ]; then
             logger -t agent "DEBUG: NEW=$NEW_WIFI_HASH OLD=$OLD_WIFI_HASH URL=$CONFIG_URL RES_LEN=${#CONFIG_RESPONSE}"
             logger -t agent "WLAN config changed. Re-provisioning radios..."
             
+            WLAN_JSON=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireless.wlans' 2>/dev/null)
+            case "$WLAN_JSON" in
+                \[*\]) ;;
+                *)
+                    logger -t agent "WLAN config is invalid; refusing to mutate wireless."
+                    continue
+                    ;;
+            esac
             WLAN_COUNT=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireless.wlans[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
             
-            if [ "$WLAN_COUNT" -gt 0 ]; then
+            if [ "$WLAN_COUNT" -ge 0 ]; then
+                transaction_begin wireless "$NEW_WIFI_HASH"
+                TRANSACTION_STATUS=$?
+                if [ "$TRANSACTION_STATUS" -eq 10 ]; then
+                    transaction_write_atomic "$NERVE_WIFI_HASH_FILE" "$NEW_WIFI_HASH"
+                    logger -t agent "WLAN transaction already committed; skipping replay."
+                elif [ "$TRANSACTION_STATUS" -ne 0 ]; then
+                    logger -t agent "WLAN transaction is busy or unsafe; skipping apply."
+                else
+                (
+                set -e
                 while uci -q delete wireless.@wifi-iface[0]; do :; done
                 for CFG in $(uci show wireless | grep -o 'wireless\.cfg_radio[0-9]_[0-9]*' | cut -d. -f2 | sort -u); do uci delete wireless.$CFG; done
                 
@@ -632,10 +1243,30 @@ NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_toke
                         i=$((i+1))
                     done
                 done
-                uci commit wireless
-                wifi reload
-                echo "$NEW_WIFI_HASH" > /tmp/wifi_config.hash
-                logger -t agent "WLAN config applied successfully."
+                )
+                APPLY_STATUS=$?
+                if [ "$APPLY_STATUS" -eq 0 ]; then
+                    if uci commit wireless; then
+                        if transaction_mark_pending wireless "$NEW_WIFI_HASH" && wifi reload && uci show wireless >/dev/null 2>&1; then
+                            if transaction_commit wireless "$NEW_WIFI_HASH" "$NERVE_WIFI_HASH_FILE" "$NEW_WIFI_HASH"; then
+                                logger -t agent "WLAN config applied successfully."
+                            else
+                                logger -t agent "WLAN transaction commit failed; restoring snapshot."
+                                transaction_recover_pending || true
+                            fi
+                        else
+                            logger -t agent "WLAN validation/reload failed; restoring snapshot."
+                            transaction_recover_pending || true
+                        fi
+                    else
+                        logger -t agent "WLAN UCI commit failed; restoring snapshot."
+                        transaction_recover_pending || true
+                    fi
+                else
+                    logger -t agent "WLAN UCI mutation failed; restoring snapshot."
+                    transaction_recover_pending || true
+                fi
+                fi
             else
                 logger -t agent "WLAN config empty. Skipping."
             fi
@@ -643,59 +1274,68 @@ NEW_DEVICE_TOKEN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.device_toke
 
         # 8. CONFIGURACIÓN DE WIREGUARD (SECURE_TUNNEL)
         WG_ENABLED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.enabled' 2>/dev/null)
-        if [ "$WG_ENABLED" = "true" ]; then
-            logger -t agent "WIREGUARD: Tunnel config received."
-            
-            # Check if wireguard is installed, install via apk if missing
-            if ! command -v wg > /dev/null; then
-                logger -t agent "WIREGUARD: wg tools missing. Installing via apk..."
-                apk update && apk add wireguard-tools
-            fi
-            
-            # Check if wg_nerve already configured in uci
-            WG_EXISTS=$(uci -q get network.wg_nerve.proto)
-            if [ "$WG_EXISTS" != "wireguard" ]; then
-                logger -t agent "WIREGUARD: Configuring wg_nerve interface..."
-                
-                WG_PRIV=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.private_key' 2>/dev/null)
-                WG_PUB=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.controller_pubkey' 2>/dev/null)
-                WG_EP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.endpoint_ip' 2>/dev/null)
-                WG_IP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.internal_ip' 2>/dev/null)
-                WG_ALLOWED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.allowed_ips' 2>/dev/null)
-                
-                uci set network.wg_nerve=interface
-                uci set network.wg_nerve.proto='wireguard'
-                uci set network.wg_nerve.private_key="$WG_PRIV"
-                
-                # Add an IP address for wireguard interface, we append /24 for subnet
-                uci -q delete network.wg_nerve.addresses
-                uci add_list network.wg_nerve.addresses="${WG_IP}/24"
+        WG_PAYLOAD=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard' 2>/dev/null)
+        WG_HASH=$(printf '%s' "$WG_PAYLOAD" | sha256sum | awk '{print $1}')
+        WG_APPLIED_HASH=$(cat "$NERVE_WG_HASH_FILE" 2>/dev/null)
+        WG_EXISTS=$(uci -q get network.wg_nerve.proto)
+        if [ "$PENDING_OPERATION_RESULT" -eq 0 ] && [ -n "$WG_PAYLOAD" ] && { [ "$WG_ENABLED" = "true" ] && { [ "$WG_EXISTS" != "wireguard" ] || [ "$WG_HASH" != "$WG_APPLIED_HASH" ]; } || [ "$WG_ENABLED" != "true" ] && [ "$WG_EXISTS" = "wireguard" ]; }; then
+            logger -t agent "WIREGUARD: applying durable network transaction."
+            transaction_begin network "$WG_HASH"
+            TRANSACTION_STATUS=$?
+            if [ "$TRANSACTION_STATUS" -eq 10 ]; then
+                transaction_write_atomic "$NERVE_WG_HASH_FILE" "$WG_HASH"
+                logger -t agent "WIREGUARD: transaction already committed; skipping replay."
+            elif [ "$TRANSACTION_STATUS" -ne 0 ]; then
+                logger -t agent "WIREGUARD: transaction is busy or unsafe; skipping apply."
+            else
+                (
+                    set -e
+                    if [ "$WG_ENABLED" = "true" ]; then
+                        WG_PRIV=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.private_key' 2>/dev/null)
+                        WG_PUB=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.controller_pubkey' 2>/dev/null)
+                        WG_EP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.endpoint_ip' 2>/dev/null)
+                        WG_IP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.internal_ip' 2>/dev/null)
+                        WG_ALLOWED=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.wireguard.allowed_ips' 2>/dev/null)
 
-                # Define the controller peer
-                uci set network.wg_nerve_peer=wireguard_wg_nerve
-                uci set network.wg_nerve_peer.public_key="$WG_PUB"
-                uci set network.wg_nerve_peer.endpoint_host="${WG_EP%%:*}"
-                uci set network.wg_nerve_peer.endpoint_port="${WG_EP##*:}"
-                uci set network.wg_nerve_peer.route_allowed_ips='1'
-                uci set network.wg_nerve_peer.persistent_keepalive='25'
-                
-                # Add allowed IPs
-                uci -q delete network.wg_nerve_peer.allowed_ips
-                uci add_list network.wg_nerve_peer.allowed_ips="$WG_ALLOWED"
-
-                uci commit network
-                
-                logger -t agent "WIREGUARD: wg_nerve committed. Bringing interface up."
-                ifup wg_nerve
-            fi
-        else
-            WG_EXISTS=$(uci -q get network.wg_nerve.proto)
-            if [ "$WG_EXISTS" = "wireguard" ]; then
-                logger -t agent "WIREGUARD: Disabling and deleting wg_nerve interface..."
-                ifdown wg_nerve 2>/dev/null || true
-                uci -q delete network.wg_nerve
-                uci -q delete network.wg_nerve_peer
-                uci commit network
+                        uci set network.wg_nerve=interface
+                        uci set network.wg_nerve.proto='wireguard'
+                        uci set network.wg_nerve.private_key="$WG_PRIV"
+                        uci -q delete network.wg_nerve.addresses || true
+                        uci add_list network.wg_nerve.addresses="${WG_IP}/24"
+                        uci set network.wg_nerve_peer=wireguard_wg_nerve
+                        uci set network.wg_nerve_peer.public_key="$WG_PUB"
+                        uci set network.wg_nerve_peer.endpoint_host="${WG_EP%%:*}"
+                        uci set network.wg_nerve_peer.endpoint_port="${WG_EP##*:}"
+                        uci set network.wg_nerve_peer.route_allowed_ips='1'
+                        uci set network.wg_nerve_peer.persistent_keepalive='25'
+                        uci -q delete network.wg_nerve_peer.allowed_ips || true
+                        uci add_list network.wg_nerve_peer.allowed_ips="$WG_ALLOWED"
+                        uci commit network
+                        ifup wg_nerve
+                    else
+                        ifdown wg_nerve 2>/dev/null || true
+                        uci -q delete network.wg_nerve || true
+                        uci -q delete network.wg_nerve_peer || true
+                        uci commit network
+                    fi
+                )
+                APPLY_STATUS=$?
+                if [ "$APPLY_STATUS" -eq 0 ]; then
+                    if transaction_mark_pending network "$WG_HASH" && uci show network >/dev/null 2>&1; then
+                        if transaction_commit network "$WG_HASH" "$NERVE_WG_HASH_FILE" "$WG_HASH"; then
+                            logger -t agent "WIREGUARD: durable network transaction committed."
+                        else
+                            logger -t agent "WIREGUARD: transaction commit failed; restoring snapshot."
+                            transaction_recover_pending || true
+                        fi
+                    else
+                        logger -t agent "WIREGUARD: validation failed; restoring snapshot."
+                        transaction_recover_pending || true
+                    fi
+                else
+                    logger -t agent "WIREGUARD: UCI mutation failed; restoring snapshot."
+                    transaction_recover_pending || true
+                fi
             fi
         fi
     fi

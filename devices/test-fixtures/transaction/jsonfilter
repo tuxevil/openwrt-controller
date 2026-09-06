@@ -1,0 +1,46 @@
+#!/bin/sh
+set -eu
+
+expression=""
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = "-e" ]; then
+        expression="$2"
+        shift 2
+    else
+        shift
+    fi
+done
+
+case "$expression" in
+    @.operation_id) jq -r '.operation_id // empty' ;;
+    @.plan_hash) jq -r '.plan_hash // empty' ;;
+    @.config) jq -r '.config // empty' ;;
+    '@.commands[@]') jq -c '.commands[]?' ;;
+    '@.commands') jq -c '.commands // empty' ;;
+    @.commands\[*\].action)
+        index=$(printf '%s' "$expression" | tr -cd '0-9')
+        jq -r ".commands[$index].action // empty"
+        ;;
+    @.commands\[*\].config)
+        index=$(printf '%s' "$expression" | tr -cd '0-9')
+        jq -r ".commands[$index].config // empty"
+        ;;
+    @.commands\[*\].section)
+        index=$(printf '%s' "$expression" | tr -cd '0-9')
+        jq -r ".commands[$index].section // empty"
+        ;;
+    @.commands\[*\].option)
+        index=$(printf '%s' "$expression" | tr -cd '0-9')
+        jq -r ".commands[$index].option // empty"
+        ;;
+    @.commands\[*\].value)
+        index=$(printf '%s' "$expression" | tr -cd '0-9')
+        jq -r ".commands[$index].value // empty"
+        ;;
+    '@.health_checks[@]') jq -r '.health_checks[]?' ;;
+    @.health_checks\[*\])
+        index=$(printf '%s' "$expression" | tr -cd '0-9')
+        jq -r ".health_checks[$index] // empty"
+        ;;
+    *) exit 1 ;;
+esac

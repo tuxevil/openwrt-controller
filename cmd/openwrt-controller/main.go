@@ -109,6 +109,10 @@ func main() {
 	services.StartLogRetentionCron(logStopCh)
 	defer close(logStopCh)
 
+	sentinelStopCh := make(chan struct{})
+	services.StartSentinelCaseRecovery(sentinelStopCh)
+	defer close(sentinelStopCh)
+
 	// Build the route mux and wrap it with the metrics middleware.
 	// The route label is taken from Go 1.22+ ServeMux patterns
 	// (req.Pattern.Path) which are low cardinality by construction.

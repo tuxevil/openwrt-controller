@@ -218,6 +218,8 @@ func createTenantTables(schema string) error {
 		last_successful_generation BIGINT NOT NULL DEFAULT 0,
 		capabilities JSONB,
 		capabilities_updated_at TIMESTAMP WITH TIME ZONE,
+		pending_operation JSONB,
+		last_operation JSONB,
 		last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -388,6 +390,74 @@ func createTenantTables(schema string) error {
 		involved_devices JSONB,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
+
+	CREATE TABLE IF NOT EXISTS sentinel_conversations (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		title VARCHAR(200) NOT NULL,
+		status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
+		created_by VARCHAR(100) NOT NULL DEFAULT '',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+
+	CREATE TABLE IF NOT EXISTS sentinel_messages (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		conversation_id UUID NOT NULL REFERENCES sentinel_conversations(id) ON DELETE CASCADE,
+		role VARCHAR(20) NOT NULL,
+		content TEXT NOT NULL,
+		metadata JSONB NOT NULL DEFAULT '{}',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_sentinel_messages_conversation ON sentinel_messages(conversation_id, created_at);
+
+	CREATE TABLE IF NOT EXISTS sentinel_cases (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		fingerprint VARCHAR(512) NOT NULL,
+		source VARCHAR(80) NOT NULL,
+		site_id UUID REFERENCES sites(id) ON DELETE SET NULL,
+		device_id VARCHAR(50) REFERENCES devices(id) ON DELETE SET NULL,
+		severity VARCHAR(20) NOT NULL DEFAULT 'MEDIUM',
+		status VARCHAR(32) NOT NULL DEFAULT 'OPEN',
+		title VARCHAR(255) NOT NULL,
+		summary TEXT NOT NULL DEFAULT '',
+		evidence JSONB NOT NULL DEFAULT '[]',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		resolved_at TIMESTAMP WITH TIME ZONE
+	);
+	CREATE INDEX IF NOT EXISTS idx_sentinel_cases_status_updated ON sentinel_cases(status, updated_at DESC);
+	CREATE INDEX IF NOT EXISTS idx_sentinel_cases_fingerprint ON sentinel_cases(fingerprint);
+
+	CREATE TABLE IF NOT EXISTS sentinel_notes (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		site_id UUID REFERENCES sites(id) ON DELETE CASCADE,
+		device_id VARCHAR(50) REFERENCES devices(id) ON DELETE CASCADE,
+		title VARCHAR(200) NOT NULL,
+		content TEXT NOT NULL,
+		created_by VARCHAR(100) NOT NULL DEFAULT '',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+	);
+	CREATE INDEX IF NOT EXISTS idx_sentinel_notes_scope ON sentinel_notes(site_id, device_id, updated_at DESC);
+
+	CREATE TABLE IF NOT EXISTS sentinel_proposals (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		case_id UUID REFERENCES sentinel_cases(id) ON DELETE SET NULL,
+		conversation_id UUID REFERENCES sentinel_conversations(id) ON DELETE SET NULL,
+		device_id VARCHAR(50) NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+		config VARCHAR(50) NOT NULL,
+		summary TEXT NOT NULL,
+		plan JSONB NOT NULL,
+		status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+		blocked_reason TEXT,
+		created_by VARCHAR(100) NOT NULL DEFAULT '',
+		approved_by VARCHAR(100),
+		approved_at TIMESTAMP WITH TIME ZONE,
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+		CHECK (status IN ('PENDING','APPROVING','APPROVED','REJECTED','BLOCKED','FAILED'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_sentinel_proposals_status ON sentinel_proposals(status, created_at DESC);
 
 	CREATE TABLE IF NOT EXISTS shaping_rules (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -577,9 +647,13 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_successful_generation BIGINT NOT NULL DEFAULT 0", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS capabilities JSONB", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS capabilities_updated_at TIMESTAMP WITH TIME ZONE", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS pending_operation JSONB", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_operation JSONB", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211k BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211v BOOLEAN DEFAULT false", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS band VARCHAR(50) DEFAULT 'both'", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS target_mode VARCHAR(50) DEFAULT 'all'", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS dhcp_reservations JSONB DEFAULT '[]'", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS port_forwarding_rules JSONB DEFAULT '[]'", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS topology_metadata JSONB DEFAULT '{}'", quotedSchema),
@@ -597,6 +671,38 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS tailscale_auth_key VARCHAR(255) DEFAULT ''", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS wan_interfaces JSONB DEFAULT '[]'", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS allow_public_surveys BOOLEAN NOT NULL DEFAULT false", quotedSchema),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_conversations (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(), title VARCHAR(200) NOT NULL,
+			status VARCHAR(32) NOT NULL DEFAULT 'OPEN', created_by VARCHAR(100) NOT NULL DEFAULT '',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)`, quotedSchema),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_messages (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(), conversation_id UUID NOT NULL REFERENCES %s.sentinel_conversations(id) ON DELETE CASCADE,
+			role VARCHAR(20) NOT NULL, content TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}',
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)`, quotedSchema, quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_messages_conversation ON %s.sentinel_messages(conversation_id, created_at)", quotedSchema),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_cases (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(), fingerprint VARCHAR(512) NOT NULL, source VARCHAR(80) NOT NULL,
+			site_id UUID REFERENCES %s.sites(id) ON DELETE SET NULL, device_id VARCHAR(50) REFERENCES %s.devices(id) ON DELETE SET NULL,
+			severity VARCHAR(20) NOT NULL DEFAULT 'MEDIUM', status VARCHAR(32) NOT NULL DEFAULT 'OPEN', title VARCHAR(255) NOT NULL,
+			summary TEXT NOT NULL DEFAULT '', evidence JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, resolved_at TIMESTAMP WITH TIME ZONE)`, quotedSchema, quotedSchema, quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_cases_status_updated ON %s.sentinel_cases(status, updated_at DESC)", quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_cases_fingerprint ON %s.sentinel_cases(fingerprint)", quotedSchema),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_notes (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(), site_id UUID REFERENCES %s.sites(id) ON DELETE CASCADE,
+			device_id VARCHAR(50) REFERENCES %s.devices(id) ON DELETE CASCADE, title VARCHAR(200) NOT NULL, content TEXT NOT NULL,
+			created_by VARCHAR(100) NOT NULL DEFAULT '', created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)`, quotedSchema, quotedSchema, quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_notes_scope ON %s.sentinel_notes(site_id, device_id, updated_at DESC)", quotedSchema),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_proposals (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(), case_id UUID REFERENCES %s.sentinel_cases(id) ON DELETE SET NULL,
+			conversation_id UUID REFERENCES %s.sentinel_conversations(id) ON DELETE SET NULL, device_id VARCHAR(50) NOT NULL REFERENCES %s.devices(id) ON DELETE CASCADE,
+			config VARCHAR(50) NOT NULL, summary TEXT NOT NULL, plan JSONB NOT NULL, status VARCHAR(32) NOT NULL DEFAULT 'PENDING',
+			blocked_reason TEXT, created_by VARCHAR(100) NOT NULL DEFAULT '', approved_by VARCHAR(100), approved_at TIMESTAMP WITH TIME ZONE,
+			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+			CHECK (status IN ('PENDING','APPROVING','APPROVED','REJECTED','BLOCKED','FAILED')) )`, quotedSchema, quotedSchema, quotedSchema, quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_proposals_status ON %s.sentinel_proposals(status, created_at DESC)", quotedSchema),
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
@@ -1054,4 +1160,16 @@ func Tx(ctx context.Context) Queryer {
 		return tx
 	}
 	return DB // Fallback to global connection pool if no transaction
+}
+
+// CommitRequestTx commits the transaction opened by WithAuth before a handler
+// acknowledges a durable write. It is a no-op for handlers/tests without a
+// request-scoped transaction; the auth middleware treats a second commit as
+// sql.ErrTxDone and does not report it as a failure.
+func CommitRequestTx(ctx context.Context) error {
+	tx, ok := ctx.Value(TxKey).(*sql.Tx)
+	if !ok {
+		return nil
+	}
+	return tx.Commit()
 }

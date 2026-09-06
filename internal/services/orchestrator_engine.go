@@ -116,10 +116,13 @@ type RenderResult struct {
 // and produces per-device UCI command sets based on each device's role.
 //
 // Role-based rendering logic:
-//   - ALL roles:     wireless (SSID/key), system (timezone, hostname)
+//   - ALL roles:     system (timezone, hostname)
 //   - Gateway only:  network (LAN IP), dhcp (range, leasetime, DNS), firewall (syn_flood, drop_invalid)
-//   - AP:            wireless, system, dropbear
+//   - AP:            system, dropbear
 //   - IoT_Node:      system, dropbear
+//
+// Wireless is owned by the WLAN rows and device provisioner. Keeping it out of
+// this renderer prevents two independent writers from reversing each other.
 func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 	var results []RenderResult
 
@@ -130,7 +133,7 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 		if role == "" {
 			role = "AP" // default
 		}
-		radioSection, radioDevice, sqmInterface := resolveResources(dev.Capabilities)
+		_, _, sqmInterface := resolveResources(dev.Capabilities)
 
 		// ── SYSTEM (ALL roles) ───────────────────────────────────────
 		hostname := fmt.Sprintf("%s-%s-%d", cfg.HostnamePrefix, role, i+1)
@@ -141,74 +144,6 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 			UciCommand{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: hostname},
 			UciCommand{Action: "set", Config: "system", Section: "@system[0]", Option: "timezone", Value: cfg.Timezone},
 		)
-
-		// ── WIRELESS (Gateway + AP) ──────────────────────────────────
-		if role == "Gateway" || role == "AP" {
-			if cfg.EnableGlobalSSID && cfg.GlobalSSID != "" {
-				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "wireless", Section: radioSection, Option: "ssid", Value: cfg.GlobalSSID},
-					UciCommand{Action: "set", Config: "wireless", Section: radioSection, Option: "encryption", Value: cfg.GlobalEncryption},
-				)
-				if cfg.GlobalWPAKey != "" {
-					cmds = append(cmds,
-						UciCommand{Action: "set", Config: "wireless", Section: radioSection, Option: "key", Value: cfg.GlobalWPAKey},
-					)
-				}
-				// Enable radio
-				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "wireless", Section: radioDevice, Option: "disabled", Value: "0"},
-				)
-			}
-		}
-
-		// ── SMART QOS (CAKE) (Gateway only) ─────────────────────────
-
-		if role == "Gateway" {
-
-			if cfg.SQMCakeEnabled {
-
-				cmds = append(cmds,
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "enabled", Value: "1"},
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "interface", Value: sqmInterface},
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "download", Value: strconv.Itoa(cfg.SqmDownload)},
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "upload", Value: strconv.Itoa(cfg.SqmUpload)},
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "qdisc", Value: "cake"},
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "script", Value: "piece_of_cake.qos"},
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "linklayer", Value: "none"},
-				)
-
-			} else {
-
-				cmds = append(cmds,
-
-					UciCommand{Action: "set", Config: "sqm", Section: "@queue[0]", Option: "enabled", Value: "0"},
-				)
-
-			}
-
-			// ── DEEP PACKET INSPECTION (nDPI) ──────────────────────────
-
-			if cfg.DPIEnabled {
-
-				cmds = append(cmds,
-
-					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "type", Value: "include"},
-
-					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "path", Value: "/etc/firewall.dpi"},
-
-					UciCommand{Action: "set", Config: "firewall", Section: "dpi_rule", Option: "reload", Value: "1"},
-				)
-
-			}
-
-		}
 
 		// ── NETWORK (Gateway only) ───────────────────────────────────
 		if role == "Gateway" {
@@ -249,6 +184,13 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 				UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "syn_flood", Value: synFlood},
 				UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "drop_invalid", Value: dropInvalid},
 			)
+			if !cfg.DPIEnabled {
+				// Remove the legacy option left by older renderer versions. It is
+				// not part of the standard firewall defaults schema.
+				cmds = append(cmds,
+					UciCommand{Action: "delete", Config: "firewall", Section: "@defaults[0]", Option: "dpi_enabled"},
+				)
+			}
 
 			// ── DHCP RESERVATIONS (Gateway only) ─────────────────────────
 			if len(cfg.DHCPReservations) > 0 {
@@ -256,10 +198,7 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 				if err := json.Unmarshal(cfg.DHCPReservations, &dhcpList); err == nil && len(dhcpList) > 0 {
 					for _, dl := range dhcpList {
 						cmds = append(cmds,
-							UciCommand{Action: "add", Config: "dhcp", Section: "host", Option: "", Value: ""},
-							UciCommand{Action: "set", Config: "dhcp", Section: "@host[-1]", Option: "name", Value: dl.Name},
-							UciCommand{Action: "set", Config: "dhcp", Section: "@host[-1]", Option: "mac", Value: dl.MAC},
-							UciCommand{Action: "set", Config: "dhcp", Section: "@host[-1]", Option: "ip", Value: dl.IP},
+							UciCommand{Action: "ensure_host", Config: "dhcp", Section: dl.Name, Option: dl.MAC, Value: dl.IP},
 						)
 					}
 				}
@@ -288,17 +227,13 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 			// ── SQM CAKE (Gateway only) ──────────────────────────────────
 			if cfg.SQMCakeEnabled {
 				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "enabled", Value: "1"},
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "interface", Value: sqmInterface},
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "download", Value: "0"},
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "upload", Value: "0"},
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "qdisc", Value: "cake"},
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "script", Value: "piece_of_cake.qos"},
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "linklayer", Value: "none"},
-				)
-			} else {
-				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "sqm", Section: "@sqm[0]", Option: "enabled", Value: "0"},
+					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "enabled", Value: "1"},
+					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "interface", Value: sqmInterface},
+					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "download", Value: strconv.Itoa(cfg.SqmDownload)},
+					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "upload", Value: strconv.Itoa(cfg.SqmUpload)},
+					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "qdisc", Value: "cake"},
+					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "script", Value: "piece_of_cake.qos"},
+					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "linklayer", Value: "none"},
 				)
 			}
 

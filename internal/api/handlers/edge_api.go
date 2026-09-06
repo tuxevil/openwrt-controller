@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -234,7 +235,9 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	username := GetUsernameFromReq(r)
 
 	var payload struct {
-		Interfaces []services.NetworkInterface `json:"interfaces"`
+		Interfaces   []services.NetworkInterface `json:"interfaces"`
+		Confirm      bool                        `json:"confirm"`
+		HealthChecks []string                    `json:"health_checks"`
 	}
 	if !readBody(w, r, &payload) {
 		return
@@ -244,27 +247,64 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uciCmds := services.BuildNetworkUCI(payload.Interfaces)
-	script := services.BuildValidatedReloadScript(uciCmds, "", "")
-
-	out, err := runSSHScript(deviceID, script)
-	if err != nil {
+	uciCmds := services.BuildNetworkCommands(payload.Interfaces)
+	if len(uciCmds) == 0 {
+		http.Error(w, `{"error":"network interface payload produced no commands"}`, http.StatusBadRequest)
+		return
+	}
+	if !payload.Confirm {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":  err.Error(),
-			"output": out,
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":        "preview",
+			"device_id":     deviceID,
+			"commands":      services.PreviewCommands(uciCmds),
+			"next_step":     "repeat with confirm=true and health_checks to queue this operation",
+			"health_checks": payload.HealthChecks,
 		})
 		return
 	}
 
-	database.InsertAuditLog(username, "EDGE_NEXUS_NETWORK_PUSH", "DEVICE", deviceID,
+	plan, err := services.NewDeviceOperationPlan("network", uciCmds, payload.HealthChecks, true)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := services.CreateBackup(context.Background(), schema, deviceID); err != nil {
+		http.Error(w, `{"error":"pre-change backup failed; operation was not queued"}`, http.StatusServiceUnavailable)
+		return
+	}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+		database.InsertAuditLog(username, "EDGE_NEXUS_NETWORK_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"status": "not_queued", "error": err.Error()})
+		return
+	}
+	if err := database.CommitRequestTx(r.Context()); err != nil {
+		database.InsertAuditLog(username, "EDGE_NEXUS_NETWORK_QUEUE_COMMIT_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		http.Error(w, `{"error":"operation queue commit failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	database.InsertAuditLog(username, "EDGE_NEXUS_NETWORK_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed %d interface(s)", len(payload.Interfaces)), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
-		"output": out,
+		"status":       "queued",
+		"operation_id": plan.OperationID,
+		"message":      "device agent will apply and report the durable result",
 	})
 }
 
@@ -294,7 +334,9 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 	username := GetUsernameFromReq(r)
 
 	var payload struct {
-		DHCP []services.DHCPInterface `json:"dhcp"`
+		DHCP         []services.DHCPInterface `json:"dhcp"`
+		Confirm      bool                     `json:"confirm"`
+		HealthChecks []string                 `json:"health_checks"`
 	}
 	if !readBody(w, r, &payload) {
 		return
@@ -304,27 +346,63 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	uciCmds := services.BuildDHCPUCI(payload.DHCP)
-	script := services.BuildValidatedReloadScript("", uciCmds, "")
-
-	out, err := runSSHScript(deviceID, script)
-	if err != nil {
+	uciCmds := services.BuildDHCPCommands(payload.DHCP)
+	if len(uciCmds) == 0 {
+		http.Error(w, `{"error":"DHCP payload produced no commands"}`, http.StatusBadRequest)
+		return
+	}
+	if !payload.Confirm {
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":  err.Error(),
-			"output": out,
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":        "preview",
+			"device_id":     deviceID,
+			"commands":      services.PreviewCommands(uciCmds),
+			"next_step":     "repeat with confirm=true to queue this operation",
+			"health_checks": payload.HealthChecks,
 		})
 		return
 	}
+	plan, err := services.NewDeviceOperationPlan("dhcp", uciCmds, payload.HealthChecks, true)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := services.CreateBackup(context.Background(), schema, deviceID); err != nil {
+		http.Error(w, `{"error":"pre-change backup failed; operation was not queued"}`, http.StatusServiceUnavailable)
+		return
+	}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+		database.InsertAuditLog(username, "EDGE_NEXUS_DHCP_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"status": "not_queued", "error": err.Error()})
+		return
+	}
+	if err := database.CommitRequestTx(r.Context()); err != nil {
+		database.InsertAuditLog(username, "EDGE_NEXUS_DHCP_QUEUE_COMMIT_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		http.Error(w, `{"error":"operation queue commit failed"}`, http.StatusInternalServerError)
+		return
+	}
 
-	database.InsertAuditLog(username, "EDGE_NEXUS_DHCP_PUSH", "DEVICE", deviceID,
+	database.InsertAuditLog(username, "EDGE_NEXUS_DHCP_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed DHCP config for %d interface(s)", len(payload.DHCP)), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
-		"output": out,
+		"status":       "queued",
+		"operation_id": plan.OperationID,
+		"message":      "device agent will apply and report the durable result",
 	})
 }
 
@@ -354,32 +432,70 @@ func PutEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 	username := GetUsernameFromReq(r)
 
 	var payload struct {
-		PortForward []services.PortForwardRule `json:"port_forwarding"`
+		PortForward  []services.PortForwardRule `json:"port_forwarding"`
+		Confirm      bool                       `json:"confirm"`
+		HealthChecks []string                   `json:"health_checks"`
 	}
 	if !readBody(w, r, &payload) {
 		return
 	}
-
-	uciCmds := services.BuildFirewallUCI(payload.PortForward)
-	script := services.BuildValidatedReloadScript("", "", uciCmds)
-
-	out, err := runSSHScript(deviceID, script)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":  err.Error(),
-			"output": out,
-		})
+	if err := services.ValidatePortForwardRules(payload.PortForward); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	database.InsertAuditLog(username, "EDGE_NEXUS_FIREWALL_PUSH", "DEVICE", deviceID,
+	uciCmds := services.BuildFirewallCommands(payload.PortForward)
+	if !payload.Confirm {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status":        "preview",
+			"device_id":     deviceID,
+			"commands":      services.PreviewCommands(uciCmds),
+			"next_step":     "repeat with confirm=true to queue this operation",
+			"health_checks": payload.HealthChecks,
+		})
+		return
+	}
+	plan, err := services.NewDeviceOperationPlan("firewall", uciCmds, payload.HealthChecks, true)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := services.CreateBackup(context.Background(), schema, deviceID); err != nil {
+		http.Error(w, `{"error":"pre-change backup failed; operation was not queued"}`, http.StatusServiceUnavailable)
+		return
+	}
+	planJSON, err := json.Marshal(plan)
+	if err != nil {
+		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+		database.InsertAuditLog(username, "EDGE_NEXUS_FIREWALL_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"status": "not_queued", "error": err.Error()})
+		return
+	}
+	if err := database.CommitRequestTx(r.Context()); err != nil {
+		database.InsertAuditLog(username, "EDGE_NEXUS_FIREWALL_QUEUE_COMMIT_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		http.Error(w, `{"error":"operation queue commit failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	database.InsertAuditLog(username, "EDGE_NEXUS_FIREWALL_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed %d port-forward rule(s)", len(payload.PortForward)), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
-		"output": out,
+		"status":       "queued",
+		"operation_id": plan.OperationID,
+		"message":      "device agent will apply and report the durable result",
 	})
 }

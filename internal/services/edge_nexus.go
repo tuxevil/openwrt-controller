@@ -3,6 +3,7 @@ package services
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"strings"
 )
 
@@ -79,11 +80,137 @@ func ValidateDHCPInterfaces(dhcpList []DHCPInterface) error {
 		if !validUCIName(dhcp.Interface) {
 			return fmt.Errorf("dhcp[%d].interface is not a valid UCI identifier", i)
 		}
+		for leaseIndex, lease := range dhcp.StaticLeases {
+			if ensureDHCPHost(UciCommand{Action: "ensure_host", Config: "dhcp", Section: lease.Name, Option: lease.MAC, Value: lease.IP}) == "" {
+				return fmt.Errorf("dhcp[%d].static_leases[%d] is invalid", i, leaseIndex)
+			}
+		}
+	}
+	return nil
+}
+
+func ValidatePortForwardRules(rules []PortForwardRule) error {
+	for i, rule := range rules {
+		if rule.Name == "" || len(rule.Name) > 128 || strings.ContainsAny(rule.Name, "\r\n") {
+			return fmt.Errorf("port_forwarding[%d].name is invalid", i)
+		}
+		switch rule.Proto {
+		case "tcp", "udp", "tcp udp":
+		default:
+			return fmt.Errorf("port_forwarding[%d].proto is not supported", i)
+		}
+		if rule.SrcPort < 0 || rule.SrcPort > 65535 || rule.DestPort < 1 || rule.DestPort > 65535 {
+			return fmt.Errorf("port_forwarding[%d] has an invalid port", i)
+		}
+		if net.ParseIP(rule.DestIP) == nil {
+			return fmt.Errorf("port_forwarding[%d].dest_ip is invalid", i)
+		}
 	}
 	return nil
 }
 
 // ─── UCI Serialisers ─────────────────────────────────────────────────────────
+
+// BuildNetworkCommands converts validated interface data into the typed command
+// grammar used by the device-local executor.
+func BuildNetworkCommands(ifaces []NetworkInterface) []UciCommand {
+	var commands []UciCommand
+	for _, iface := range ifaces {
+		if !validUCIName(iface.Name) {
+			continue
+		}
+		section := iface.Name
+		commands = append(commands,
+			UciCommand{Action: "set", Config: "network", Section: section, Option: "", Value: "interface"},
+			UciCommand{Action: "set", Config: "network", Section: section, Option: "proto", Value: iface.Proto},
+		)
+		if iface.Device != "" {
+			commands = append(commands, UciCommand{Action: "set", Config: "network", Section: section, Option: "device", Value: iface.Device})
+		}
+		if iface.VlanID > 0 {
+			commands = append(commands, UciCommand{Action: "set", Config: "network", Section: section, Option: "vid", Value: fmt.Sprintf("%d", iface.VlanID)})
+		}
+		if iface.Proto == "static" {
+			if iface.IPAddr != "" {
+				commands = append(commands, UciCommand{Action: "set", Config: "network", Section: section, Option: "ipaddr", Value: iface.IPAddr})
+			}
+			if iface.Netmask != "" {
+				commands = append(commands, UciCommand{Action: "set", Config: "network", Section: section, Option: "netmask", Value: iface.Netmask})
+			}
+			if iface.Gateway != "" {
+				commands = append(commands, UciCommand{Action: "set", Config: "network", Section: section, Option: "gateway", Value: iface.Gateway})
+			}
+		}
+	}
+	return commands
+}
+
+func BuildDHCPCommands(dhcpList []DHCPInterface) []UciCommand {
+	var commands []UciCommand
+	for _, dhcp := range dhcpList {
+		if !validUCIName(dhcp.Interface) {
+			continue
+		}
+		section := dhcp.Interface
+		commands = append(commands,
+			UciCommand{Action: "set", Config: "dhcp", Section: section, Option: "", Value: "dhcp"},
+			UciCommand{Action: "set", Config: "dhcp", Section: section, Option: "interface", Value: section},
+		)
+		ignore := "0"
+		if !dhcp.Enabled {
+			ignore = "1"
+		}
+		commands = append(commands, UciCommand{Action: "set", Config: "dhcp", Section: section, Option: "ignore", Value: ignore})
+		if dhcp.Enabled {
+			commands = append(commands,
+				UciCommand{Action: "set", Config: "dhcp", Section: section, Option: "start", Value: fmt.Sprintf("%d", dhcp.Start)},
+				UciCommand{Action: "set", Config: "dhcp", Section: section, Option: "limit", Value: fmt.Sprintf("%d", dhcp.Limit)},
+			)
+			if dhcp.LeaseTime != "" {
+				commands = append(commands, UciCommand{Action: "set", Config: "dhcp", Section: section, Option: "leasetime", Value: dhcp.LeaseTime})
+			}
+		}
+		if len(dhcp.UpstreamDNS) > 0 {
+			commands = append(commands, UciCommand{Action: "delete", Config: "dhcp", Section: "@dnsmasq[0]", Option: "server"})
+			for _, dns := range dhcp.UpstreamDNS {
+				commands = append(commands, UciCommand{Action: "add_list", Config: "dhcp", Section: "@dnsmasq[0]", Option: "server", Value: dns})
+			}
+		}
+		for _, lease := range dhcp.StaticLeases {
+			commands = append(commands, UciCommand{
+				Action:  "ensure_host",
+				Config:  "dhcp",
+				Section: lease.Name,
+				Option:  lease.MAC,
+				Value:   lease.IP,
+			})
+		}
+	}
+	return commands
+}
+
+func BuildFirewallCommands(rules []PortForwardRule) []UciCommand {
+	commands := []UciCommand{{Action: "delete_all", Config: "firewall", Section: "redirect"}}
+	for _, rule := range rules {
+		commands = append(commands,
+			UciCommand{Action: "add", Config: "firewall", Value: "redirect"},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "name", Value: rule.Name},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "target", Value: "DNAT"},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "src", Value: "wan"},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "src_dport", Value: fmt.Sprintf("%d", rule.SrcPort)},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "proto", Value: rule.Proto},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "dest_ip", Value: rule.DestIP},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "dest_port", Value: fmt.Sprintf("%d", rule.DestPort)},
+			UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "dest", Value: "lan"},
+		)
+		if rule.Enabled {
+			commands = append(commands, UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "enabled", Value: "1"})
+		} else {
+			commands = append(commands, UciCommand{Action: "set", Config: "firewall", Section: "@redirect[-1]", Option: "enabled", Value: "0"})
+		}
+	}
+	return commands
+}
 
 // BuildNetworkUCI serialises the Interfaces slice into OpenWrt UCI text commands
 // suitable for sourcing in a shell script on the device.
@@ -160,6 +287,7 @@ func BuildDHCPUCI(dhcpList []DHCPInterface) string {
 // BuildFirewallUCI serialises the PortForwardRule slice into UCI redirect rules.
 func BuildFirewallUCI(rules []PortForwardRule) string {
 	var sb strings.Builder
+	sb.WriteString("while uci -q delete firewall.@redirect[0]; do :; done\n")
 	for _, r := range rules {
 		sb.WriteString("uci add firewall redirect\n")
 		sb.WriteString(fmt.Sprintf("uci set firewall.@redirect[-1].name='%s'\n", escapeVal(r.Name)))

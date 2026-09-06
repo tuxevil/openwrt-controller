@@ -140,6 +140,20 @@ func OpenIncident(schema, incidentType, deviceID, siteID, severity string) {
 	log.Printf("\x1b[31m%s\x1b[0m", msg) // Red in terminal
 	notifyTelegram(msg)
 
+	// Keep the deterministic incident alert, then let Sentinel investigate it
+	// asynchronously with read-only tools. The investigation can produce an
+	// approval-gated proposal, but it never mutates the device here.
+	if caseID, caseErr := OpenSentinelCase(schema, "incident", siteID, deviceID, severity,
+		incidentType+" on "+deviceID, msg, map[string]interface{}{
+			"incident_type": incidentType,
+			"severity":      severity,
+			"device_id":     deviceID,
+		}); caseErr == nil {
+		QueueSentinelCaseInvestigation(schema, caseID)
+	} else {
+		log.Printf("[SENTINEL_AI] failed to persist incident case: %v", caseErr)
+	}
+
 	go DispatchWebhook(schema, "incident_created", map[string]interface{}{
 		"device_id":     deviceID,
 		"site_id":       siteID,

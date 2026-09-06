@@ -17,6 +17,38 @@
       <p v-if="triggerError" class="error-msg">{{ triggerError }}</p>
     </div>
 
+    <div class="operator-panel" v-if="operatorCases.length || proposals.length">
+      <h2 class="neon-cyan">SENTINEL OPERATOR QUEUE</h2>
+      <div v-for="item in operatorCases" :key="item.id" class="operator-case">
+        <span class="severity-badge" :class="item.severity.toLowerCase()">{{ item.severity }}</span>
+        <span class="operator-case-title">{{ item.title }}</span>
+        <span class="operator-case-status">{{ item.status }}</span>
+        <p>{{ item.summary }}</p>
+      </div>
+      <div v-for="proposal in proposals" :key="proposal.id" class="operator-proposal">
+        <div><strong>ACTION PROPOSAL</strong> · {{ proposal.device_id }} · {{ proposal.config }}</div>
+        <p>{{ proposal.summary }}</p>
+        <button class="action-btn neon-btn" @click="approveProposal(proposal)">Approve</button>
+        <button class="action-btn reject-btn" @click="rejectProposal(proposal)">Reject</button>
+      </div>
+    </div>
+
+    <div class="notes-panel">
+      <h2 class="neon-cyan">INFRASTRUCTURE NOTES</h2>
+      <form class="notes-form" @submit.prevent="createNote">
+        <input v-model="noteForm.site_id" placeholder="Site UUID (optional)" class="neon-input note-input" />
+        <input v-model="noteForm.device_id" placeholder="Device ID (optional)" class="neon-input note-input" />
+        <input v-model="noteForm.title" placeholder="Note title" class="neon-input note-input" required />
+        <textarea v-model="noteForm.content" placeholder="Role, dependency, service expectation..." class="note-textarea" required></textarea>
+        <button class="action-btn neon-btn" type="submit" :disabled="savingNote">Save note</button>
+      </form>
+      <div v-for="note in operatorNotes" :key="note.id" class="operator-note">
+        <div><strong>{{ note.title }}</strong> <span class="operator-case-status">{{ note.site_id || note.device_id || 'fleet' }}</span></div>
+        <p>{{ note.content }}</p>
+        <button class="note-delete" @click="deleteNote(note)">Delete</button>
+      </div>
+    </div>
+
     <div v-if="loading" class="loading">
       <div class="spinner"></div>
       <p>Establishing neural link...</p>
@@ -66,6 +98,7 @@
 import { ref, onMounted, onUnmounted } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
+import api from '../services/api';
 
 const renderMarkdown = (text) => {
   if (!text) return '';
@@ -79,6 +112,11 @@ let pollInterval = null;
 const triggerLimit = ref(100);
 const triggering = ref(false);
 const triggerError = ref('');
+const operatorCases = ref([]);
+const proposals = ref([]);
+const operatorNotes = ref([]);
+const savingNote = ref(false);
+const noteForm = ref({ site_id: '', device_id: '', title: '', content: '' });
 
 const fetchInsights = async () => {
   try {
@@ -95,6 +133,62 @@ const fetchInsights = async () => {
     console.error('Sentinel fetch error:', e);
   } finally {
     loading.value = false;
+  }
+};
+
+const fetchOperatorState = async () => {
+  try {
+    const [casesResponse, proposalsResponse, notesResponse] = await Promise.all([
+      api.client.get('/sentinel/cases?limit=20'),
+      api.client.get('/sentinel/proposals?status=PENDING&limit=20'),
+      api.client.get('/sentinel/notes?limit=20')
+    ]);
+    operatorCases.value = casesResponse.data.data || [];
+    proposals.value = proposalsResponse.data.data || [];
+    operatorNotes.value = notesResponse.data.data || [];
+  } catch (e) {
+    console.error('Sentinel operator state error:', e);
+  }
+};
+
+const createNote = async () => {
+  if (savingNote.value) return;
+  savingNote.value = true;
+  try {
+    await api.client.post('/sentinel/notes', noteForm.value);
+    noteForm.value = { site_id: '', device_id: '', title: '', content: '' };
+    await fetchOperatorState();
+  } catch (e) {
+    triggerError.value = e.response?.data?.error?.message || e.message;
+  } finally {
+    savingNote.value = false;
+  }
+};
+
+const deleteNote = async (note) => {
+  try {
+    await api.client.delete(`/sentinel/notes/${note.id}`);
+    await fetchOperatorState();
+  } catch (e) {
+    triggerError.value = e.response?.data?.error?.message || e.message;
+  }
+};
+
+const approveProposal = async (proposal) => {
+  try {
+    await api.client.post(`/sentinel/proposals/${proposal.id}/approve`);
+    await fetchOperatorState();
+  } catch (e) {
+    triggerError.value = e.response?.data?.error?.message || e.message;
+  }
+};
+
+const rejectProposal = async (proposal) => {
+  try {
+    await api.client.post(`/sentinel/proposals/${proposal.id}/reject`, { reason: 'Rejected from Sentinel console' });
+    await fetchOperatorState();
+  } catch (e) {
+    triggerError.value = e.response?.data?.error?.message || e.message;
   }
 };
 
@@ -131,7 +225,11 @@ const triggerManual = async () => {
 
 onMounted(() => {
   fetchInsights();
-  pollInterval = setInterval(fetchInsights, 15000);
+  fetchOperatorState();
+  pollInterval = setInterval(() => {
+    fetchInsights();
+    fetchOperatorState();
+  }, 15000);
 });
 
 onUnmounted(() => {
@@ -468,6 +566,109 @@ h1 {
   border: 1px solid rgba(188, 19, 254, 0.4);
   border-radius: 8px;
   text-align: center;
+}
+
+.operator-panel {
+  width: 95%;
+  max-width: 95%;
+  margin: 0 auto 3rem;
+  padding: 1.5rem;
+  background: rgba(0, 255, 255, 0.04);
+  border: 1px solid rgba(0, 255, 255, 0.35);
+  border-radius: 8px;
+}
+
+.operator-panel h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  letter-spacing: 0.18em;
+}
+
+.operator-case, .operator-proposal {
+  padding: 0.9rem;
+  margin-top: 0.75rem;
+  border: 1px solid rgba(188, 19, 254, 0.3);
+  background: rgba(10, 10, 25, 0.7);
+}
+
+.operator-case-title, .operator-case-status {
+  margin-left: 0.75rem;
+  color: #fff;
+}
+
+.operator-case-status {
+  color: #888;
+  font-size: 0.8rem;
+}
+
+.operator-case p, .operator-proposal p {
+  margin: 0.6rem 0;
+  color: #bbb;
+}
+
+.reject-btn {
+  color: #ff5c7c;
+  border-color: #ff5c7c;
+  margin-left: 0.5rem;
+}
+
+.notes-panel {
+  width: 95%;
+  max-width: 95%;
+  margin: 0 auto 3rem;
+  padding: 1.5rem;
+  border: 1px solid rgba(57, 255, 20, 0.3);
+  background: rgba(57, 255, 20, 0.03);
+  border-radius: 8px;
+}
+
+.notes-panel h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  letter-spacing: 0.18em;
+}
+
+.notes-form {
+  display: flex;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.note-input {
+  width: 180px;
+  text-align: left;
+}
+
+.note-textarea {
+  min-width: 280px;
+  min-height: 70px;
+  flex: 1;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(57, 255, 20, 0.4);
+  padding: 0.5rem;
+  border-radius: 4px;
+}
+
+.operator-note {
+  border-top: 1px solid rgba(57, 255, 20, 0.2);
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  color: #bbb;
+}
+
+.operator-note p {
+  margin: 0.4rem 0;
+  white-space: pre-wrap;
+}
+
+.note-delete {
+  color: #ff5c7c;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+  padding: 0;
 }
 
 .trigger-controls {

@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/json"
@@ -17,6 +18,12 @@ import (
 	"openwrt-controller/internal/models"
 	"openwrt-controller/internal/services"
 )
+
+const telemetryPersistenceTimeout = 10 * time.Second
+
+func telemetryPersistenceContext(r *http.Request) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(r.Context()), telemetryPersistenceTimeout)
+}
 
 func validateDeviceTelemetryToken(storedToken, providedToken string) error {
 	if storedToken == "" {
@@ -191,6 +198,19 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			http.Error(w, "Bad request: invalid capabilities", http.StatusBadRequest)
 			return
+		}
+	}
+	if operationStatus, ok := raw["transaction"].(map[string]interface{}); ok {
+		if operationStatus["id"] != nil && operationStatus["state"] != nil {
+			if statusPayload, marshalErr := json.Marshal(operationStatus); marshalErr == nil {
+				statusContext, cancelStatusPersistence := telemetryPersistenceContext(r)
+				go func(ctx context.Context, cancel context.CancelFunc, devID, schema string, status []byte) {
+					defer cancel()
+					if err := database.RecordDeviceOperationStatus(ctx, schema, devID, status); err != nil {
+						log.Printf("Error persisting device operation status: %v", err)
+					}
+				}(statusContext, cancelStatusPersistence, canonicalDeviceID, tenantSchema, statusPayload)
+			}
 		}
 	}
 
@@ -407,8 +427,8 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		if idx := strings.LastIndex(controllerIP, ":"); idx != -1 {
 			controllerIP = controllerIP[:idx]
 		}
-		go func(devID string, flows []interface{}, ctrlIP string, rawPayload []byte, schema string) {
-			enriched := services.ProcessFlowSense(devID, flows, ctrlIP)
+		go func(devID, siteID string, flows []interface{}, ctrlIP string, rawPayload []byte, schema string) {
+			enriched := services.ProcessFlowSenseForSchema(schema, siteID, devID, flows, ctrlIP)
 			if len(enriched) == 0 {
 				return
 			}
@@ -451,7 +471,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 				"UPDATE "+schema+".devices SET state_json = $1 WHERE id = $2",
 				rawPayload, devID,
 			)
-		}(deviceID, rawFlows, controllerIP, body, tenantSchema)
+		}(deviceID, sID, rawFlows, controllerIP, body, tenantSchema)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

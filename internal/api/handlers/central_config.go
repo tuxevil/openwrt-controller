@@ -7,14 +7,16 @@ import (
 	"log"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
-	"openwrt-controller/internal/api/middleware"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
 
 var uciPathSegmentPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_-]+|@[A-Za-z0-9_-]+(?:\[-?[0-9]+\])?)$`)
+
+var uciAnonymousSectionPattern = regexp.MustCompile(`^@([A-Za-z0-9_-]+)\[(-?[0-9]+)\]$`)
 
 func buildCentralConfigCommand(config, path string) (string, error) {
 	if !isAllowedUciConfig(config) {
@@ -140,9 +142,9 @@ func PreviewCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// PutCentralConfigHandler receives UciCommand structs, creates a Vault backup
-// of the target config BEFORE applying, then executes the batch script
-// with rollback protection.
+// PutCentralConfigHandler receives typed UCI commands, creates a Vault backup,
+// then queues the operation for the device-local executor. It never performs a
+// live mutation in the HTTP request.
 func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
 	config := r.URL.Query().Get("config")
@@ -159,7 +161,9 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Commands []services.UciCommand `json:"commands"`
+		Commands     []services.UciCommand `json:"commands"`
+		Confirm      bool                  `json:"confirm"`
+		HealthChecks []string              `json:"health_checks"`
 	}
 	if !readBody(w, r, &payload) {
 		return
@@ -169,18 +173,28 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"empty command list"}`, http.StatusBadRequest)
 		return
 	}
-	if dryRun {
-		script := services.BuildDryRunScript(config, payload.Commands)
-		if script == "" {
+	if dryRun || !payload.Confirm {
+		if services.BuildDryRunScript(config, payload.Commands) == "" {
 			http.Error(w, `{"error":"invalid UCI command or config"}`, http.StatusBadRequest)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"status":   "dry_run",
-			"config":   config,
-			"commands": services.PreviewCommands(payload.Commands),
+			"status":    "preview",
+			"config":    config,
+			"commands":  services.PreviewCommands(payload.Commands),
+			"next_step": "repeat with confirm=true to queue this operation",
 		})
+		return
+	}
+	plan, err := services.NewDeviceOperationPlan(config, payload.Commands, payload.HealthChecks, true)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -188,42 +202,39 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	// Before any destructive change, snapshot the entire /etc/config/<config>
 	// into The Vault as a safety net.
 	log.Printf("[CENTRAL_LUCI] Triggering pre-change Vault backup for device %s, config: %s", deviceID, config)
-	if err := services.CreateBackup(context.Background(), middleware.GetTenantSchema(r), deviceID); err != nil {
+	if err := services.CreateBackup(context.Background(), schema, deviceID); err != nil {
 		log.Printf("[CENTRAL_LUCI][WARN] Pre-change backup failed for %s: %v", deviceID, err)
 		http.Error(w, `{"error":"pre-change backup failed; configuration was not applied"}`, http.StatusServiceUnavailable)
 		return
 	}
 
-	// ── Build & execute batch script via UCI Bridge ──────────────────────
-	script := services.BuildBatchScript(config, payload.Commands)
-	if script == "" {
-		http.Error(w, `{"error":"invalid UCI command or config"}`, http.StatusBadRequest)
-		return
-	}
-	out, err := runSSHScript(deviceID, script)
-
+	planJSON, err := json.Marshal(plan)
 	if err != nil {
-		// Report the exact UCI error from the remote binary
+		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+		database.InsertAuditLog(username, "CENTRAL_LUCI_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-
-		database.InsertAuditLog(username, "CENTRAL_LUCI_PUSH_FAILED", "DEVICE", deviceID,
-			fmt.Sprintf("FAILED push %d commands to '%s': %s", len(payload.Commands), config, err.Error()), r.RemoteAddr)
-
-		json.NewEncoder(w).Encode(map[string]string{
-			"error":  err.Error(),
-			"output": out,
-		})
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"status": "not_queued", "error": err.Error()})
+		return
+	}
+	if err := database.CommitRequestTx(r.Context()); err != nil {
+		database.InsertAuditLog(username, "CENTRAL_LUCI_QUEUE_COMMIT_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		http.Error(w, `{"error":"operation queue commit failed"}`, http.StatusInternalServerError)
 		return
 	}
 
-	database.InsertAuditLog(username, "CENTRAL_LUCI_PUSH", "DEVICE", deviceID,
-		fmt.Sprintf("Pushed %d UCI commands to namespace: %s", len(payload.Commands), config), r.RemoteAddr)
+	database.InsertAuditLog(username, "CENTRAL_LUCI_QUEUED", "DEVICE", deviceID,
+		fmt.Sprintf("Queued %d UCI commands to namespace: %s", len(payload.Commands), config), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]string{
-		"status": "success",
-		"output": out,
+		"status":       "queued",
+		"operation_id": plan.OperationID,
+		"message":      "device agent will apply and report the durable result",
 	})
 }
 
@@ -238,8 +249,9 @@ func SafeRolloutHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var payload struct {
-		Commands []services.UciCommand `json:"commands"`
-		Confirm  bool                  `json:"confirm"`
+		Commands     []services.UciCommand `json:"commands"`
+		Confirm      bool                  `json:"confirm"`
+		HealthChecks []string              `json:"health_checks"`
 	}
 	if !readBody(w, r, &payload) || len(payload.Commands) == 0 {
 		return
@@ -251,16 +263,21 @@ func SafeRolloutHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	plan := services.PreviewCommands(payload.Commands)
+	preview := services.PreviewCommands(payload.Commands)
 	if !payload.Confirm {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status":    "preview",
 			"device_id": deviceID,
 			"config":    config,
-			"commands":  plan,
+			"commands":  preview,
 			"next_step": "repeat with confirm=true to apply to this device",
 		})
+		return
+	}
+	plan, err := services.NewDeviceOperationPlan(config, payload.Commands, payload.HealthChecks, true)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
 		return
 	}
 
@@ -273,23 +290,71 @@ func SafeRolloutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"pre-change backup failed; rollout aborted"}`, http.StatusServiceUnavailable)
 		return
 	}
-	_, _ = database.Tx(r.Context()).Exec("UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE id = $1", deviceID)
-
-	script := services.BuildSafeBatchScript(config, payload.Commands, nil)
-	output, err := runSSHScript(deviceID, script)
+	planJSON, err := json.Marshal(plan)
 	if err != nil {
-		_, _ = database.Tx(r.Context()).Exec("UPDATE "+schema+".devices SET last_rollout_status = 'FAILED', last_health_check_at = CURRENT_TIMESTAMP WHERE id = $1", deviceID)
-		database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+		database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{"status": "rolled_back_or_failed", "output": output, "error": err.Error()})
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]string{"status": "not_queued", "error": err.Error()})
+		return
+	}
+	if err := database.CommitRequestTx(r.Context()); err != nil {
+		database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_QUEUE_COMMIT_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
+		http.Error(w, `{"error":"operation queue commit failed"}`, http.StatusInternalServerError)
 		return
 	}
 
-	database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_APPLIED", "DEVICE", deviceID, fmt.Sprintf("Applied %d commands to %s", len(payload.Commands), config), r.RemoteAddr)
-	_, _ = database.Tx(r.Context()).Exec("UPDATE "+schema+".devices SET last_rollout_status = 'SUCCESS', last_health_check_at = CURRENT_TIMESTAMP WHERE id = $1", deviceID)
+	database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_QUEUED", "DEVICE", deviceID, fmt.Sprintf("Queued %d commands to %s", len(payload.Commands), config), r.RemoteAddr)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "success", "output": output})
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":       "queued",
+		"operation_id": plan.OperationID,
+		"message":      "device agent will apply and report the durable result",
+	})
+}
+
+// GetDeviceOperationHandler returns the durable controller/agent operation
+// state without attempting to reach the device over SSH.
+func GetDeviceOperationHandler(w http.ResponseWriter, r *http.Request) {
+	deviceID := r.PathValue("device_id")
+	if deviceID == "" {
+		http.Error(w, `{"error":"device_id is required"}`, http.StatusBadRequest)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	pending, pendingErr := database.GetPendingDeviceOperation(r.Context(), schema, deviceID)
+	last, lastErr := database.GetLastDeviceOperation(r.Context(), schema, deviceID)
+	if pendingErr != nil || lastErr != nil {
+		http.Error(w, `{"error":"could not read device operation state"}`, http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"device_id":         deviceID,
+		"pending_operation": nullableJSON(pending),
+		"last_operation":    nullableJSON(last),
+		"transport":         "device_agent",
+	})
+}
+
+func nullableJSON(raw json.RawMessage) interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	var value interface{}
+	if json.Unmarshal(raw, &value) != nil {
+		return nil
+	}
+	return value
 }
 
 // GetDeviceDriftHandler compares the rendered desired state with live UCI.
@@ -306,7 +371,7 @@ func GetDeviceDriftHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var siteID, name, role string
-	if err := database.Tx(r.Context()).QueryRow("SELECT site_id, COALESCE(name, model, id), COALESCE(device_role, 'AP') FROM "+schema+".devices WHERE id = $1", deviceID).Scan(&siteID, &name, &role); err != nil {
+	if err := database.Tx(r.Context()).QueryRow("SELECT site_id, COALESCE(NULLIF(state_json->'board'->>'hostname', ''), NULLIF(name, ''), NULLIF(model, ''), id), COALESCE(device_role, 'AP') FROM "+schema+".devices WHERE id = $1", deviceID).Scan(&siteID, &name, &role); err != nil {
 		http.Error(w, `{"error":"device not found"}`, http.StatusNotFound)
 		return
 	}
@@ -352,8 +417,8 @@ func GetDeviceDriftHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			sections := parseUciShow(out, config)
 			result.Observed = redactUCIRaw(out)
-			for _, command := range commands {
-				if command.Option != "" && !uciCommandMatchesObserved(command, sections) {
+			for commandIndex, command := range commands {
+				if command.Option != "" && !uciCommandMatchesObservedInPlan(commandIndex, command, commands, sections) {
 					formatted := redactUCICommand(services.PreviewCommands([]services.UciCommand{command})[0])
 					if isDefaultDifference(command, sections) {
 						result.Defaults = append(result.Defaults, formatted)
@@ -421,19 +486,190 @@ func redactUCIRaw(raw string) string {
 }
 
 func uciCommandMatchesObserved(command services.UciCommand, sections []UCISection) bool {
+	if command.Action == "ensure_host" {
+		desiredMACs, err := services.ParseMACList(command.Option)
+		if err != nil {
+			return false
+		}
+		for _, section := range sections {
+			if section.Type != "host" {
+				continue
+			}
+			name, nameOK := section.Options["name"].(string)
+			mac, macOK := section.Options["mac"]
+			ip, ipOK := section.Options["ip"]
+			if nameOK && name == command.Section && macOK && ipOK &&
+				uciMACListsEqual(mac, desiredMACs) && uciOptionContains(ip, command.Value, false) {
+				return true
+			}
+		}
+		return false
+	}
+
+	if command.Action == "delete" {
+		for _, section := range sections {
+			if !uciSectionMatchesReference(command.Section, section, sections) {
+				continue
+			}
+			if command.Option == "" {
+				return false
+			}
+			_, present := section.Options[command.Option]
+			return !present
+		}
+		return true
+	}
+
 	for _, section := range sections {
+		if !uciSectionMatchesReference(command.Section, section, sections) {
+			continue
+		}
 		value, ok := section.Options[command.Option]
 		if !ok {
 			continue
 		}
-		if valueString, ok := value.(string); ok && valueString == command.Value {
+		if uciCommandValueMatches(command.Action, value, command.Value) {
 			return true
 		}
-		if values, ok := value.([]string); ok {
-			for _, item := range values {
-				if item == command.Value {
-					return true
-				}
+	}
+	return false
+}
+
+func uciCommandMatchesObservedInPlan(index int, command services.UciCommand, commands []services.UciCommand, sections []UCISection) bool {
+	if command.Action == "delete" {
+		if desired, ok := plannedListAfterDelete(index, command, commands); ok {
+			observed, present := observedUCIOption(command.Section, command.Option, sections)
+			return present && uciListEquals(observed, desired)
+		}
+	}
+	return uciCommandMatchesObserved(command, sections)
+}
+
+func plannedListAfterDelete(index int, command services.UciCommand, commands []services.UciCommand) ([]string, bool) {
+	var desired []string
+	for _, later := range commands[index+1:] {
+		if later.Config != command.Config || later.Section != command.Section || later.Option != command.Option {
+			continue
+		}
+		switch later.Action {
+		case "add_list":
+			desired = append(desired, later.Value)
+		case "delete", "set", "del_list":
+			return nil, false
+		}
+	}
+	return desired, len(desired) > 0
+}
+
+func observedUCIOption(sectionID, option string, sections []UCISection) (interface{}, bool) {
+	for _, section := range sections {
+		if !uciSectionMatchesReference(sectionID, section, sections) {
+			continue
+		}
+		value, ok := section.Options[option]
+		return value, ok
+	}
+	return nil, false
+}
+
+func uciSectionMatchesReference(reference string, section UCISection, sections []UCISection) bool {
+	if reference == section.ID {
+		return true
+	}
+	match := uciAnonymousSectionPattern.FindStringSubmatch(reference)
+	if match == nil || section.Type != match[1] {
+		return false
+	}
+	index, err := strconv.Atoi(match[2])
+	if err != nil {
+		return false
+	}
+	typeIndex := 0
+	lastTypeIndex := -1
+	sectionTypeIndex := -1
+	for _, candidate := range sections {
+		if candidate.Type != match[1] {
+			continue
+		}
+		if candidate.ID == section.ID {
+			sectionTypeIndex = typeIndex
+		}
+		lastTypeIndex = typeIndex
+		typeIndex++
+	}
+	if sectionTypeIndex == -1 {
+		return false
+	}
+	if index < 0 {
+		return sectionTypeIndex == lastTypeIndex+index+1
+	}
+	return sectionTypeIndex == index
+}
+
+func uciListEquals(observed interface{}, desired []string) bool {
+	observedValues, ok := uciOptionValues(observed)
+	if !ok || len(observedValues) != len(desired) {
+		return false
+	}
+	for i := range desired {
+		if observedValues[i] != desired[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func uciMACListsEqual(observed interface{}, desired []string) bool {
+	observedValues, ok := uciOptionValues(observed)
+	if !ok || len(observedValues) != len(desired) {
+		return false
+	}
+	for i := range desired {
+		if !strings.EqualFold(observedValues[i], desired[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func uciOptionValues(value interface{}) ([]string, bool) {
+	switch value := value.(type) {
+	case string:
+		return []string{value}, true
+	case []string:
+		return value, true
+	default:
+		return nil, false
+	}
+}
+
+func uciCommandValueMatches(action string, observed interface{}, want string) bool {
+	if action == "add_list" {
+		return uciOptionContains(observed, want, false)
+	}
+	if action == "del_list" {
+		return !uciOptionContains(observed, want, false)
+	}
+	if values, ok := observed.([]string); ok {
+		return len(values) == 1 && uciOptionContains(values, want, false)
+	}
+	return uciOptionContains(observed, want, false)
+}
+
+func uciOptionContains(value interface{}, want string, caseInsensitive bool) bool {
+	match := func(candidate string) bool {
+		if caseInsensitive {
+			return strings.EqualFold(candidate, want)
+		}
+		return candidate == want
+	}
+	switch value := value.(type) {
+	case string:
+		return match(value)
+	case []string:
+		for _, candidate := range value {
+			if match(candidate) {
+				return true
 			}
 		}
 	}
@@ -470,7 +706,7 @@ func parseUciShow(raw string, config string) []UCISection {
 		}
 
 		keyPart := rest[:eqIdx]
-		valPart := strings.Trim(rest[eqIdx+1:], "'")
+		value := parseUCIValue(rest[eqIdx+1:])
 
 		dotIdx := strings.Index(keyPart, ".")
 		if dotIdx == -1 {
@@ -483,16 +719,19 @@ func parseUciShow(raw string, config string) []UCISection {
 			}
 
 			if _, exists := sectionMap[sectionID]; !exists {
+				sectionType, _ := value.(string)
 				sectionMap[sectionID] = &UCISection{
 					ID:      sectionID,
-					Type:    valPart,
+					Type:    sectionType,
 					Name:    name,
 					IsAnon:  isAnon,
 					Options: map[string]interface{}{},
 				}
 				order = append(order, sectionID)
 			} else {
-				sectionMap[sectionID].Type = valPart
+				if sectionType, ok := value.(string); ok {
+					sectionMap[sectionID].Type = sectionType
+				}
 			}
 		} else {
 			// Option: lan.proto='static' or @switch[0].name='switch0'
@@ -518,17 +757,11 @@ func parseUciShow(raw string, config string) []UCISection {
 			// Actually uci show renders lists as multiple lines with same key,
 			// so we detect duplication:
 			existing, exists := sec.Options[optKey]
-			if exists {
-				// Convert to list
-				switch v := existing.(type) {
-				case string:
-					sec.Options[optKey] = []string{v, valPart}
-				case []string:
-					sec.Options[optKey] = append(v, valPart)
-				}
-			} else {
-				sec.Options[optKey] = valPart
+			if !exists {
+				sec.Options[optKey] = value
+				continue
 			}
+			sec.Options[optKey] = mergeUCIValues(existing, value)
 		}
 	}
 
@@ -537,4 +770,55 @@ func parseUciShow(raw string, config string) []UCISection {
 		result = append(result, *sectionMap[id])
 	}
 	return result
+}
+
+func parseUCIValue(raw string) interface{} {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw[0] != '\'' {
+		return strings.Trim(raw, "'")
+	}
+
+	values := make([]string, 0, 1)
+	for raw != "" {
+		raw = strings.TrimSpace(raw)
+		if raw == "" || raw[0] != '\'' {
+			break
+		}
+		raw = raw[1:]
+		var value strings.Builder
+		for raw != "" {
+			if strings.HasPrefix(raw, "'\\''") {
+				value.WriteByte('\'')
+				raw = raw[4:]
+				continue
+			}
+			if raw[0] == '\'' {
+				raw = raw[1:]
+				break
+			}
+			value.WriteByte(raw[0])
+			raw = raw[1:]
+		}
+		values = append(values, value.String())
+	}
+	if len(values) == 1 {
+		return values[0]
+	}
+	return values
+}
+
+func mergeUCIValues(existing, next interface{}) interface{} {
+	values := make([]string, 0, 2)
+	for _, value := range []interface{}{existing, next} {
+		switch value := value.(type) {
+		case string:
+			values = append(values, value)
+		case []string:
+			values = append(values, value...)
+		}
+	}
+	if len(values) == 1 {
+		return values[0]
+	}
+	return values
 }

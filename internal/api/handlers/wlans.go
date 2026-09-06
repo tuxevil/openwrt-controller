@@ -1,12 +1,12 @@
 package handlers
 
 import (
-	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"openwrt-controller/internal/database"
-	"openwrt-controller/internal/services"
 )
 
 func DeleteWLANHandler(w http.ResponseWriter, r *http.Request) {
@@ -47,6 +47,17 @@ type createWLANRequest struct {
 	CustomDevices  []string `json:"custom_devices"`
 	Ieee80211k     *bool    `json:"ieee80211k"`
 	Ieee80211v     *bool    `json:"ieee80211v"`
+}
+
+func normalizeWLANTargetMode(raw string) (string, error) {
+	targetMode := strings.ToLower(strings.TrimSpace(raw))
+	if targetMode == "" {
+		return "all", nil
+	}
+	if targetMode != "all" && targetMode != "custom" {
+		return "", fmt.Errorf("target_mode must be all or custom")
+	}
+	return targetMode, nil
 }
 
 func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
@@ -92,15 +103,16 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 		band = req.Band
 	}
 	targetMode := "all"
-	if req.TargetMode != "" {
-		targetMode = req.TargetMode
+	var targetModeErr error
+	if targetMode, targetModeErr = normalizeWLANTargetMode(req.TargetMode); targetModeErr != nil {
+		http.Error(w, `{"error": "target_mode must be all or custom"}`, http.StatusBadRequest)
+		return
 	}
 
 	var newID string
 	err := database.Tx(r.Context()).QueryRow(
 		"INSERT INTO wlans (site_id, ssid, security, password, enabled, roaming_enabled, band, target_mode, ieee80211k, ieee80211v, ieee80211w, auth_server, auth_secret, dynamic_vlan) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING id",
 		siteID, req.SSID, req.Security, req.Password, enabled, roamingEnabled, band, targetMode, ieee80211k, ieee80211v, req.Ieee80211w, req.AuthServer, req.AuthSecret, req.DynamicVlan,
-		siteID, req.SSID, req.Security, req.Password, enabled, roamingEnabled, band, targetMode, ieee80211k, ieee80211v,
 	).Scan(&newID)
 
 	if err != nil {
@@ -113,8 +125,6 @@ func CreateWLANHandler(w http.ResponseWriter, r *http.Request) {
 			database.Tx(r.Context()).Exec("INSERT INTO device_wlans (wlan_id, device_id) VALUES ($1, $2)", newID, devID)
 		}
 	}
-
-	go services.AddWLANConfig(context.Background(), siteID, req.SSID, req.Security, req.Password, roamingEnabled, ieee80211k, ieee80211v, req.Ieee80211w, req.AuthServer, req.AuthSecret, req.DynamicVlan)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
@@ -232,8 +242,10 @@ func UpdateWLANHandler(w http.ResponseWriter, r *http.Request) {
 		band = req.Band
 	}
 	targetMode := "all"
-	if req.TargetMode != "" {
-		targetMode = req.TargetMode
+	var targetModeErr error
+	if targetMode, targetModeErr = normalizeWLANTargetMode(req.TargetMode); targetModeErr != nil {
+		http.Error(w, `{"error": "target_mode must be all or custom"}`, http.StatusBadRequest)
+		return
 	}
 
 	var err error

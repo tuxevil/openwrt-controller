@@ -40,6 +40,17 @@ func allowLegacyProvision() bool {
 	return os.Getenv("ALLOW_LEGACY_PROVISION") == "true"
 }
 
+func decodePendingDeviceOperation(raw json.RawMessage) (services.DeviceOperationPlan, error) {
+	var plan services.DeviceOperationPlan
+	if err := json.Unmarshal(raw, &plan); err != nil {
+		return services.DeviceOperationPlan{}, fmt.Errorf("invalid pending operation: %w", err)
+	}
+	if err := services.ValidateDeviceOperationPlan(plan); err != nil {
+		return services.DeviceOperationPlan{}, fmt.Errorf("invalid pending operation: %w", err)
+	}
+	return plan, nil
+}
+
 // deepMerge merges src into dst. dst values have priority.
 func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
 	result := make(map[string]interface{})
@@ -152,6 +163,23 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	var pendingOperation interface{}
+	operationRaw, operationErr := database.GetPendingDeviceOperation(r.Context(), tenantSchema, deviceID)
+	if operationErr != nil {
+		log.Printf("[provision] pending operation lookup failed for %s: %v", deviceID, operationErr)
+		http.Error(w, `{"error":"could not read pending device operation"}`, http.StatusServiceUnavailable)
+		return
+	}
+	if len(operationRaw) > 0 {
+		plan, decodeErr := decodePendingDeviceOperation(operationRaw)
+		if decodeErr != nil {
+			log.Printf("[provision] refusing invalid pending operation for %s: %v", deviceID, decodeErr)
+			http.Error(w, `{"error":"pending device operation is invalid"}`, http.StatusServiceUnavailable)
+			return
+		}
+		pendingOperation = plan
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 
 	if !siteID.Valid {
@@ -172,22 +200,25 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	)
 
 	var enableGlobalSSID bool = true
-	_ = database.Tx(r.Context()).QueryRow("SELECT COALESCE(enable_global_ssid, true) FROM "+tenantSchema+".site_configs WHERE site_id = $1", siteID.String).Scan(&enableGlobalSSID)
+	var globalSSID, globalWPAKey, globalEncryption string
+	_ = database.Tx(r.Context()).QueryRow(`
+		SELECT COALESCE(enable_global_ssid, true), COALESCE(global_ssid, ''),
+		       COALESCE(global_wpa_key, ''), COALESCE(global_encryption, '')
+		FROM `+tenantSchema+`.site_configs WHERE site_id = $1
+	`, siteID.String).Scan(&enableGlobalSSID, &globalSSID, &globalWPAKey, &globalEncryption)
 
-	var rows *sql.Rows
-	var qErr error
-	if enableGlobalSSID {
-		rows, qErr = database.Tx(r.Context()).Query(`
-			SELECT ssid, security, COALESCE(password, ''), band, COALESCE(roaming_enabled, false), COALESCE(ieee80211k, false), COALESCE(ieee80211v, false), COALESCE(ieee80211w, '0'), COALESCE(auth_server, ''), COALESCE(auth_secret, ''), COALESCE(dynamic_vlan, '0')
-			FROM `+tenantSchema+`.wlans WHERE site_id = $1 AND enabled = true
-		`, siteID.String)
-	} else {
-		rows, qErr = database.Tx(r.Context()).Query(`
-			SELECT w.ssid, w.security, COALESCE(w.password, ''), w.band, COALESCE(w.roaming_enabled, false), COALESCE(w.ieee80211k, false), COALESCE(w.ieee80211v, false), COALESCE(w.ieee80211w, '0'), COALESCE(w.auth_server, ''), COALESCE(w.auth_secret, ''), COALESCE(w.dynamic_vlan, '0')
-			FROM `+tenantSchema+`.wlans w JOIN `+tenantSchema+`.device_wlans dw ON w.id = dw.wlan_id
-			WHERE w.site_id = $1 AND dw.device_id = $2 AND w.enabled = true
-		`, siteID.String, deviceID)
-	}
+	rows, qErr := database.Tx(r.Context()).Query(`
+		SELECT w.ssid, w.security, COALESCE(w.password, ''), COALESCE(w.band, 'both'),
+		       COALESCE(w.roaming_enabled, false), COALESCE(w.ieee80211k, false),
+		       COALESCE(w.ieee80211v, false), COALESCE(w.ieee80211w, '0'),
+		       COALESCE(w.auth_server, ''), COALESCE(w.auth_secret, ''),
+		       COALESCE(w.dynamic_vlan, '0'), COALESCE(w.target_mode, 'all'),
+		       EXISTS (SELECT 1 FROM `+tenantSchema+`.device_wlans dw
+		               WHERE dw.wlan_id = w.id AND dw.device_id = $2)
+		FROM `+tenantSchema+`.wlans w
+		WHERE w.site_id = $1 AND w.enabled = true
+		ORDER BY w.id
+	`, siteID.String, deviceID)
 	if qErr != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -195,10 +226,20 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 
 	var wlansList []map[string]interface{}
+	var policyConflicts []string
 	for rows.Next() {
-		var ssid, security, password, band, ieee80211w, auth_server, auth_secret, dynamic_vlan string
-		var roaming, k, v bool
-		if err := rows.Scan(&ssid, &security, &password, &band, &roaming, &k, &v, &ieee80211w, &auth_server, &auth_secret, &dynamic_vlan); err == nil {
+		var ssid, security, password, band, ieee80211w, authServer, authSecret, dynamicVLAN, targetMode string
+		var roaming, k, v, assigned bool
+		if err := rows.Scan(&ssid, &security, &password, &band, &roaming, &k, &v, &ieee80211w, &authServer, &authSecret, &dynamicVLAN, &targetMode, &assigned); err == nil {
+			if !services.WLANAppliesToDevice(enableGlobalSSID, targetMode, assigned) {
+				continue
+			}
+			resolution := services.ResolveCanonicalWLAN(globalSSID, globalEncryption, globalWPAKey, ssid, security, password)
+			security = resolution.Security
+			password = resolution.Password
+			if len(resolution.Conflicts) > 0 {
+				policyConflicts = append(policyConflicts, ssid+": "+strings.Join(resolution.Conflicts, ","))
+			}
 			wlan := map[string]interface{}{
 				"ssid":     ssid,
 				"security": security,
@@ -219,17 +260,21 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 			if ieee80211w != "0" && ieee80211w != "" {
 				wlan["ieee80211w"] = ieee80211w
 			}
-			if auth_server != "" {
-				wlan["auth_server"] = auth_server
+			if authServer != "" {
+				wlan["auth_server"] = authServer
 			}
-			if auth_secret != "" {
-				wlan["auth_secret"] = auth_secret
+			if authSecret != "" {
+				wlan["auth_secret"] = authSecret
 			}
-			if dynamic_vlan != "0" && dynamic_vlan != "" {
-				wlan["dynamic_vlan"] = dynamic_vlan
+			if dynamicVLAN != "0" && dynamicVLAN != "" {
+				wlan["dynamic_vlan"] = dynamicVLAN
 			}
 			wlansList = append(wlansList, wlan)
 		}
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
+		return
 	}
 
 	if wlansList == nil {
@@ -300,24 +345,30 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		"SELECT COALESCE(threat_shield_enabled, false) FROM "+tenantSchema+".sites WHERE id = $1", siteID.String,
 	).Scan(&threatShieldEnabled)
 
+	configPayload := map[string]interface{}{
+		"device_token": deviceToken.String,
+		"wireless": map[string]interface{}{
+			"wlans": wlansList,
+		},
+		"wireless_policy_conflicts": policyConflicts,
+		"ssh":                       sshConfig,
+		"wireguard":                 wgConfig,
+		"threat_shield":             threatShieldEnabled,
+		"tailscale": map[string]interface{}{
+			"enabled":  tailscaleEnabled,
+			"auth_key": tailscaleAuthKey,
+		},
+		"survey_mode":                       surveyModeFor(tenantSchema, siteID.String),
+		"survey_id":                         surveyIDFor(tenantSchema, siteID.String),
+		"survey_telemetry_interval_seconds": surveyIntervalFor(tenantSchema, siteID.String),
+	}
+	if pendingOperation != nil {
+		configPayload["apply_operation"] = pendingOperation
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"action": "apply",
-		"config": map[string]interface{}{
-			"device_token": deviceToken.String,
-			"wireless": map[string]interface{}{
-				"wlans": wlansList,
-			},
-			"ssh":           sshConfig,
-			"wireguard":     wgConfig,
-			"threat_shield": threatShieldEnabled,
-			"tailscale": map[string]interface{}{
-				"enabled":  tailscaleEnabled,
-				"auth_key": tailscaleAuthKey,
-			},
-			"survey_mode":                       surveyModeFor(tenantSchema, siteID.String),
-			"survey_id":                         surveyIDFor(tenantSchema, siteID.String),
-			"survey_telemetry_interval_seconds": surveyIntervalFor(tenantSchema, siteID.String),
-		},
+		"config": configPayload,
 	})
 }
 

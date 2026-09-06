@@ -43,11 +43,13 @@ func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 	}
 
 	if triggerSniper && targetIP != "" {
-		log.Printf("[SENTINEL_AI] Local Brute Force detected from %s. Deploying Preventive Sniper.", targetIP)
+		log.Printf("[SENTINEL_AI] Local brute force detected from %s. Creating an approval-gated investigation.", targetIP)
 
-		// Attempt to resolve MAC from ARP table
+		// Resolve context from the ARP table, but leave any response action to
+		// Sentinel's proposal and approval flow.
 		var stateJSON []byte
-		err := database.DB.QueryRow(fmt.Sprintf("SELECT state_json FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&stateJSON)
+		var siteID string
+		err := database.DB.QueryRow(fmt.Sprintf("SELECT site_id, state_json FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&siteID, &stateJSON)
 		if err == nil && len(stateJSON) > 0 {
 			var state map[string]interface{}
 			if json.Unmarshal(stateJSON, &state) == nil {
@@ -65,10 +67,15 @@ func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 					}
 
 					if targetMac != "" {
-						err := ApplySniperShaping(schema, deviceID, targetMac, 64, 5) // Hard limit 64 KB/s for 5 mins
-						if err == nil {
-							log.Printf("[SENTINEL_AI] Sniper Shaping applied to %s (%s)", targetIP, targetMac)
-							notifyTelegram(fmt.Sprintf("🛡️ *ACTIVE DEFENSE TRIGGERED*\n\nLocal brute force detected from %s (%s).\nSniper Shaping deployed for 5 minutes.", targetIP, targetMac))
+						caseID, caseErr := OpenSentinelCase(schema, "brute_force", siteID, deviceID, "HIGH",
+							"Local brute force detected", fmt.Sprintf("Failed authentication from %s resolved to %s", targetIP, targetMac), map[string]string{
+								"source_ip":  targetIP,
+								"source_mac": targetMac,
+							})
+						if caseErr == nil {
+							QueueSentinelCaseInvestigation(schema, caseID)
+						} else {
+							log.Printf("[SENTINEL_AI] failed to persist brute-force case: %v", caseErr)
 						}
 					}
 				}
