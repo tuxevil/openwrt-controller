@@ -54,6 +54,14 @@ signature_second=$(base64 < "$ROOT/signature-second" | tr -d '\n')
 sh "$AGENT" --self-test-signature "$ROOT/artifact-second" "$signature_second" "$public_key_base64"
 sh "$BOOTSTRAP" --self-test-signature "$ROOT/artifact-second" "$signature_second" "$public_key_base64"
 
+mkdir -p "$ROOT/fallback-bin"
+for utility in cat mkdir rm tr wc; do
+    ln -s "$(command -v "$utility")" "$ROOT/fallback-bin/$utility"
+done
+ln -s "$(command -v openssl)" "$ROOT/fallback-bin/openssl"
+PATH="$ROOT/fallback-bin" /bin/sh "$AGENT" --self-test-signature "$ROOT/artifact" "$signature_base64" "$public_key_base64"
+PATH="$ROOT/fallback-bin" /bin/sh "$BOOTSTRAP" --self-test-signature "$ROOT/artifact" "$signature_base64" "$public_key_base64"
+
 if sh "$AGENT" --self-test-signature "$ROOT/artifact" "" "$public_key_base64"; then
     echo "missing signature was accepted" >&2
     exit 1

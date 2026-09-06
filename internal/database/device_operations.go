@@ -7,18 +7,18 @@ import (
 	"fmt"
 )
 
-func parseDeviceOperationEnvelope(plan json.RawMessage) (string, error) {
+func parseDeviceOperationEnvelope(plan json.RawMessage) (string, string, error) {
 	var envelope struct {
 		OperationID string `json:"operation_id"`
 		PlanHash    string `json:"plan_hash"`
 	}
 	if err := json.Unmarshal(plan, &envelope); err != nil {
-		return "", fmt.Errorf("invalid device operation envelope")
+		return "", "", fmt.Errorf("invalid device operation envelope")
 	}
-	if !validDeviceOperationID(envelope.OperationID) || !validDeviceOperationID(envelope.PlanHash) || envelope.OperationID != envelope.PlanHash {
-		return "", fmt.Errorf("invalid device operation identity")
+	if !validDeviceOperationID(envelope.OperationID) || !validDeviceOperationPlanHash(envelope.PlanHash) {
+		return "", "", fmt.Errorf("invalid device operation identity")
 	}
-	return envelope.OperationID, nil
+	return envelope.OperationID, envelope.PlanHash, nil
 }
 
 func validDeviceOperationID(id string) bool {
@@ -28,6 +28,19 @@ func validDeviceOperationID(id string) bool {
 	for _, char := range id {
 		if (char < 'A' || char > 'Z') && (char < 'a' || char > 'z') &&
 			(char < '0' || char > '9') && char != '.' && char != '_' && char != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+func validDeviceOperationPlanHash(hash string) bool {
+	if len(hash) != 64 {
+		return false
+	}
+	for _, char := range hash {
+		if (char < 'A' || char > 'F') && (char < 'a' || char > 'f') &&
+			(char < '0' || char > '9') {
 			return false
 		}
 	}
@@ -51,7 +64,7 @@ func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan jso
 	if err != nil {
 		return err
 	}
-	operationID, err := parseDeviceOperationEnvelope(plan)
+	operationID, planHash, err := parseDeviceOperationEnvelope(plan)
 	if err != nil {
 		return err
 	}
@@ -98,10 +111,14 @@ func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan jso
 			return fmt.Errorf("device already has a different pending operation")
 		}
 		var lastEnvelope struct {
-			ID string `json:"id"`
+			ID       string `json:"id"`
+			PlanHash string `json:"plan_hash"`
 		}
 		if len(last) > 0 && json.Unmarshal(last, &lastEnvelope) == nil && lastEnvelope.ID == operationID {
-			return nil
+			if lastEnvelope.PlanHash == "" || lastEnvelope.PlanHash == planHash {
+				return nil
+			}
+			return fmt.Errorf("operation id already used for a different plan")
 		}
 		return fmt.Errorf("device already has a pending operation")
 	}
@@ -135,10 +152,14 @@ func RecordDeviceOperationStatus(ctx context.Context, schema, deviceID string, s
 		return err
 	}
 	var envelope struct {
-		ID    string `json:"id"`
-		State string `json:"state"`
+		ID       string `json:"id"`
+		PlanHash string `json:"plan_hash"`
+		State    string `json:"state"`
 	}
 	if err := json.Unmarshal(status, &envelope); err != nil || !validDeviceOperationID(envelope.ID) || !validDeviceOperationState(envelope.State) {
+		return fmt.Errorf("invalid device operation status")
+	}
+	if envelope.PlanHash != "" && !validDeviceOperationPlanHash(envelope.PlanHash) {
 		return fmt.Errorf("invalid device operation status")
 	}
 	terminal := envelope.State == "COMMITTED" || envelope.State == "RESTORED"
@@ -153,11 +174,11 @@ func RecordDeviceOperationStatus(ctx context.Context, schema, deviceID string, s
 		    last_health_check_at = CASE WHEN $2 = true THEN CURRENT_TIMESTAMP ELSE last_health_check_at END,
 		    updated_at = CURRENT_TIMESTAMP
 		WHERE id = $5 AND (
-		    pending_operation->>'operation_id' = $3
-		    OR last_operation->>'id' = $3
+		    (pending_operation->>'operation_id' = $3 AND ($6 = '' OR pending_operation->>'plan_hash' = $6))
+		    OR (last_operation->>'id' = $3 AND ($6 = '' OR last_operation->>'plan_hash' = $6))
 		    OR (pending_operation IS NULL AND last_operation IS NULL)
 		)
-	`, safeSchema), status, terminal, envelope.ID, envelope.State, deviceID)
+	`, safeSchema), status, terminal, envelope.ID, envelope.State, deviceID, envelope.PlanHash)
 	return err
 }
 

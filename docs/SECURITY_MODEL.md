@@ -5,7 +5,7 @@
 - Browser to controller: JWT authentication, role checks and restricted WebSocket ticket authentication.
 - Controller to database: server-side credentials from the environment; tenant schema identifiers are validated before SQL interpolation.
 - Controller to device: SSH public-key authentication with persisted TOFU host keys.
-- Device to controller: the shipped agent uses HTTP by default; first enrollment uses a site key and subsequent pulls and telemetry use a per-device token. Use a private network, VPN or TLS proxy before sending credentials across an untrusted path.
+- Device to controller: the agent uses a complete controller URL; production runtime configuration requires HTTPS, with optional CA or public-key pinning. First enrollment uses a short-lived site enrollment token and subsequent pulls, updates and telemetry use a per-device token.
 
 ## Privileged Actions
 

@@ -55,7 +55,7 @@ RUN chown -R app:app /app
 USER app:app
 
 # Expose server port (also documented in docker-compose.yml).
-EXPOSE 3000
+EXPOSE 3000 8443
 
 # Defaults. All secrets MUST be provided at runtime — no defaults for
 # DATABASE_URL, JWT_SECRET, INFLUX_TOKEN, etc.
@@ -63,10 +63,11 @@ ENV PORT=3000 \
     INFLUX_ORG=openwrthub \
     INFLUX_BUCKET=telemetry
 
-# Liveness probe — process is up and serving HTTP. This is anonymous
-# (no auth) and is the right signal for "is the container alive?".
+# Liveness probe — process is up and serving the configured HTTP(S) listener.
+# The TLS probe deliberately skips certificate validation because it runs
+# against loopback; external clients must validate the configured certificate.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-    CMD wget -qO- http://127.0.0.1:3000/healthz || exit 1
+    CMD-SHELL if [ "$${REQUIRE_TLS:-false}" = "true" ]; then wget --no-check-certificate -qO- "https://127.0.0.1:$${HTTPS_PORT:-8443}/healthz"; else wget -qO- "http://127.0.0.1:$${PORT:-3000}/healthz"; fi || exit 1
 
 # Run application
 ENTRYPOINT ["/app/openwrt-controller"]

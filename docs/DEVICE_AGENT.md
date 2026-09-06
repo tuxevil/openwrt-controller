@@ -2,30 +2,44 @@
 
 ## Installation Modes
 
-For a single device, download `devices/agent.sh` through the authenticated agent endpoint, configure the controller URL and site key, make it executable and register the procd service. The shipped agent uses HTTP by default, so place it behind a private network, VPN or TLS proxy before using it across an untrusted network. For repeatable deployments, include `devices/99-nerve-center-bootstrap` in an Image Builder profile.
+For a single device, download `devices/agent.sh` through the authenticated agent endpoint, configure a complete controller URL, make it executable and register the procd service. Use HTTPS for enrollment, updates, configuration and telemetry on any untrusted path. For repeatable deployments, include `devices/99-nerve-center-bootstrap` in an Image Builder profile.
 
 Example download and configuration:
 
 ```sh
 wget -O /usr/sbin/nerve-agent.sh \
-  "http://CONTROLLER_IP:3000/api/agent/latest/raw" \
-  --header="X-Site-Key: SITE_KEY"
-chmod 700 /usr/sbin/nerve-agent.sh
-sed -i 's|TU_API_KEY_AQUI|SITE_KEY|;s|REPLACE_WITH_CONTROLLER_IP|CONTROLLER_IP|' \
-  /usr/sbin/nerve-agent.sh
+  "https://controller.example.com:8443/api/agent/latest/raw" \
+  --header="X-Site-Enrollment-Token: SITE_ENROLLMENT_TOKEN"
+chmod 755 /usr/sbin/nerve-agent.sh
+
+umask 077
+cat >/etc/nerve/agent.conf <<'EOF'
+CONTROLLER_URL="https://controller.example.com:8443/api"
+REQUIRE_TLS="true"
+CONTROLLER_CA_FILE="/etc/ssl/certs/controller-ca.pem"
+CONTROLLER_PINNED_PUBKEY=""
+DEVICE_ID_FILE="/etc/nerve-device-id"
+DEVICE_TOKEN_FILE="/etc/nerve-device-token"
+ENROLLMENT_TOKEN_FILE="/etc/nerve/enrollment-token"
+ENROLLMENT_NONCE_FILE="/etc/nerve/enrollment-nonce"
+AGENT_UPDATE_PUBLIC_KEY_FILE="/etc/nerve/agent-update-public-key"
+EOF
 ```
 
-The bootstrap script installs the agent and configures the service. It does not invent a device token.
+`REQUIRE_TLS=true` rejects an `http://` controller URL. `CONTROLLER_CA_FILE` is optional when the controller certificate chains to the device trust store; `CONTROLLER_PINNED_PUBKEY` can use curl's `sha256//...` public-key pin format. Never use `-k` to bypass certificate verification.
+
+The bootstrap script installs the agent and configures the service. It does not invent a device token. Its template is HTTPS-first and fails if the root-password placeholder is left unchanged.
 
 ## Enrollment Contract
 
 1. The device identifies itself by its bridge MAC address.
-2. The first configuration request sends `X-Site-Key` and may omit `X-Device-Token`.
-3. The controller returns `config.device_token`.
+2. The first enrollment request sends the short-lived `X-Site-Enrollment-Token` and a nonce.
+3. The controller returns a device token and binds the nonce to that device.
 4. The agent stores it in `/etc/nerve-device-token` with mode `0600`.
-5. Later configuration and telemetry requests send `X-Device-Token`.
+5. The agent deletes the enrollment token and nonce after successful enrollment.
+6. Later configuration, telemetry and update requests send `X-Device-Token`.
 
-Existing devices must complete this transition before legacy provisioning is disabled. A token mismatch is rejected; a site key alone is not a permanent device credential.
+Existing devices must complete this transition before legacy provisioning is disabled. A token mismatch is rejected; an enrollment token is not a permanent device credential.
 
 ## Local Responsibilities
 

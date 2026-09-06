@@ -4,9 +4,12 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 FIXTURE_DIR="$SCRIPT_DIR/test-fixtures"
+TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/agent-log-collection.XXXXXX")
+trap 'rm -rf "$TEST_ROOT"' EXIT HUP INT TERM
 
 run_collection() {
     PATH="$FIXTURE_DIR:$PATH" AGENT_LOGREAD_TEST_MODE="$1" \
+        NERVE_CONFIG_FILE="$TEST_ROOT/agent.conf" DEVICE_ID_FILE="$TEST_ROOT/device-id" \
         sh "$SCRIPT_DIR/agent.sh" --self-test-log-collection
 }
 

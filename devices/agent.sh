@@ -8,24 +8,14 @@ if [ -r "$NERVE_CONFIG_FILE" ]; then
     . "$NERVE_CONFIG_FILE"
 fi
 CONTROLLER_URL="${CONTROLLER_URL:-}"
-CONTROLLER_IP="${CONTROLLER_IP:-}"
-PORT="${PORT:-3000}"
-if [ -z "$CONTROLLER_URL" ] && [ -n "$CONTROLLER_IP" ]; then
-    CONTROLLER_URL="http://$CONTROLLER_IP:$PORT/api"
-fi
+REQUIRE_TLS="${REQUIRE_TLS:-false}"
+CONTROLLER_CA_FILE="${CONTROLLER_CA_FILE:-}"
+CONTROLLER_PINNED_PUBKEY="${CONTROLLER_PINNED_PUBKEY:-}"
+CONTROLLER_URL="${CONTROLLER_URL%/}"
 BASE_URL="$CONTROLLER_URL"
 TELEMETRY_URL="$BASE_URL/telemetry"
 DEVICE_ID_FILE="${DEVICE_ID_FILE:-/etc/nerve-device-id}"
 DEVICE_ID="$(cat "$DEVICE_ID_FILE" 2>/dev/null || true)"
-if [ -z "$DEVICE_ID" ]; then
-    # Seed identity once. A bridge MAC can change when a NIC is added later.
-    DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]' || cat /sys/class/net/eth0/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
-    if [ -n "$DEVICE_ID" ]; then
-        printf '%s\n' "$DEVICE_ID" > "$DEVICE_ID_FILE"
-        chmod 600 "$DEVICE_ID_FILE"
-    fi
-fi
-CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 DEVICE_TOKEN_FILE="${DEVICE_TOKEN_FILE:-/etc/nerve-device-token}"
 DEVICE_TOKEN="$(cat "$DEVICE_TOKEN_FILE" 2>/dev/null || true)"
 ENROLLMENT_TOKEN_FILE="${ENROLLMENT_TOKEN_FILE:-/etc/nerve/enrollment-token}"
@@ -38,12 +28,76 @@ NERVE_WIFI_HASH_FILE="${NERVE_WIFI_HASH_FILE:-$NERVE_TRANSACTION_ROOT/wifi_confi
 NERVE_WG_HASH_FILE="${NERVE_WG_HASH_FILE:-$NERVE_TRANSACTION_ROOT/wg_config.hash}"
 NERVE_OPERATION_STATUS_FILE="${NERVE_OPERATION_STATUS_FILE:-$NERVE_TRANSACTION_ROOT/operation_status}"
 
+# Keep telemetry independent from optional full GNU coreutils packages.
+join_csv() {
+    awk 'BEGIN { first = 1 } { if (!first) printf ","; printf "%s", $0; first = 0 } END { if (!first) printf "\n" }'
+}
+
+decode_base64() {
+    if command -v base64 >/dev/null 2>&1; then
+        base64 -d
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl base64 -d -A
+    else
+        return 1
+    fi
+}
+
+tls_required() {
+    case "$REQUIRE_TLS" in
+        1|true|TRUE|yes|YES) return 0 ;;
+        0|false|FALSE|no|NO) return 1 ;;
+        *) return 2 ;;
+    esac
+}
+
+validate_controller_url() {
+    case "$REQUIRE_TLS" in
+        1|true|TRUE|yes|YES|0|false|FALSE|no|NO) ;;
+        *) return 1 ;;
+    esac
+    case "$CONTROLLER_URL" in
+        https://*|http://*) ;;
+        *) return 1 ;;
+    esac
+    case "$CONTROLLER_URL" in
+        https://|http://|*[!A-Za-z0-9:/._-]*) return 1 ;;
+    esac
+    if [ -n "$CONTROLLER_CA_FILE" ] && [ ! -r "$CONTROLLER_CA_FILE" ]; then
+        return 1
+    fi
+    case "$CONTROLLER_URL" in
+        http://*)
+            case "$REQUIRE_TLS" in
+                1|true|TRUE|yes|YES) return 1 ;;
+            esac
+            ;;
+    esac
+}
+
+controller_curl() {
+    if [ -n "$CONTROLLER_CA_FILE" ]; then
+        set -- --cacert "$CONTROLLER_CA_FILE" "$@"
+    fi
+    if [ -n "$CONTROLLER_PINNED_PUBKEY" ]; then
+        set -- --pinnedpubkey "$CONTROLLER_PINNED_PUBKEY" "$@"
+    fi
+    curl "$@"
+}
+
 transaction_valid_id() {
     case "$1" in
         ''|*[!A-Za-z0-9._-]*) return 1 ;;
     esac
     [ "$1" != "." ] && [ "$1" != ".." ] || return 1
     [ "${#1}" -le 128 ]
+}
+
+transaction_valid_plan_hash() {
+    case "$1" in
+        ''|*[!A-Fa-f0-9]*) return 1 ;;
+    esac
+    [ "${#1}" -eq 64 ]
 }
 
 transaction_valid_config() {
@@ -91,7 +145,7 @@ verify_agent_artifact() {
     local public_key_size
     local signature_size
     mkdir "$verify_dir" 2>/dev/null || return 1
-    if ! printf '%s' "$public_key_base64" | base64 -d > "$verify_dir/public.raw" 2>/dev/null; then
+    if ! printf '%s' "$public_key_base64" | decode_base64 > "$verify_dir/public.raw" 2>/dev/null; then
         rm -rf "$verify_dir"
         return 1
     fi
@@ -108,7 +162,7 @@ verify_agent_artifact() {
         rm -rf "$verify_dir"
         return 1
     }
-    if ! printf '%s' "$signature_base64" | base64 -d > "$verify_dir/signature" 2>/dev/null; then
+    if ! printf '%s' "$signature_base64" | decode_base64 > "$verify_dir/signature" 2>/dev/null; then
         rm -rf "$verify_dir"
         return 1
     fi
@@ -336,7 +390,7 @@ transaction_commit() {
 }
 
 transaction_status_json() {
-    local transaction_id transaction_path transaction_config transaction_state
+    local transaction_id transaction_path transaction_config transaction_state transaction_plan_hash
     transaction_id=$(cat "$NERVE_OPERATION_STATUS_FILE" 2>/dev/null || true)
     if [ -n "$transaction_id" ] && ! transaction_valid_id "$transaction_id"; then
         transaction_id=""
@@ -357,7 +411,12 @@ transaction_status_json() {
         printf '{}'
         return 0
     fi
-    printf '{"id":"%s","config":"%s","state":"%s"}' "$transaction_id" "$transaction_config" "$transaction_state"
+    transaction_plan_hash=$(cat "$NERVE_TRANSACTION_ROOT/operation_${transaction_config}.hash" 2>/dev/null || true)
+    if transaction_valid_plan_hash "$transaction_plan_hash"; then
+        printf '{"id":"%s","config":"%s","state":"%s","plan_hash":"%s"}' "$transaction_id" "$transaction_config" "$transaction_state" "$transaction_plan_hash"
+    else
+        printf '{"id":"%s","config":"%s","state":"%s"}' "$transaction_id" "$transaction_config" "$transaction_state"
+    fi
 }
 
 operation_valid_name() {
@@ -555,8 +614,7 @@ apply_pending_operation() {
     operation_hash=$(printf '%s' "$operation_json" | jsonfilter -e '@.plan_hash' 2>/dev/null)
     operation_count=$(printf '%s' "$operation_json" | jsonfilter -e '@.commands[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
     transaction_valid_id "$operation_id" || return 1
-    transaction_valid_id "$operation_hash" || return 1
-    [ "$operation_hash" = "$operation_id" ] || return 1
+    transaction_valid_plan_hash "$operation_hash" || return 1
     transaction_valid_config "$operation_config" || return 1
     [ "$operation_count" -gt 0 ] || return 1
 
@@ -616,6 +674,35 @@ apply_pending_operation() {
     return 0
 }
 
+# logd is a local dependency, not part of the telemetry heartbeat. On some
+# OpenWrt builds logread can remain blocked on the logd socket; running it in
+# the telemetry pipeline would then stop the agent before the POST forever.
+# Keep the collection bounded and let telemetry continue when logd is stuck.
+collect_recent_logs() {
+    local log_file="/tmp/nerve-agent-logread.$$"
+    local log_pid
+    local waited=0
+
+    rm -f "$log_file"
+    logread -l 20 >"$log_file" 2>/dev/null &
+    log_pid=$!
+
+    while kill -0 "$log_pid" 2>/dev/null; do
+        if [ "$waited" -ge 2 ]; then
+            kill "$log_pid" 2>/dev/null
+            wait "$log_pid" 2>/dev/null
+            rm -f "$log_file"
+            return 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    wait "$log_pid" 2>/dev/null
+    sed 's/\\/\\\\/g; s/"/\\"/g' "$log_file" | awk '{printf "%s\\n", $0}'
+    rm -f "$log_file"
+}
+
 if [ "${1:-}" = "--self-test-signature" ]; then
     [ "$#" -eq 4 ] || exit 1
     verify_agent_artifact "$2" "$3" "$4"
@@ -634,7 +721,7 @@ if [ "${1:-}" = "--self-test-operation" ]; then
     if [ -n "${SELF_TEST_OPERATION_JSON:-}" ]; then
         SELF_TEST_OPERATION="$SELF_TEST_OPERATION_JSON"
     else
-        SELF_TEST_OPERATION='{"operation_id":"self-operation","plan_hash":"self-operation","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":true}'
+        SELF_TEST_OPERATION='{"operation_id":"self-operation","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":true}'
     fi
     apply_pending_operation "$SELF_TEST_OPERATION" || exit 1
     exit 0
@@ -642,6 +729,16 @@ fi
 
 if [ "${1:-}" = "--self-test-status" ]; then
     transaction_status_json
+    exit 0
+fi
+
+if [ "${1:-}" = "--self-test-runtime-config" ]; then
+    validate_controller_url
+    exit $?
+fi
+
+if [ "${1:-}" = "--self-test-log-collection" ]; then
+    collect_recent_logs
     exit 0
 fi
 
@@ -655,10 +752,30 @@ if [ "${1:-}" = "--prune-transactions" ]; then
     exit $?
 fi
 
+if ! validate_controller_url; then
+    logger -t agent "Runtime controller URL or TLS policy is invalid"
+    exit 1
+fi
+CONTROLLER_HOST=$(printf '%s\n' "$CONTROLLER_URL" | sed -e 's#^[A-Za-z][A-Za-z0-9+.-]*://##' -e 's#/.*$##' -e 's#:[0-9][0-9]*$##')
+
+if [ -z "$DEVICE_ID" ]; then
+    # Seed identity once. A bridge MAC can change when a NIC is added later.
+    if [ -r /sys/class/net/br-lan/address ]; then
+        DEVICE_ID=$(tr '[:lower:]' '[:upper:]' < /sys/class/net/br-lan/address)
+    elif [ -r /sys/class/net/eth0/address ]; then
+        DEVICE_ID=$(tr '[:lower:]' '[:upper:]' < /sys/class/net/eth0/address)
+    fi
+    if [ -n "$DEVICE_ID" ]; then
+        printf '%s\n' "$DEVICE_ID" > "$DEVICE_ID_FILE"
+        chmod 600 "$DEVICE_ID_FILE"
+    fi
+fi
+
 if [ -z "$BASE_URL" ] || [ -z "$DEVICE_ID" ]; then
     logger -t agent "Runtime configuration or device identity is missing"
     exit 1
 fi
+CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 
 # Recover before the first network request. A transaction left in APPLYING or
 # PENDING_CONFIRM is never trusted after a process crash or reboot.
@@ -705,7 +822,7 @@ bootstrap_agent() {
     enrollment_payload=$(printf '{"device_id":"%s","nonce":"%s","capabilities":{"architecture":"%s","kernel":"%s"}}' \
         "$DEVICE_ID" "$enrollment_nonce" "$enrollment_arch" "$enrollment_kernel")
     enrollment_response_file="/tmp/nerve-enrollment-response.$$"
-    enrollment_http_code=$(curl -m 10 -sS -X POST \
+    enrollment_http_code=$(controller_curl -m 10 -sS -X POST \
         -H "Content-Type: application/json" \
         -H "X-Site-Enrollment-Token: $enrollment_token" \
         -d "$enrollment_payload" \
@@ -727,42 +844,6 @@ bootstrap_agent() {
     rm -f "$ENROLLMENT_TOKEN_FILE" "$ENROLLMENT_NONCE_FILE"
     logger -t agent "Device enrolled and token provisioned"
 }
-
-# logd is a local dependency, not part of the telemetry heartbeat.  On some
-# OpenWrt builds logread can remain blocked on the logd socket; running it in
-# the telemetry pipeline would then stop the agent before the POST forever.
-# Keep the collection bounded and let telemetry continue when logd is stuck.
-collect_recent_logs() {
-    local log_file="/tmp/nerve-agent-logread.$$"
-    local log_pid
-    local waited=0
-
-    rm -f "$log_file"
-    logread -l 20 >"$log_file" 2>/dev/null &
-    log_pid=$!
-
-    while kill -0 "$log_pid" 2>/dev/null; do
-        if [ "$waited" -ge 2 ]; then
-            kill "$log_pid" 2>/dev/null
-            wait "$log_pid" 2>/dev/null
-            rm -f "$log_file"
-            return 0
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-
-    wait "$log_pid" 2>/dev/null
-    sed 's/\\/\\\\/g; s/"/\\"/g' "$log_file" | awk '{printf "%s\\n", $0}'
-    rm -f "$log_file"
-}
-
-# Local/CI seam for the bounded log collector.  It does not start the agent
-# loop or touch device configuration.
-if [ "${1:-}" = "--self-test-log-collection" ]; then
-    collect_recent_logs
-    exit 0
-fi
 
 # Instalar dependencias si faltan (opcional)
 if ! command -v tcpdump >/dev/null 2>&1; then
@@ -793,13 +874,14 @@ if ! bootstrap_agent; then
 fi
 
 T_FAILS=0
+NEIGHBOR_APS="[]"
 
 while true; do
     # 0. CHECK AUTO-UPDATE
     # The signed artifact is hashed byte-for-byte because runtime settings are
     # stored outside this file.
     AGENT_VERSION=$(sha256sum "$0" | awk '{print $1}')
-    LATEST_JSON=$(curl -m 5 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest")
+    LATEST_JSON=$(controller_curl -m 5 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest")
     
     if [ -n "$LATEST_JSON" ]; then
         LATEST_HASH=$(echo "$LATEST_JSON" | jsonfilter -e '@.version_hash' 2>/dev/null)
@@ -807,7 +889,7 @@ while true; do
             LATEST_SIGNATURE=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature' 2>/dev/null)
             LATEST_SIGNATURE_ALGORITHM=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature_algorithm' 2>/dev/null)
             logger -t agent "New agent version found: $LATEST_HASH. Downloading..."
-            if curl -m 10 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
+            if controller_curl -m 10 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
                 TMP_HASH=$(sha256sum "$0.tmp" | awk '{print $1}')
                 SIGNATURE_OK=0
                 if [ -n "$LATEST_SIGNATURE" ] && [ "$LATEST_SIGNATURE_ALGORITHM" = "Ed25519" ]; then
@@ -856,24 +938,24 @@ while true; do
     CAP_FLASH_MB=$(df -Pm /overlay 2>/dev/null | awk 'NR==2 && $2 ~ /^[0-9]+$/ {print $2}' || true)
     case "$CAP_RAM_MB" in *[!0-9]*|'') CAP_RAM_MB=0 ;; esac
     case "$CAP_FLASH_MB" in *[!0-9]*|'') CAP_FLASH_MB=0 ;; esac
-    CAP_INTERFACES=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1 | head -n 32 | sed 's/.*/"&"/' | paste -sd, -)
+    CAP_INTERFACES=$(ip -o link show 2>/dev/null | awk -F': ' '{print $2}' | cut -d'@' -f1 | head -n 32 | sed 's/.*/"&"/' | join_csv)
     [ -n "$CAP_INTERFACES" ] || CAP_INTERFACES=""
-    CAP_RADIOS=$(iwinfo 2>/dev/null | awk '/^[a-zA-Z0-9_.-]+[[:space:]]+ESSID:/ {print $1}' | head -n 16 | sed 's/.*/"&"/' | paste -sd, -)
+    CAP_RADIOS=$(iwinfo 2>/dev/null | awk '/^[a-zA-Z0-9_.-]+[[:space:]]+ESSID:/ {print $1}' | head -n 16 | sed 's/.*/"&"/' | join_csv)
     [ -n "$CAP_RADIOS" ] || CAP_RADIOS=""
-    CAP_WIFI_DEVICES=$(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-device/ {print $2}' | head -n 8 | sed 's/.*/"&"/' | paste -sd, -)
-    CAP_WIFI_IFACES=$(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-iface/ {print $2}' | head -n 16 | sed 's/.*/"&"/' | paste -sd, -)
+    CAP_WIFI_DEVICES=$(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-device/ {print $2}' | head -n 8 | sed 's/.*/"&"/' | join_csv)
+    CAP_WIFI_IFACES=$(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-iface/ {print $2}' | head -n 16 | sed 's/.*/"&"/' | join_csv)
     [ -n "$CAP_WIFI_DEVICES" ] || CAP_WIFI_DEVICES=""
     [ -n "$CAP_WIFI_IFACES" ] || CAP_WIFI_IFACES=""
-    CAP_LOGICAL_NETWORKS=$(uci -q show network 2>/dev/null | awk -F'[.=]' '/\.device=/ {print $1":"$2}' | head -n 16 | awk -F: '{print "\""$2"\":\""$2"\""}' | paste -sd, -)
+    CAP_LOGICAL_NETWORKS=$(uci -q show network 2>/dev/null | awk -F'[.=]' '/\.device=/ {print $1":"$2}' | head -n 16 | awk -F: '{print "\""$2"\":\""$2"\""}' | join_csv)
     [ -n "$CAP_LOGICAL_NETWORKS" ] || CAP_LOGICAL_NETWORKS=""
-    CAP_SQM_CANDIDATES=$(printf '%s\n' "$CAP_INTERFACES" | tr ',' '\n' | tr -d '"' | awk '/^(eth|br-wan)/ {print}' | head -n 8 | sed 's/.*/"&"/' | paste -sd, -)
+    CAP_SQM_CANDIDATES=$(printf '%s\n' "$CAP_INTERFACES" | tr ',' '\n' | tr -d '"' | awk '/^(eth|br-wan)/ {print}' | head -n 8 | sed 's/.*/"&"/' | join_csv)
     [ -n "$CAP_SQM_CANDIDATES" ] || CAP_SQM_CANDIDATES=""
     CAP_FIREWALL="unknown"
     command -v fw4 >/dev/null 2>&1 && CAP_FIREWALL="firewall4"
     command -v fw3 >/dev/null 2>&1 && CAP_FIREWALL="firewall3"
     CAP_SWITCH="unknown"
     [ -d /sys/class/net ] && { command -v bridge >/dev/null 2>&1 && CAP_SWITCH="dsa"; command -v swconfig >/dev/null 2>&1 && CAP_SWITCH="swconfig"; }
-    CAP_PACKAGES=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34])' | head -n 32 | sed 's/.*/"&"/' | paste -sd, -)
+    CAP_PACKAGES=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34])' | head -n 32 | sed 's/.*/"&"/' | join_csv)
     [ -n "$CAP_PACKAGES" ] || CAP_PACKAGES=""
 
     # 2. RECOLECCIÓN WIRELESS AVANZADA (Parser de 3 líneas para iwinfo)
@@ -1110,7 +1192,7 @@ EOF
     # The device token both routes the request to its tenant and authenticates
     # this enrolled device.
     TELEMETRY_HEADERS="-H X-Device-Token:$DEVICE_TOKEN"
-    HTTP_CODE=$(curl -m 5 -s -X POST \
+    HTTP_CODE=$(controller_curl -m 5 -s -X POST \
         -H "Content-Type: application/json" \
         $TELEMETRY_HEADERS \
         -d "$PAYLOAD" \
@@ -1138,7 +1220,7 @@ EOF
     # El controlador envía la llave pública en la respuesta de configuración
     CONFIG_HEADERS="-H X-Device-Token:$DEVICE_TOKEN"
     CONFIG_RESPONSE_FILE="/tmp/nerve-agent-config.$$"
-    CONFIG_HTTP_CODE=$(curl -m 5 -s -X GET $CONFIG_HEADERS "$CONFIG_URL" -w "%{http_code}" -o "$CONFIG_RESPONSE_FILE")
+    CONFIG_HTTP_CODE=$(controller_curl -m 5 -s -X GET $CONFIG_HEADERS "$CONFIG_URL" -w "%{http_code}" -o "$CONFIG_RESPONSE_FILE")
     CONFIG_RESPONSE=$(cat "$CONFIG_RESPONSE_FILE" 2>/dev/null || true)
     rm -f "$CONFIG_RESPONSE_FILE"
     if [ "$CONFIG_HTTP_CODE" != "200" ]; then
@@ -1317,7 +1399,7 @@ EOF
                             [ -n "$W_MFP" ] && uci set wireless.$SECTION.ieee80211w="$W_MFP"
 
                             if [ -n "$W_AUTH_SERVER" ] && [ "$W_AUTH_SERVER" != "null" ]; then
-								if [ "$W_AUTH_SERVER" = "AUTO" ]; then W_AUTH_SERVER="$CONTROLLER_IP"; fi
+                                if [ "$W_AUTH_SERVER" = "AUTO" ]; then W_AUTH_SERVER="$CONTROLLER_HOST"; fi
 
                                 uci set wireless.$SECTION.auth_server="$W_AUTH_SERVER"
 
@@ -1520,7 +1602,7 @@ EOF
 
         if [ "$TS_REFRESH" = "1" ]; then
             logger -t threat_shield "Downloading reputation blocklist..."
-            if curl -m 60 -s -H "X-Device-Token: $DEVICE_TOKEN" \
+            if controller_curl -m 60 -s -H "X-Device-Token: $DEVICE_TOKEN" \
                     "$BASE_URL/threat-shield/list" \
                     -o "$TS_LIST_FILE.tmp" 2>/dev/null; then
                 TS_COUNT=$(wc -l < "$TS_LIST_FILE.tmp" 2>/dev/null || echo 0)

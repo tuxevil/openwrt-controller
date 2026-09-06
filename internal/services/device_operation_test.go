@@ -2,7 +2,7 @@ package services
 
 import "testing"
 
-func TestNewDeviceOperationPlanIsStableAndTyped(t *testing.T) {
+func TestNewDeviceOperationPlanSeparatesAttemptAndContentIdentity(t *testing.T) {
 	commands := []UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}}
 	first, err := NewDeviceOperationPlan("system", commands, nil, true)
 	if err != nil {
@@ -12,8 +12,30 @@ func TestNewDeviceOperationPlanIsStableAndTyped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewDeviceOperationPlan returned error: %v", err)
 	}
-	if first.OperationID == "" || first.OperationID != second.OperationID || first.PlanHash != first.OperationID {
-		t.Fatalf("plan id is not stable: %#v %#v", first, second)
+	if first.OperationID == "" || second.OperationID == "" || first.OperationID == second.OperationID {
+		t.Fatalf("operation ids were not unique: %#v %#v", first, second)
+	}
+	if first.PlanHash == "" || first.PlanHash != second.PlanHash || first.PlanHash == first.OperationID {
+		t.Fatalf("plan hash was not stable and separate: %#v %#v", first, second)
+	}
+	if err := ValidateDeviceOperationPlan(first); err != nil {
+		t.Fatalf("first plan did not validate: %v", err)
+	}
+	if err := ValidateDeviceOperationPlan(second); err != nil {
+		t.Fatalf("second plan did not validate: %v", err)
+	}
+}
+
+func TestValidateDeviceOperationPlanAllowsDistinctOperationIdentity(t *testing.T) {
+	plan := DeviceOperationPlan{
+		OperationID: "rollout-147-router3-attempt1",
+		PlanHash:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Config:      "system",
+		Commands:    []UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}},
+		AutoConfirm: true,
+	}
+	if err := ValidateDeviceOperationPlan(plan); err != nil {
+		t.Fatalf("distinct operation and plan identities were rejected: %v", err)
 	}
 }
 

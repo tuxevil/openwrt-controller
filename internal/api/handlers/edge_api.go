@@ -304,6 +304,7 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
+		"plan_hash":    plan.PlanHash,
 		"message":      "device agent will apply and report the durable result",
 	})
 }
@@ -402,6 +403,7 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
+		"plan_hash":    plan.PlanHash,
 		"message":      "device agent will apply and report the durable result",
 	})
 }
@@ -496,6 +498,7 @@ func PutEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
+		"plan_hash":    plan.PlanHash,
 		"message":      "device agent will apply and report the durable result",
 	})
 }

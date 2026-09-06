@@ -167,6 +167,7 @@ jobs:
           sh -n devices/agent.sh
           sh -n devices/99-nerve-center-bootstrap
           devices/agent_contract_test.sh
+          devices/agent_runtime_config_test.sh
           devices/agent_signing_test.sh
           devices/agent_log_collection_test.sh
 

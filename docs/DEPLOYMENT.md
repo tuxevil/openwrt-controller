@@ -36,11 +36,12 @@ The unit should use `EnvironmentFile=`, a dedicated service account, restrictive
 
 ## Production Preparation
 
-1. For direct controller TLS, set `REQUIRE_TLS=true` and provide readable certificate and key files. For TLS termination at a reverse proxy, keep the internal hop private and do not set `REQUIRE_TLS=true` unless the controller also has certificates.
+1. For direct controller TLS, set `REQUIRE_TLS=true`, `HTTPS_PORT=8443`, and provide readable certificate and key files. For TLS termination at a reverse proxy, keep the internal hop private and configure every agent's `CONTROLLER_URL` with the proxy's `https://` URL; do not set controller `REQUIRE_TLS=true` unless the controller itself also has certificates.
 2. Restrict `WS_ALLOWED_ORIGINS` to the dashboard origin.
 3. Keep database ports private and expose only the controller entry point.
-4. Set `ALLOW_LEGACY_PROVISION=false` after deploying an agent that supports device tokens.
-5. Verify controller SSH key permissions and host-key storage.
-6. Back up `.env`, PostgreSQL and InfluxDB according to the operator's recovery policy.
+4. Mount the controller CA or certificate chain on devices when it is not in their default trust store; never use curl's insecure mode.
+5. Set `ALLOW_LEGACY_PROVISION=false` after deploying an agent that supports device tokens.
+6. Verify controller SSH key permissions and host-key storage.
+7. Back up `.env`, PostgreSQL and InfluxDB according to the operator's recovery policy.
 
 See [SECURITY.md](../SECURITY.md) for the complete checklist.

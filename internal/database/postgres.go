@@ -643,7 +643,11 @@ func createTenantTables(schema string) error {
 	// Idempotent tenant-schema migrations
 	migrations := []string{
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS device_token VARCHAR(255)", quotedSchema),
-		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_devices_device_token ON %s.devices(device_token) WHERE device_token IS NOT NULL", quotedSchema),
+		// Create the unique constraint before dropping the historical non-unique
+		// index. Duplicate tokens therefore fail closed instead of being silently
+		// assigned to an arbitrary device.
+		fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS uq_devices_device_token ON %s.devices(device_token) WHERE device_token IS NOT NULL", quotedSchema),
+		fmt.Sprintf("DROP INDEX IF EXISTS %s.idx_devices_device_token", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_config_pulled_at TIMESTAMP WITH TIME ZONE", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_ip VARCHAR(50)", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS agent_version VARCHAR(64)", quotedSchema),

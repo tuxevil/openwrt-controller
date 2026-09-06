@@ -23,7 +23,7 @@ The controller publishes `signature` and `signature_algorithm: Ed25519` in `GET 
 
 ## Configure Devices
 
-Set `AGENT_UPDATE_PUBLIC_KEY` in `devices/99-nerve-center-bootstrap` to the Base64-encoded raw 32-byte public key before building or provisioning an image. The bootstrap uses the short-lived site enrollment token to fetch metadata and raw bytes, verifies both before installation, then stores the key in `/etc/nerve/agent-update-public-key`.
+Set `AGENT_UPDATE_PUBLIC_KEY` in `devices/99-nerve-center-bootstrap` to the Base64-encoded raw 32-byte public key before building or provisioning an image. Set `CONTROLLER_URL` to the HTTPS controller endpoint and leave `REQUIRE_TLS=true` for production images. The bootstrap uses the short-lived site enrollment token to fetch metadata and raw bytes, verifies both before installation, then stores the key in `/etc/nerve/agent-update-public-key`.
 
 Devices verify the SHA-256 hash and Ed25519 signature before replacing the agent. Runtime settings and credentials are stored in `/etc/nerve/agent.conf` and separate root-owned files, so the signed `agent.sh` remains byte-for-byte identical to the published artifact. Invalid, missing, or unsigned metadata leaves the current agent unchanged.
 
@@ -40,7 +40,7 @@ remain temporarily enabled with `ALLOW_LEGACY_PROVISION=true`.
 4. Confirm a signed update succeeds on one canary device before fleet distribution.
 5. Remove the old private key only after all devices have received the new public key.
 
-There is no unsigned fallback after a device has a pinned public key. During a key migration, overlap must be implemented explicitly; an absent signature is never an automatic downgrade.
+There is no unsigned fallback after a device has a pinned public key. During a key migration, overlap must be implemented explicitly; an absent signature is never an automatic downgrade. TLS protects the confidentiality of enrollment and device tokens; Ed25519 protects artifact integrity and authenticity, not transport secrecy.
 
 ## Recovery
 

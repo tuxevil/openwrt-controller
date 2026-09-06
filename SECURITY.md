@@ -52,6 +52,8 @@ Before exposing this controller to the public internet:
 - [ ] Set `REQUIRE_TLS=true` and provide `--tls-cert`/`--tls-key` so the
       controller refuses to start on plain HTTP
 - [ ] Put the controller behind TLS (Traefik / Caddy / nginx reverse proxy)
+- [ ] Configure every OpenWrt agent with an `https://` `CONTROLLER_URL` and a
+      trusted CA or public-key pin; never use curl's insecure mode
 - [ ] Set `WS_ALLOWED_ORIGINS=<your-domain>` to restrict WebSocket origin
       (default: reject all). WebSockets now use single-use ticket auth
       (`POST /api/ws-ticket` → `?ticket=<id>`) — JWTs no longer appear

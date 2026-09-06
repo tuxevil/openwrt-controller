@@ -5,19 +5,22 @@ import (
 	"testing"
 )
 
-func TestParseDeviceOperationEnvelopeRequiresStableIdentity(t *testing.T) {
-	valid := json.RawMessage(`{"operation_id":"operation-1","plan_hash":"operation-1"}`)
-	got, err := parseDeviceOperationEnvelope(valid)
+func TestParseDeviceOperationEnvelopeSeparatesAttemptAndContentIdentity(t *testing.T) {
+	valid := json.RawMessage(`{"operation_id":"operation-1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`)
+	got, planHash, err := parseDeviceOperationEnvelope(valid)
 	if err != nil || got != "operation-1" {
 		t.Fatalf("valid envelope = %q, error %v", got, err)
+	}
+	if planHash != "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" {
+		t.Fatalf("valid plan hash = %q", planHash)
 	}
 	for _, raw := range []json.RawMessage{
 		json.RawMessage(`not-json`),
 		json.RawMessage(`{"operation_id":"operation-1"}`),
 		json.RawMessage(`{"operation_id":"operation-1","plan_hash":"different"}`),
-		json.RawMessage(`{"operation_id":"operation;1","plan_hash":"operation;1"}`),
+		json.RawMessage(`{"operation_id":"operation;1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}`),
 	} {
-		if _, err := parseDeviceOperationEnvelope(raw); err == nil {
+		if _, _, err := parseDeviceOperationEnvelope(raw); err == nil {
 			t.Fatalf("invalid envelope was accepted: %s", raw)
 		}
 	}

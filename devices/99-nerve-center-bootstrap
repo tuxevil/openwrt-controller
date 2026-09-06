@@ -10,13 +10,15 @@
 # =============================================================================
 
 # ── MANDATORY CONFIGURATION ──────────────────────────────────────────────────
-CONTROLLER_IP="10.0.0.6"
-CONTROLLER_PORT="3000"
+CONTROLLER_URL="https://controller.example.com:8443/api"
+REQUIRE_TLS="true"
+CONTROLLER_CA_FILE=""
+CONTROLLER_PINNED_PUBKEY=""
 SITE_ENROLLMENT_TOKEN="REPLACE_WITH_SITE_ENROLLMENT_TOKEN" # Short-lived site bootstrap credential
 AGENT_UPDATE_PUBLIC_KEY="oTOq5fQzxDOLLxdnTSiGow6l70MKjgl1sRh7Yg6NEws="
 
 # ── OPTIONAL CONFIGURATION ───────────────────────────────────────────────────
-ROOT_PASSWORD="REPLACE_WITH_SECURE_PASSWORD"   # Set a secure root password
+ROOT_PASSWORD=""   # Set explicitly only when password login is required
 # PPPoE credentials (leave blank if WAN is DHCP)
 PPPOE_USERNAME=""
 PPPOE_PASSWORD=""
@@ -26,7 +28,8 @@ PPPOE_PASSWORD=""
 # =============================================================================
 exec >/tmp/nerve-bootstrap.log 2>&1
 
-BASE_URL="http://$CONTROLLER_IP:$CONTROLLER_PORT/api"
+CONTROLLER_URL="${CONTROLLER_URL%/}"
+BASE_URL="$CONTROLLER_URL"
 AGENT_METADATA_URL="$BASE_URL/agent/latest"
 AGENT_URL="$BASE_URL/agent/latest/raw"
 AGENT_DEST="/usr/sbin/nerve-agent.sh"
@@ -37,13 +40,65 @@ ENROLLMENT_NONCE_FILE="/etc/nerve/enrollment-nonce"
 
 echo "[*] NERVE CENTER ZERO-TOUCH BOOTSTRAP STARTING..."
 
+decode_base64() {
+  if command -v base64 >/dev/null 2>&1; then
+    base64 -d
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl base64 -d -A
+  else
+    return 1
+  fi
+}
+
+tls_required() {
+  case "$REQUIRE_TLS" in
+    1|true|TRUE|yes|YES) return 0 ;;
+    0|false|FALSE|no|NO) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+validate_controller_url() {
+  case "$REQUIRE_TLS" in
+    1|true|TRUE|yes|YES|0|false|FALSE|no|NO) ;;
+    *) return 1 ;;
+  esac
+  case "$CONTROLLER_URL" in
+    https://*|http://*) ;;
+    *) return 1 ;;
+  esac
+  case "$CONTROLLER_URL" in
+    https://|http://|*[!A-Za-z0-9:/._-]*) return 1 ;;
+  esac
+  case "$CONTROLLER_URL" in
+    http://*)
+      case "$REQUIRE_TLS" in
+        1|true|TRUE|yes|YES) return 1 ;;
+      esac
+      ;;
+  esac
+  if [ -n "$CONTROLLER_CA_FILE" ] && [ ! -r "$CONTROLLER_CA_FILE" ]; then
+    return 1
+  fi
+}
+
+controller_curl() {
+  if [ -n "$CONTROLLER_CA_FILE" ]; then
+    set -- --cacert "$CONTROLLER_CA_FILE" "$@"
+  fi
+  if [ -n "$CONTROLLER_PINNED_PUBKEY" ]; then
+    set -- --pinnedpubkey "$CONTROLLER_PINNED_PUBKEY" "$@"
+  fi
+  curl "$@"
+}
+
 verify_agent_artifact() {
   artifact_file="$1"
   signature_base64="$2"
   public_key_base64="$3"
   verify_dir="/tmp/nerve-bootstrap-verify.$$"
   mkdir "$verify_dir" 2>/dev/null || return 1
-  if ! printf '%s' "$public_key_base64" | base64 -d > "$verify_dir/public.raw" 2>/dev/null; then
+  if ! printf '%s' "$public_key_base64" | decode_base64 > "$verify_dir/public.raw" 2>/dev/null; then
     rm -rf "$verify_dir"
     return 1
   fi
@@ -60,7 +115,7 @@ verify_agent_artifact() {
     rm -rf "$verify_dir"
     return 1
   }
-  if ! printf '%s' "$signature_base64" | base64 -d > "$verify_dir/signature" 2>/dev/null; then
+  if ! printf '%s' "$signature_base64" | decode_base64 > "$verify_dir/signature" 2>/dev/null; then
     rm -rf "$verify_dir"
     return 1
   fi
@@ -82,12 +137,12 @@ if [ "${1:-}" = "--self-test-signature" ]; then
   exit $?
 fi
 
-case "$CONTROLLER_IP" in
-  ''|*[!A-Za-z0-9:._-]*) echo "[!] Invalid controller address."; exit 1 ;;
-esac
-case "$CONTROLLER_PORT" in
-  ''|*[!0-9]*) echo "[!] Invalid controller port."; exit 1 ;;
-esac
+if ! validate_controller_url; then
+  echo "[!] Invalid controller URL or TLS policy."; exit 1
+fi
+if [ "$ROOT_PASSWORD" = "REPLACE_WITH_SECURE_PASSWORD" ]; then
+  echo "[!] Replace the root password placeholder or leave ROOT_PASSWORD empty."; exit 1
+fi
 case "$SITE_ENROLLMENT_TOKEN" in
   ''|REPLACE_WITH_SITE_ENROLLMENT_TOKEN|*[!A-Za-z0-9_-]*) echo "[!] Site enrollment token is not configured."; exit 1 ;;
 esac
@@ -116,20 +171,21 @@ uci set wireless.@wifi-device[0].disabled='1' 2>/dev/null
 uci commit wireless 2>/dev/null
 echo "[+] Wireless disabled pending controller configuration."
 
-# 4. Wait for WAN connectivity (check DNS or controller IP)
+# 4. Wait for WAN connectivity (check the controller host)
 echo "[*] Waiting for network connectivity..."
 MAX_WAIT=120
 WAITED=0
-while ! ping -c 1 -W 2 "$CONTROLLER_IP" >/dev/null 2>&1; do
+CONTROLLER_HOST=$(printf '%s\n' "$CONTROLLER_URL" | sed -e 's#^[A-Za-z][A-Za-z0-9+.-]*://##' -e 's#/.*$##' -e 's#:[0-9][0-9]*$##')
+while ! ping -c 1 -W 2 "$CONTROLLER_HOST" >/dev/null 2>&1; do
   sleep 3
   WAITED=$((WAITED + 3))
   if [ $WAITED -ge $MAX_WAIT ]; then
-    echo "[!] Timeout waiting for controller IP $CONTROLLER_IP. Bootstrap deferred."
+    echo "[!] Timeout waiting for controller host $CONTROLLER_HOST. Bootstrap deferred."
     # Exit 1 so the script is NOT deleted and retries on next boot
     exit 1
   fi
 done
-echo "[+] Controller reachable at $CONTROLLER_IP."
+echo "[+] Controller reachable at $CONTROLLER_HOST."
 
 # 5. Download the latest agent from the Nerve Center
 # Install required packages for remote diagnostics
@@ -138,7 +194,7 @@ opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove w
 
 echo "[*] Downloading signed Nerve Center agent metadata..."
 AGENT_METADATA_FILE="/tmp/nerve-agent-metadata.$$"
-if ! curl -m 15 -fsS \
+if ! controller_curl -m 15 -fsS \
     -H "X-Site-Enrollment-Token: $SITE_ENROLLMENT_TOKEN" \
     -o "$AGENT_METADATA_FILE" \
     "$AGENT_METADATA_URL"; then
@@ -156,7 +212,7 @@ if [ -z "$LATEST_HASH" ] || [ -z "$LATEST_SIGNATURE" ] || [ "$LATEST_SIGNATURE_A
 fi
 
 echo "[*] Downloading signed Nerve Center agent artifact..."
-if ! curl -m 15 -fsS \
+if ! controller_curl -m 15 -fsS \
     -H "X-Site-Enrollment-Token: $SITE_ENROLLMENT_TOKEN" \
     -o "${AGENT_DEST}.tmp" \
     "$AGENT_URL"; then
@@ -195,8 +251,8 @@ if ! mkdir -p /etc/nerve; then
   echo "[!] Could not create the runtime configuration directory. Bootstrap deferred."
   exit 1
 fi
-if ! printf 'CONTROLLER_URL="http://%s:%s/api"\nDEVICE_ID_FILE="/etc/nerve-device-id"\nDEVICE_TOKEN_FILE="/etc/nerve-device-token"\nENROLLMENT_TOKEN_FILE="%s"\nENROLLMENT_NONCE_FILE="%s"\nAGENT_UPDATE_PUBLIC_KEY_FILE="%s"\n' \
-  "$CONTROLLER_IP" "$CONTROLLER_PORT" "$ENROLLMENT_TOKEN_FILE" "$ENROLLMENT_NONCE_FILE" "$AGENT_UPDATE_PUBLIC_KEY_FILE" > "$AGENT_CONFIG_FILE"; then
+if ! printf 'CONTROLLER_URL="%s"\nREQUIRE_TLS="%s"\nCONTROLLER_CA_FILE="%s"\nCONTROLLER_PINNED_PUBKEY="%s"\nDEVICE_ID_FILE="/etc/nerve-device-id"\nDEVICE_TOKEN_FILE="/etc/nerve-device-token"\nENROLLMENT_TOKEN_FILE="%s"\nENROLLMENT_NONCE_FILE="%s"\nAGENT_UPDATE_PUBLIC_KEY_FILE="%s"\n' \
+  "$CONTROLLER_URL" "$REQUIRE_TLS" "$CONTROLLER_CA_FILE" "$CONTROLLER_PINNED_PUBKEY" "$ENROLLMENT_TOKEN_FILE" "$ENROLLMENT_NONCE_FILE" "$AGENT_UPDATE_PUBLIC_KEY_FILE" > "$AGENT_CONFIG_FILE"; then
   echo "[!] Could not persist the agent runtime configuration. Bootstrap deferred."
   exit 1
 fi

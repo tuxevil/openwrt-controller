@@ -116,7 +116,7 @@ func TestResolveDeviceIdentityByIPMatchesLegacyBridgeIdentity(t *testing.T) {
 }
 
 func TestDecodePendingDeviceOperationAcceptsTypedPlan(t *testing.T) {
-	raw := `{"operation_id":"operation-1","plan_hash":"operation-1","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}]}`
+	raw := `{"operation_id":"operation-1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}]}`
 	plan, err := decodePendingDeviceOperation([]byte(raw))
 	if err != nil {
 		t.Fatalf("valid operation was rejected: %v", err)
@@ -126,12 +126,23 @@ func TestDecodePendingDeviceOperationAcceptsTypedPlan(t *testing.T) {
 	}
 }
 
+func TestDecodePendingDeviceOperationAllowsRetryIdentityToDifferFromPlanHash(t *testing.T) {
+	raw := `{"operation_id":"rollout-147-router3-attempt1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}]}`
+	plan, err := decodePendingDeviceOperation([]byte(raw))
+	if err != nil {
+		t.Fatalf("distinct operation identity was rejected: %v", err)
+	}
+	if plan.OperationID == plan.PlanHash {
+		t.Fatal("operation identity was collapsed into plan hash")
+	}
+}
+
 func TestDecodePendingDeviceOperationRejectsInvalidPlans(t *testing.T) {
 	cases := []string{
 		"not-json",
 		`{"operation_id":"operation-1","plan_hash":"different","config":"system","commands":[]}`,
-		`{"operation_id":"operation-1","plan_hash":"operation-1","config":"openvpn","commands":[{"action":"set","config":"openvpn","section":"client","option":"enabled","value":"1"}]}`,
-		`{"operation_id":"operation;1","plan_hash":"operation;1","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}]}`,
+		`{"operation_id":"operation-1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","config":"openvpn","commands":[{"action":"set","config":"openvpn","section":"client","option":"enabled","value":"1"}]}`,
+		`{"operation_id":"operation;1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}]}`,
 	}
 	for _, raw := range cases {
 		if _, err := decodePendingDeviceOperation([]byte(raw)); err == nil {
@@ -141,7 +152,7 @@ func TestDecodePendingDeviceOperationRejectsInvalidPlans(t *testing.T) {
 }
 
 func TestDecodePendingDeviceOperationPreservesHealthChecks(t *testing.T) {
-	raw := `{"operation_id":"network-1","plan_hash":"network-1","config":"network","health_checks":["10.128.128.1"],"commands":[{"action":"set","config":"network","section":"lan","option":"metric","value":"10"}]}`
+	raw := `{"operation_id":"network-1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","config":"network","health_checks":["10.128.128.1"],"commands":[{"action":"set","config":"network","section":"lan","option":"metric","value":"10"}]}`
 	plan, err := decodePendingDeviceOperation([]byte(raw))
 	if err != nil {
 		t.Fatalf("network operation was rejected: %v", err)

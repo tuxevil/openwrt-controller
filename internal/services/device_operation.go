@@ -1,6 +1,7 @@
 package services
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -8,7 +9,8 @@ import (
 )
 
 // DeviceOperationPlan is the typed, device-delivered unit of configuration
-// change. The agent treats operation_id and plan_hash as an idempotency key.
+// change. operation_id identifies one attempt; plan_hash identifies the
+// immutable command content and may be reused by a later reconciliation.
 type DeviceOperationPlan struct {
 	OperationID  string       `json:"operation_id"`
 	PlanHash     string       `json:"plan_hash"`
@@ -31,8 +33,21 @@ func validDeviceOperationID(id string) bool {
 	return true
 }
 
+func validDeviceOperationPlanHash(hash string) bool {
+	if len(hash) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range hash {
+		if (char < 'A' || char > 'F') && (char < 'a' || char > 'f') &&
+			(char < '0' || char > '9') {
+			return false
+		}
+	}
+	return true
+}
+
 func ValidateDeviceOperationPlan(plan DeviceOperationPlan) error {
-	if !validDeviceOperationID(plan.OperationID) || !validDeviceOperationID(plan.PlanHash) || plan.OperationID != plan.PlanHash {
+	if !validDeviceOperationID(plan.OperationID) || !validDeviceOperationPlanHash(plan.PlanHash) {
 		return fmt.Errorf("invalid operation identity")
 	}
 	return ValidateDeviceOperation(plan.Config, plan.Commands, plan.HealthChecks)
@@ -49,7 +64,8 @@ var deviceOperationConfigs = map[string]struct{}{
 }
 
 // NewDeviceOperationPlan validates the small typed command grammar supported
-// by the local executor and derives a stable idempotency key from the plan.
+// by the local executor and derives a stable content hash plus a unique
+// idempotency key for this attempt.
 func NewDeviceOperationPlan(config string, commands []UciCommand, healthChecks []string, autoConfirm bool) (DeviceOperationPlan, error) {
 	if err := ValidateDeviceOperation(config, commands, healthChecks); err != nil {
 		return DeviceOperationPlan{}, err
@@ -67,14 +83,26 @@ func NewDeviceOperationPlan(config string, commands []UciCommand, healthChecks [
 	}
 	hash := sha256.Sum256(raw)
 	hashString := hex.EncodeToString(hash[:])
+	operationID, err := newDeviceOperationID()
+	if err != nil {
+		return DeviceOperationPlan{}, fmt.Errorf("generate device operation id: %w", err)
+	}
 	return DeviceOperationPlan{
-		OperationID:  hashString,
+		OperationID:  operationID,
 		PlanHash:     hashString,
 		Config:       config,
 		Commands:     commands,
 		HealthChecks: append([]string(nil), healthChecks...),
 		AutoConfirm:  autoConfirm,
 	}, nil
+}
+
+func newDeviceOperationID() (string, error) {
+	bytes := make([]byte, 16)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return "op-" + hex.EncodeToString(bytes), nil
 }
 
 // ValidateDeviceOperation accepts only commands that can be executed by the

@@ -27,6 +27,14 @@ grep -q 'CONFIG_HTTP_CODE=' "$AGENT"
 grep -q 'AGENT_UPDATE_PUBLIC_KEY_FILE=' "$AGENT"
 grep -q 'signature_algorithm' "$AGENT"
 grep -q 'openssl pkeyutl -verify' "$AGENT"
+grep -q 'CONTROLLER_URL=' "$AGENT"
+grep -q 'REQUIRE_TLS=' "$AGENT"
+grep -q 'CONTROLLER_CA_FILE=' "$AGENT"
+grep -q 'controller_curl()' "$AGENT"
+if grep -q 'CONTROLLER_IP' "$AGENT"; then
+    echo "signed agent must use a complete CONTROLLER_URL" >&2
+    exit 1
+fi
 if grep -q 'SITE_KEY' "$AGENT"; then
     echo "signed agent must not contain a site-wide credential" >&2
     exit 1
@@ -35,6 +43,31 @@ if grep -q 'SIGNATURE_DECODED' "$AGENT"; then
     echo "agent must not move binary signatures through shell variables" >&2
     exit 1
 fi
+if grep -q 'paste -sd' "$AGENT"; then
+    echo "agent telemetry must not depend on the optional paste utility" >&2
+    exit 1
+fi
+grep -q 'join_csv()' "$AGENT"
+grep -q 'decode_base64()' "$AGENT"
+grep -q 'decode_base64()' "$SCRIPT_DIR/99-nerve-center-bootstrap"
+grep -q '^CONTROLLER_URL="https://' "$SCRIPT_DIR/99-nerve-center-bootstrap"
+grep -q '^REQUIRE_TLS="true"$' "$SCRIPT_DIR/99-nerve-center-bootstrap"
+grep -q '^ROOT_PASSWORD=""' "$SCRIPT_DIR/99-nerve-center-bootstrap"
+grep -q 'controller_curl()' "$SCRIPT_DIR/99-nerve-center-bootstrap"
+PAYLOAD_LINE=$(awk '/^[[:space:]]*PAYLOAD=\$\(cat <<EOF$/ {print NR; exit}' "$AGENT")
+NEIGHBOR_DEFAULT_LINE=$(awk '/^[[:space:]]*NEIGHBOR_APS="\[\]"$/ {print NR; exit}' "$AGENT")
+if [ -z "$PAYLOAD_LINE" ] || [ -z "$NEIGHBOR_DEFAULT_LINE" ] || [ "$NEIGHBOR_DEFAULT_LINE" -ge "$PAYLOAD_LINE" ]; then
+    echo "agent must initialize neighbor_aps before the first telemetry payload" >&2
+    exit 1
+fi
+RUNTIME_PREFLIGHT_LINE=$(awk '/Runtime configuration or device identity is missing/ {print NR; exit}' "$AGENT")
+for self_test in --self-test-signature --self-test-transaction --self-test-operation --self-test-status --self-test-runtime-config --self-test-log-collection; do
+    SELF_TEST_LINE=$(awk -v flag="$self_test" 'index($0, flag) {print NR; exit}' "$AGENT")
+    if [ -z "$RUNTIME_PREFLIGHT_LINE" ] || [ -z "$SELF_TEST_LINE" ] || [ "$SELF_TEST_LINE" -ge "$RUNTIME_PREFLIGHT_LINE" ]; then
+        echo "$self_test must dispatch before runtime preflight" >&2
+        exit 1
+    fi
+done
 if grep -q 'elif \[ -z "\$LATEST_SIGNATURE" \]' "$AGENT"; then
     echo "agent must reject unsigned updates after trust is configured" >&2
     exit 1

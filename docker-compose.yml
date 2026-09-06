@@ -19,14 +19,16 @@ services:
     cap_add:
       - NET_BIND_SERVICE
     healthcheck:
-      # /healthz is anonymous and cheap; see internal/api/handlers/probes.go.
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3000/healthz", "||", "exit", "1"]
+      # /healthz is anonymous and cheap; follow the configured listener when
+      # REQUIRE_TLS disables the plain HTTP listener.
+      test: ["CMD-SHELL", "if [ \"$${REQUIRE_TLS:-false}\" = \"true\" ]; then wget --no-check-certificate -qO- \"https://127.0.0.1:$${HTTPS_PORT:-8443}/healthz\"; else wget -qO- \"http://127.0.0.1:$${PORT:-3000}/healthz\"; fi || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
       start_period: 20s
     ports:
       - "3000:3000"
+      - "8443:8443"
     environment:
       - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/openwrthub
       - INFLUX_URL=http://influxdb:8086
@@ -35,6 +37,9 @@ services:
       - INFLUX_TOKEN=${INFLUX_TOKEN:?INFLUX_TOKEN required}
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET required, min 32 chars}
       - REQUIRE_TLS=${REQUIRE_TLS:-false}
+      - HTTPS_PORT=${HTTPS_PORT:-8443}
+      - TLS_CERT=${TLS_CERT:-}
+      - TLS_KEY=${TLS_KEY:-}
       - WS_ALLOWED_ORIGINS=${WS_ALLOWED_ORIGINS:-}
       - ALLOW_LEGACY_PROVISION=${ALLOW_LEGACY_PROVISION:-false}
       - AI_ENGINE_ENCRYPTION_KEY=${AI_ENGINE_ENCRYPTION_KEY:-}
