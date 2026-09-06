@@ -133,3 +133,25 @@ func TestNormalizeSentinelHardwareSummarizesBoardAndCapabilities(t *testing.T) {
 		}
 	}
 }
+
+func TestIsSentinelHardwareQueryRecognizesInventoryQuestions(t *testing.T) {
+	for _, query := range []string{
+		"¿Qué hardware tienen los nodos?",
+		"que modelo son los AP",
+		"Which CPU and firmware do the routers have?",
+		"muéstrame la memoria y las radios",
+	} {
+		if !isSentinelHardwareQuery(query) {
+			t.Errorf("hardware query was not recognized: %q", query)
+		}
+	}
+	for _, query := range []string{
+		"¿Cuántos clientes tenemos conectados?",
+		"¿Qué incidentes están abiertos?",
+		"¿Qué cambios recientes hubo?",
+	} {
+		if isSentinelHardwareQuery(query) {
+			t.Errorf("non-hardware query was misclassified: %q", query)
+		}
+	}
+}

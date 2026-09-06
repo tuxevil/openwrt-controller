@@ -180,6 +180,21 @@ func runSentinelInvestigation(schema string, history []SentinelStoredMessage, qu
 func runSentinelInvestigationForSite(schema string, history []SentinelStoredMessage, query, siteID string) (SentinelInvestigationResult, error) {
 	result := SentinelInvestigationResult{}
 	prompt := buildSentinelInvestigationPromptForSite(history, query, siteID)
+	if isSentinelHardwareQuery(query) && strings.TrimSpace(siteID) != "" {
+		result.ToolCalls++
+		originalArguments, _ := json.Marshal(map[string]string{"site_id": siteID})
+		call := SentinelToolCall{Name: "get_device_status", Arguments: originalArguments}
+		call.Arguments = SentinelToolArgumentsWithSite(call.Arguments, schema, siteID)
+		toolResult, err := executeSentinelTool(call)
+		if err != nil {
+			prompt += fmt.Sprintf("\nMANDATORY HARDWARE TOOL get_device_status ERROR: %s", err)
+		} else {
+			encodedText := encodeSentinelToolResult(toolResult)
+			result.Evidence = append(result.Evidence, SentinelEvidence{Tool: call.Name, Args: originalArguments, Result: json.RawMessage(encodedText)})
+			prompt += "\nMANDATORY TOOL RESULT get_device_status (already executed for the current site):\n" + encodedText
+			prompt += "\nThe hardware evidence above is authoritative. Do not say that get_device_status still needs to be executed; summarize the returned hardware instead."
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	for round := 0; round < sentinelMaxRounds; round++ {
@@ -233,12 +248,7 @@ func runSentinelInvestigationForSite(schema string, history []SentinelStoredMess
 				prompt += fmt.Sprintf("\nTOOL %s ERROR: %s", call.Name, err)
 				continue
 			}
-			encoded, _ := json.Marshal(toolResult)
-			encodedText := redactSentinelSecrets(string(encoded))
-			if len(encodedText) > sentinelMaxResultLen {
-				truncated, _ := json.Marshal(map[string]string{"truncated_result": encodedText[:sentinelMaxResultLen]})
-				encodedText = string(truncated)
-			}
+			encodedText := encodeSentinelToolResult(toolResult)
 			result.Evidence = append(result.Evidence, SentinelEvidence{Tool: call.Name, Args: originalArguments, Result: json.RawMessage(encodedText)})
 			prompt += fmt.Sprintf("\nTOOL RESULT %s:\n%s", call.Name, encodedText)
 		}
@@ -275,6 +285,48 @@ func buildSentinelInvestigationPromptForSite(history []SentinelStoredMessage, qu
 	b.WriteString("\nCURRENT OPERATOR QUESTION:\n")
 	b.WriteString(redactSentinelSecrets(query))
 	return b.String()
+}
+
+func isSentinelHardwareQuery(query string) bool {
+	normalized := normalizeSentinelQuery(query)
+	for _, term := range []string{
+		"hardware", "modelo", "modelos", "cpu", "soc", "procesador", "ram", "memoria",
+		"flash", "firmware", "openwrt", "arquitectura", "radio", "radios", "interfaz",
+		"interfaces", "chipset", "board", "placa",
+	} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			return true
+		}
+	}
+	return sentinelQueryContainsTerm(normalized, "sistema operativo") ||
+		sentinelQueryContainsTerm(normalized, "especificaciones")
+}
+
+func normalizeSentinelQuery(query string) string {
+	query = strings.ToLower(query)
+	query = strings.NewReplacer(
+		"á", "a", "é", "e", "í", "i", "ó", "o", "ú", "u", "ü", "u", "ñ", "n",
+	).Replace(query)
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' {
+			return r
+		}
+		return ' '
+	}, query)
+}
+
+func sentinelQueryContainsTerm(query, term string) bool {
+	return strings.Contains(" "+strings.Join(strings.Fields(query), " ")+" ", " "+term+" ")
+}
+
+func encodeSentinelToolResult(value interface{}) string {
+	encoded, _ := json.Marshal(value)
+	encodedText := redactSentinelSecrets(string(encoded))
+	if len(encodedText) > sentinelMaxResultLen {
+		truncated, _ := json.Marshal(map[string]string{"truncated_result": encodedText[:sentinelMaxResultLen]})
+		encodedText = string(truncated)
+	}
+	return encodedText
 }
 
 func executeSentinelTool(call SentinelToolCall) (interface{}, error) {
