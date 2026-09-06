@@ -13,7 +13,7 @@ const emit = defineEmits(['update:modelValue'])
 const inputEl = ref(null)
 const command = ref('')
 const history = ref([
-  { type: 'system', text: 'ORACLE RAG INITIALIZED. Awaiting cognitive input...' }
+  { type: 'system', text: 'SENTINEL OPERATOR ONLINE. Awaiting infrastructure directive...' }
 ])
 const isProcessing = ref(false)
 const conversationId = ref(localStorage.getItem('sentinel_conversation_id') || '')
@@ -21,9 +21,9 @@ const conversationId = ref(localStorage.getItem('sentinel_conversation_id') || '
 function restoreConversation(historyItems) {
   if (!historyItems || historyItems.length === 0) return
   history.value = [
-    { type: 'system', text: 'SENTINEL AI CONVERSATION RESTORED.' },
+    { type: 'system', text: 'SENTINEL OPERATOR CONVERSATION RESTORED.' },
     ...historyItems.map(item => ({
-      type: item.role === 'user' ? 'user' : 'oracle_summary',
+      type: item.role === 'user' ? 'user' : 'sentinel_summary',
       text: item.role === 'user' ? `> ${item.content}` : item.content
     }))
   ]
@@ -116,16 +116,16 @@ async function executeCommand() {
     }
     const { answer, evidence, proposal } = res.data
 
-    history.value.push({ type: 'oracle_summary', text: answer })
+    history.value.push({ type: 'sentinel_summary', text: answer })
 
     if (evidence && evidence.length > 0) {
-      history.value.push({ type: 'oracle_data', data: evidence.map(item => ({
+      history.value.push({ type: 'sentinel_data', data: evidence.map(item => ({
         tool: item.tool,
         result: item.result
       })) })
     }
     if (proposal) {
-      history.value.push({ type: 'oracle_proposal', proposal })
+      history.value.push({ type: 'sentinel_proposal', proposal })
     }
   } catch (err) {
     const backendMsg = err.response?.data?.error || err.message
@@ -172,8 +172,8 @@ function renderTable(rows) {
       
       <!-- Top Bar -->
       <div class="flex items-center justify-between px-4 py-2 border-b border-neon-cyan/30 bg-neon-cyan/10">
-        <div class="text-xs text-neon-cyan tracking-widest font-bold">/// ORACLE_COGNITIVE_INTERFACE</div>
-        <button @click="close" class="text-gray-500 hover:text-red-400">
+        <div class="text-xs text-neon-cyan tracking-widest font-bold">/// SENTINEL_OPERATOR_CONSOLE</div>
+        <button type="button" aria-label="Close Sentinel Operator chat" @click="close" class="text-gray-500 hover:text-red-400">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>
@@ -192,18 +192,18 @@ function renderTable(rows) {
             <span class="text-gray-500">operator@nexus:~$</span> {{ item.text }}
           </div>
           
-          <!-- Oracle Summary -->
-          <div v-else-if="item.type === 'oracle_summary'" class="text-neon-green text-sm flex gap-2">
-            <span class="opacity-70">[ORACLE]</span> <span>{{ item.text }}</span>
+          <!-- Sentinel Summary -->
+          <div v-else-if="item.type === 'sentinel_summary'" class="text-neon-green text-sm flex gap-2">
+            <span class="opacity-70">[SENTINEL]</span> <span>{{ item.text }}</span>
           </div>
 
-          <!-- Oracle Data Render (ASCII Grid) -->
-          <div v-else-if="item.type === 'oracle_data'" class="text-neon-cyan text-xs mt-2 overflow-x-auto bg-neon-cyan/5 p-3 clip-chamfer border border-neon-cyan/20">
+          <!-- Sentinel Data Render (ASCII Grid) -->
+          <div v-else-if="item.type === 'sentinel_data'" class="text-neon-cyan text-xs mt-2 overflow-x-auto bg-neon-cyan/5 p-3 clip-chamfer border border-neon-cyan/20">
             <pre class="m-0 leading-tight whitespace-pre">{{ renderTable(item.data) }}</pre>
           </div>
 
           <!-- Approval-gated proposal -->
-          <div v-else-if="item.type === 'oracle_proposal'" class="text-yellow-300 text-xs mt-2 bg-yellow-300/5 p-3 border border-yellow-300/30 clip-chamfer">
+          <div v-else-if="item.type === 'sentinel_proposal'" class="text-yellow-300 text-xs mt-2 bg-yellow-300/5 p-3 border border-yellow-300/30 clip-chamfer">
             <div class="font-bold tracking-widest">[ACTION PROPOSAL: {{ item.proposal.status }}]</div>
             <div class="mt-1">{{ item.proposal.summary }}</div>
             <div class="opacity-80 mt-1">Device: {{ item.proposal.device_id }} · Config: {{ item.proposal.config }}</div>
@@ -231,7 +231,7 @@ function renderTable(rows) {
           v-model="command"
           type="text"
           class="flex-1 bg-transparent border-none outline-none text-white placeholder-gray-700 text-sm focus:ring-0 shadow-none appearance-none"
-          placeholder="State your directive..."
+          placeholder="Ask Sentinel about your infrastructure..."
           :disabled="isProcessing"
           autocomplete="off"
           spellcheck="false"

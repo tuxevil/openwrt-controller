@@ -262,8 +262,13 @@ const fetchHealth = async () => {
         <router-link to="/global/settings" class="text-xs px-3 py-2 border border-neon-cyan text-neon-cyan hover:bg-neon-cyan/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
           ⚙️ PLATFORM_CONFIG
         </router-link>
-        <button @click="showChatOps = true" class="text-xs w-full px-3 py-2 border border-blue-500 text-blue-400 hover:bg-blue-500/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer shadow-[0_0_5px_#3b82f6]">
-          💬 ORACLE RAG
+        <button
+          type="button"
+          aria-label="Open Sentinel Operator chat"
+          @click="showChatOps = true"
+          class="text-xs w-full px-3 py-2 border border-neon-cyan text-neon-cyan hover:bg-neon-cyan/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer shadow-[0_0_5px_#00ffff]"
+        >
+          🛰️ SENTINEL OPERATOR
         </button>
         <router-link to="/global/sentinel" class="text-xs px-3 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer shadow-[0_0_5px_#bc13fe]">
           👁️ GLOBAL_PULSE (AI)
@@ -293,6 +298,21 @@ const fetchHealth = async () => {
 
       <router-view />
     </div>
+
+    <!-- Global launcher: site pages keep the sidebar entry above, while
+         global routes have no site navigation and need a discoverable entry. -->
+    <button
+      v-if="auth.isAuthenticated && !$route.path.startsWith('/site/')"
+      type="button"
+      data-testid="sentinel-chat-launcher"
+      aria-label="Open Sentinel Operator chat"
+      title="Open Sentinel Operator chat"
+      @click="showChatOps = true"
+      class="fixed bottom-5 right-5 z-40 flex items-center gap-2 px-4 py-3 border border-neon-cyan bg-black/90 text-neon-cyan hover:bg-neon-cyan/20 transition-all clip-chamfer shadow-[0_0_14px_rgba(0,255,255,0.35)] text-[11px] tracking-[0.16em] uppercase font-bold"
+    >
+      <span aria-hidden="true">🛰️</span>
+      <span>SENTINEL OPERATOR</span>
+    </button>
 
     <ChatOpsTerminal v-model="showChatOps" />
   </div>
