@@ -17,7 +17,7 @@ COPY web/ ./
 RUN npm run build
 
 # ── Stage 2: Go backend builder ──────────────────────────────────────────────
-FROM golang:1.25.4-alpine3.21 AS backend-builder
+FROM golang:1.26.0-alpine3.22 AS backend-builder
 WORKDIR /app
 # Allow auto toolchain switch if go.mod requests a newer Go than the
 # base image ships with. Pinned in go.mod to a single toolchain version.
