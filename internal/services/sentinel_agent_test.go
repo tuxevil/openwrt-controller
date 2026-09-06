@@ -2,8 +2,13 @@ package services
 
 import (
 	"encoding/json"
+	"regexp"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"openwrt-controller/internal/database"
 )
 
 func TestParseSentinelEnvelopeAcceptsToolCallsAndProposal(t *testing.T) {
@@ -131,6 +136,54 @@ func TestNormalizeSentinelHardwareSummarizesBoardAndCapabilities(t *testing.T) {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("hardware summary missing %q: %s", expected, text)
 		}
+	}
+}
+
+func TestEncodeSentinelToolResultAcceptsNullableJSON(t *testing.T) {
+	result := map[string]interface{}{
+		"state":        json.RawMessage(""),
+		"capabilities": json.RawMessage(""),
+	}
+
+	encoded := encodeSentinelToolResult(result)
+	if !json.Valid([]byte(encoded)) {
+		t.Fatalf("nullable JSON fields produced invalid tool result: %q", encoded)
+	}
+}
+
+func TestExecuteSentinelToolNormalizesMissingCapabilities(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := database.DB
+	database.DB = db
+	t.Cleanup(func() {
+		database.DB = previous
+		_ = db.Close()
+	})
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT id, name, model, status, last_seen_at, last_ip,
+            state_json, capabilities, desired_generation, observed_generation,
+            last_successful_generation FROM tenant_demo.devices WHERE site_id = $1 AND id = $2`)).
+		WithArgs("site-123", "gw-1").
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "name", "model", "status", "last_seen_at", "last_ip", "state_json", "capabilities",
+			"desired_generation", "observed_generation", "last_successful_generation",
+		}).AddRow("gw-1", "Gateway", "Model", "Adopted", time.Now(), "10.0.0.1", []byte(`{}`), nil, int64(1), int64(1), int64(1)))
+
+	result, err := executeSentinelTool(SentinelToolCall{
+		Name:      "get_device_status",
+		Arguments: json.RawMessage(`{"schema":"tenant_demo","site_id":"site-123","device_id":"gw-1"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if encoded := encodeSentinelToolResult(result); !json.Valid([]byte(encoded)) {
+		t.Fatalf("missing capabilities produced invalid evidence: %q", encoded)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 

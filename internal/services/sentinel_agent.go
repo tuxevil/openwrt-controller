@@ -320,7 +320,10 @@ func sentinelQueryContainsTerm(query, term string) bool {
 }
 
 func encodeSentinelToolResult(value interface{}) string {
-	encoded, _ := json.Marshal(value)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return `{"error":"tool result could not be encoded"}`
+	}
 	encodedText := redactSentinelSecrets(string(encoded))
 	if len(encodedText) > sentinelMaxResultLen {
 		truncated, _ := json.Marshal(map[string]string{"truncated_result": encodedText[:sentinelMaxResultLen]})
@@ -438,7 +441,7 @@ func executeSentinelTool(call SentinelToolCall) (interface{}, error) {
 			if err := rows.Scan(&id, &name, &model, &status, &lastSeen, &lastIP, &state, &capabilities, &desired, &observed, &successful); err != nil {
 				continue
 			}
-			out = append(out, map[string]interface{}{"id": id, "name": name, "model": model, "status": status, "last_seen_at": nullableTime(lastSeen), "last_ip": lastIP, "hardware": normalizeSentinelHardware(model, state, capabilities), "state": json.RawMessage(redactSentinelSecrets(string(state))), "capabilities": json.RawMessage(redactSentinelSecrets(string(capabilities))), "desired_generation": desired, "observed_generation": observed, "last_successful_generation": successful})
+			out = append(out, map[string]interface{}{"id": id, "name": name, "model": model, "status": status, "last_seen_at": nullableTime(lastSeen), "last_ip": lastIP, "hardware": normalizeSentinelHardware(model, state, capabilities), "state": sentinelJSONOrNull(state), "capabilities": sentinelJSONOrNull(capabilities), "desired_generation": desired, "observed_generation": observed, "last_successful_generation": successful})
 		}
 		return out, rows.Err()
 
@@ -568,6 +571,14 @@ func executeSentinelTool(call SentinelToolCall) (interface{}, error) {
 		return out, rows.Err()
 	}
 	return nil, fmt.Errorf("unsupported sentinel tool %q", call.Name)
+}
+
+func sentinelJSONOrNull(value []byte) json.RawMessage {
+	redacted := []byte(redactSentinelSecrets(string(value)))
+	if !json.Valid(redacted) {
+		return json.RawMessage("null")
+	}
+	return json.RawMessage(redacted)
 }
 
 // normalizeSentinelHardware extracts the small, stable inventory slice that

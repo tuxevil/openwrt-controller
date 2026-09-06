@@ -170,7 +170,11 @@ func RunSentinelMessage(schema, runID string) {
 		}
 		proposalID = proposal.ID
 	}
-	evidence, _ := json.Marshal(result.Evidence)
+	evidence, evidenceErr := json.Marshal(result.Evidence)
+	if evidenceErr != nil {
+		logSentinelInvestigationError(runID, evidenceErr)
+		evidence = []byte("[]")
+	}
 	_, err = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_runs SET status = 'COMPLETED', answer = $1,
 		evidence = $2, proposal_id = NULLIF($3, '')::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $4`, safeSchema), result.Answer, evidence, proposalID, runID)
 	if err != nil {
@@ -476,7 +480,11 @@ func InvestigateSentinelCase(schema, caseID string) {
 		logSentinelInvestigationError(caseID, err)
 		return
 	}
-	resultEvidence, _ := json.Marshal(result.Evidence)
+	resultEvidence, evidenceErr := json.Marshal(result.Evidence)
+	if evidenceErr != nil {
+		logSentinelInvestigationError(caseID, evidenceErr)
+		resultEvidence = []byte("[]")
+	}
 	_, updateErr := database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1,
         evidence = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3`, safeSchema), result.Answer, resultEvidence, caseID)
 	if updateErr != nil {
