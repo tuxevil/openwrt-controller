@@ -29,7 +29,7 @@ Each typed device operation has three independent identities:
 - `plan_hash` identifies the immutable command content.
 - `operation_id` identifies one application attempt.
 
-`QueueDeviceOperation` reserves an unbound plan's next device generation in the same database update that writes `pending_operation`. Generation-bound retries must name the current revision; stale or future revisions are rejected. Agent status echoes the generation when present, and the controller advances observed generations only for a matching `COMMITTED` status. Legacy status without a generation remains accepted for unbound operations during rollout.
+`QueueDeviceOperation` reserves an unbound plan's next device generation in the same database update that writes `pending_operation`. Generation-bound retries must name the current revision; stale or future revisions are rejected. Agent status echoes the generation when present, and the controller advances observed generations only for a matching `COMMITTED` status. Legacy agents may omit the generation during rollout, but their operation and plan identities must still match; such a status does not advance generation columns.
 
 ## Desired State
 

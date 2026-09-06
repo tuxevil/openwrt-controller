@@ -154,3 +154,18 @@ func TestRecordDeviceOperationStatusAcceptsLegacyStatusWithoutGeneration(t *test
 		t.Fatal(err)
 	}
 }
+
+func TestRecordDeviceOperationStatusAcceptsLegacyAgentForBoundOperation(t *testing.T) {
+	mock := mockEnrollmentDB(t)
+	status := json.RawMessage(`{"id":"bound-operation","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","state":"COMMITTED"}`)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tenant_demo.devices")).
+		WithArgs(sqlmock.AnyArg(), true, "bound-operation", "COMMITTED", "device-1", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "", int64(0)).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+
+	if err := RecordDeviceOperationStatus(t.Context(), "tenant_demo", "device-1", status); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

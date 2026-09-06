@@ -18,6 +18,18 @@ var uciPathSegmentPattern = regexp.MustCompile(`^(?:[A-Za-z0-9_-]+|@[A-Za-z0-9_-
 
 var uciAnonymousSectionPattern = regexp.MustCompile(`^@([A-Za-z0-9_-]+)\[(-?[0-9]+)\]$`)
 
+func writeQueuedDeviceOperationResponse(w http.ResponseWriter, plan services.DeviceOperationPlan) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":       "queued",
+		"operation_id": plan.OperationID,
+		"plan_hash":    plan.PlanHash,
+		"generation":   plan.Generation,
+		"message":      "device agent will apply and report the durable result",
+	})
+}
+
 func buildCentralConfigCommand(config, path string) (string, error) {
 	if !isAllowedUciConfig(config) {
 		return "", fmt.Errorf("config namespace not allowed")
@@ -231,15 +243,7 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("Queued %d UCI commands to namespace: %s", len(payload.Commands), config), r.RemoteAddr)
 
 	plan.Generation = queuedGeneration
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "queued",
-		"operation_id": plan.OperationID,
-		"plan_hash":    plan.PlanHash,
-		"generation":   plan.Generation,
-		"message":      "device agent will apply and report the durable result",
-	})
+	writeQueuedDeviceOperationResponse(w, plan)
 }
 
 // SafeRolloutHandler applies a validated UCI batch to exactly one device.
@@ -315,15 +319,7 @@ func SafeRolloutHandler(w http.ResponseWriter, r *http.Request) {
 
 	plan.Generation = queuedGeneration
 	database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_QUEUED", "DEVICE", deviceID, fmt.Sprintf("Queued %d commands to %s", len(payload.Commands), config), r.RemoteAddr)
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "queued",
-		"operation_id": plan.OperationID,
-		"plan_hash":    plan.PlanHash,
-		"generation":   plan.Generation,
-		"message":      "device agent will apply and report the durable result",
-	})
+	writeQueuedDeviceOperationResponse(w, plan)
 }
 
 // GetDeviceOperationHandler returns the durable controller/agent operation

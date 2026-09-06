@@ -126,6 +126,8 @@ fi
 mkdir -p "$NERVE_TRANSACTION_ROOT/recovery-operation"
 printf '%s\n' recovery-operation > "$NERVE_TRANSACTION_ROOT/active"
 printf '%s\n' wireless > "$NERVE_TRANSACTION_ROOT/recovery-operation/config"
+printf '%s\n' 42 > "$NERVE_TRANSACTION_ROOT/recovery-operation/generation"
+printf '%s\n' 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef > "$NERVE_TRANSACTION_ROOT/recovery-operation/plan_hash"
 printf '%s\n' 1 > "$NERVE_TRANSACTION_ROOT/recovery-operation/backup_exists"
 printf '%s\n' PENDING_CONFIRM > "$NERVE_TRANSACTION_ROOT/recovery-operation/state"
 printf '%s\n' 'wireless.baseline=1' > "$NERVE_TRANSACTION_ROOT/recovery-operation/backup"
@@ -139,6 +141,12 @@ test "$(cat "$NERVE_TRANSACTION_ROOT/recovery-operation/state")" = "RESTORED"
 test ! -e "$NERVE_TRANSACTION_ROOT/active"
 test ! -e "$NERVE_TRANSACTION_ROOT/recovery-operation/backup"
 test "$(cat "$NERVE_TRANSACTION_ROOT/last")" = "recovery-operation"
+rm -f "$NERVE_OPERATION_STATUS_FILE"
+STATUS_JSON=$(PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-status)
+case "$STATUS_JSON" in
+    *'"id":"recovery-operation"'*'"plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"'*'"generation":42'*) ;;
+    *) echo "restored operation status lost its own identity"; exit 1 ;;
+esac
 
 mkdir -p "$NERVE_TRANSACTION_ROOT/orphan-operation"
 printf '%s\n' wireless > "$NERVE_TRANSACTION_ROOT/orphan-operation/config"

@@ -231,13 +231,11 @@ func RecordDeviceOperationStatus(ctx context.Context, schema, deviceID string, s
 	pendingMatch := `(pending_operation->>'operation_id' = $3
 	    AND (($6 <> '' AND pending_operation->>'plan_hash' = $6)
 	         OR ($6 = '' AND COALESCE(pending_operation->>'generation', '') = ''))
-	    AND (($7 <> '' AND pending_operation->>'generation' = $7)
-	         OR ($7 = '' AND COALESCE(pending_operation->>'generation', '') = '')))`
+	    AND ($7 = '' OR pending_operation->>'generation' = $7))`
 	lastMatch := `(last_operation->>'id' = $3
 	    AND (($6 <> '' AND last_operation->>'plan_hash' = $6)
 	         OR ($6 = '' AND COALESCE(last_operation->>'generation', '') = ''))
-	    AND (($7 <> '' AND last_operation->>'generation' = $7)
-	         OR ($7 = '' AND COALESCE(last_operation->>'generation', '') = '')))`
+	    AND ($7 = '' OR last_operation->>'generation' = $7))`
 	result, err := Tx(ctx).Exec(fmt.Sprintf(`
 		UPDATE %s.devices
 		SET last_operation = $1,

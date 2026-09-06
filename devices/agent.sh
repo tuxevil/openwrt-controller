@@ -316,11 +316,15 @@ transaction_begin() {
     local transaction_config="$1"
     local transaction_id="$2"
     local transaction_generation="${3:-}"
+    local transaction_plan_hash="${4:-}"
     local active_id active_state transaction_path transaction_state transaction_tmp
     transaction_valid_config "$transaction_config" || return 1
     transaction_valid_id "$transaction_id" || return 1
     if [ -n "$transaction_generation" ]; then
         transaction_valid_generation "$transaction_generation" || return 1
+    fi
+    if [ -n "$transaction_plan_hash" ]; then
+        transaction_valid_plan_hash "$transaction_plan_hash" || return 1
     fi
     mkdir -p "$NERVE_TRANSACTION_ROOT" || return 1
     chmod 700 "$NERVE_TRANSACTION_ROOT" 2>/dev/null || return 1
@@ -373,6 +377,11 @@ transaction_begin() {
         transaction_write_atomic "$transaction_path/backup_exists" 0 || return 1
     fi
     transaction_write_atomic "$transaction_path/config" "$transaction_config" || return 1
+    if [ -n "$transaction_plan_hash" ]; then
+        transaction_write_atomic "$transaction_path/plan_hash" "$transaction_plan_hash" || return 1
+    else
+        rm -f "$transaction_path/plan_hash"
+    fi
     if [ -n "$transaction_generation" ] && [ "$transaction_generation" -gt 0 ] 2>/dev/null; then
         transaction_write_atomic "$transaction_path/generation" "$transaction_generation" || return 1
     else
@@ -427,7 +436,11 @@ transaction_status_json() {
         printf '{}'
         return 0
     fi
-    transaction_plan_hash=$(cat "$NERVE_TRANSACTION_ROOT/operation_${transaction_config}.hash" 2>/dev/null || true)
+    if [ -f "$transaction_path/plan_hash" ]; then
+        transaction_plan_hash=$(cat "$transaction_path/plan_hash" 2>/dev/null || true)
+    else
+        transaction_plan_hash=$(cat "$NERVE_TRANSACTION_ROOT/operation_${transaction_config}.hash" 2>/dev/null || true)
+    fi
     transaction_generation=$(cat "$transaction_path/generation" 2>/dev/null || true)
     if [ -n "$transaction_generation" ] && ! transaction_valid_generation "$transaction_generation"; then
         transaction_generation=""
@@ -647,7 +660,7 @@ apply_pending_operation() {
     transaction_valid_config "$operation_config" || return 1
     [ "$operation_count" -gt 0 ] || return 1
 
-    transaction_begin "$operation_config" "$operation_id" "$operation_generation"
+    transaction_begin "$operation_config" "$operation_id" "$operation_generation" "$operation_hash"
     transaction_status=$?
     if [ "$transaction_status" -eq 10 ]; then
         return 0

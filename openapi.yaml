@@ -295,6 +295,88 @@ paths:
       responses:
         '202': { description: Capture started }
 
+  /api/devices/{device_id}/central-config:
+    put:
+      tags: [devices]
+      summary: Queue a typed UCI configuration change
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+        - $ref: '#/components/parameters/Config'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UciOperationRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/QueuedDeviceOperation'
+
+  /api/devices/{device_id}/safe-rollout:
+    post:
+      tags: [devices]
+      summary: Queue a confirmed single-device UCI rollout
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+        - $ref: '#/components/parameters/Config'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UciOperationRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/QueuedDeviceOperation'
+
+  /api/devices/{id}/edge-network:
+    put:
+      tags: [devices]
+      summary: Queue an edge network configuration change
+      parameters:
+        - $ref: '#/components/parameters/EdgeDeviceID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdgeOperationRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/QueuedDeviceOperation'
+
+  /api/devices/{id}/edge-dhcp:
+    put:
+      tags: [devices]
+      summary: Queue an edge DHCP configuration change
+      parameters:
+        - $ref: '#/components/parameters/EdgeDeviceID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdgeOperationRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/QueuedDeviceOperation'
+
+  /api/devices/{id}/edge-firewall:
+    put:
+      tags: [devices]
+      summary: Queue an edge firewall configuration change
+      parameters:
+        - $ref: '#/components/parameters/EdgeDeviceID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EdgeOperationRequest'
+      responses:
+        '202':
+          $ref: '#/components/responses/QueuedDeviceOperation'
+
   /api/devices/{device_id}/iperf:
     post:
       tags: [devices]
@@ -450,6 +532,16 @@ components:
       name: device_id
       required: true
       schema: { type: string, format: uuid }
+    EdgeDeviceID:
+      in: path
+      name: id
+      required: true
+      schema: { type: string }
+    Config:
+      in: query
+      name: config
+      required: true
+      schema: { type: string }
 
   responses:
     Unauthorized:
@@ -462,6 +554,11 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+    QueuedDeviceOperation:
+      description: Operation accepted for the device agent
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/QueuedDeviceOperation' }
 
   schemas:
     Error:
@@ -470,6 +567,43 @@ components:
       properties:
         error:    { type: string }
         request_id: { type: string, description: 'Correlation ID for log lookup' }
+    QueuedDeviceOperation:
+      type: object
+      required: [status, operation_id, plan_hash, generation, message]
+      properties:
+        status: { type: string, enum: [queued] }
+        operation_id: { type: string, description: Unique execution attempt identity }
+        plan_hash:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+          description: SHA-256 hash of the immutable operation content
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Device configuration revision reserved for this operation
+        message: { type: string }
+    UciOperationRequest:
+      type: object
+      required: [commands]
+      properties:
+        commands:
+          type: array
+          minItems: 1
+          items: { type: object }
+        confirm: { type: boolean, default: false }
+        health_checks:
+          type: array
+          items: { type: string }
+    EdgeOperationRequest:
+      type: object
+      description: The typed payload depends on the edge namespace.
+      additionalProperties: true
+      properties:
+        confirm: { type: boolean, default: false }
+        health_checks:
+          type: array
+          items: { type: string }
 
 security:
   - bearerAuth: []

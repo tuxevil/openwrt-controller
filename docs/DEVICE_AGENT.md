@@ -43,7 +43,7 @@ Existing devices must complete this transition before legacy provisioning is dis
 
 ## Operation Status Contract
 
-Typed operations carry `operation_id`, `plan_hash` and, for generation-bound plans, a positive `generation`. The agent persists the generation beside its durable transaction journal and echoes it in telemetry status. Older operations may omit the generation; the controller accepts that form only for legacy unbound operations.
+Typed operations carry `operation_id`, `plan_hash` and, for generation-bound plans, a positive `generation`. The agent persists the generation beside its durable transaction journal and echoes it in telemetry status. Older agents may omit the generation; the controller still requires matching operation and plan identities and leaves generation columns unchanged for that compatibility path.
 
 ## Local Responsibilities
 

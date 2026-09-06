@@ -301,15 +301,7 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	database.InsertAuditLog(username, "EDGE_NEXUS_NETWORK_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed %d interface(s)", len(payload.Interfaces)), r.RemoteAddr)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "queued",
-		"operation_id": plan.OperationID,
-		"plan_hash":    plan.PlanHash,
-		"generation":   plan.Generation,
-		"message":      "device agent will apply and report the durable result",
-	})
+	writeQueuedDeviceOperationResponse(w, plan)
 }
 
 // ─── GET /api/devices/{id}/edge-dhcp ─────────────────────────────────────────
@@ -403,15 +395,7 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 	database.InsertAuditLog(username, "EDGE_NEXUS_DHCP_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed DHCP config for %d interface(s)", len(payload.DHCP)), r.RemoteAddr)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "queued",
-		"operation_id": plan.OperationID,
-		"plan_hash":    plan.PlanHash,
-		"generation":   plan.Generation,
-		"message":      "device agent will apply and report the durable result",
-	})
+	writeQueuedDeviceOperationResponse(w, plan)
 }
 
 // ─── GET /api/devices/{id}/edge-firewall ─────────────────────────────────────
@@ -501,13 +485,5 @@ func PutEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 	database.InsertAuditLog(username, "EDGE_NEXUS_FIREWALL_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed %d port-forward rule(s)", len(payload.PortForward)), r.RemoteAddr)
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"status":       "queued",
-		"operation_id": plan.OperationID,
-		"plan_hash":    plan.PlanHash,
-		"generation":   plan.Generation,
-		"message":      "device agent will apply and report the durable result",
-	})
+	writeQueuedDeviceOperationResponse(w, plan)
 }
