@@ -23,6 +23,7 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── Public routes (no auth) ──────────────────────────────────────────────
 	mux.HandleFunc("POST /api/auth/login", handlers.LoginHandler)
+	mux.HandleFunc("POST /api/device-enrollment", handlers.DeviceEnrollmentHandler)
 	mux.HandleFunc("POST /api/telemetry", handlers.TelemetryHandler)
 	mux.HandleFunc("GET /api/devices/{device_id}/config", handlers.GetDeviceConfigHandler)
 
@@ -108,6 +109,8 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/settings", middleware.WithAuth(handlers.GetSiteSettingsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/settings", middleware.WithAuth(handlers.UpdateSiteSettingsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rotate-key", middleware.WithAuth(handlers.RotateSiteKeyHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/enrollment-token", middleware.WithAuth(middleware.RequireAdmin(handlers.IssueDeviceEnrollmentTokenHandler)))
+	mux.HandleFunc("DELETE /api/sites/{site_id}/enrollment-token", middleware.WithAuth(middleware.RequireAdmin(handlers.RevokeDeviceEnrollmentTokenHandler)))
 	mux.HandleFunc("PATCH /api/sites/{site_id}/auto-adopt", middleware.WithAuth(middleware.RequireAdmin(handlers.ToggleAutoAdoptHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/flow-sense", middleware.WithAuth(handlers.GetSiteFlowSenseHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/history", middleware.WithAuth(handlers.GetSiteHistoryHandler))
@@ -158,7 +161,7 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── Threat Shield / IPS ──────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/threat-shield/status", middleware.WithAuth(handlers.GetThreatShieldStatusHandler))
-	mux.HandleFunc("GET /api/threat-shield/list", handlers.GetThreatShieldListHandler) // X-Site-Key auth
+	mux.HandleFunc("GET /api/threat-shield/list", handlers.GetThreatShieldListHandler) // X-Device-Token auth; legacy site key only when enabled
 	mux.HandleFunc("GET /api/sites/{site_id}/threat-shield", middleware.WithAuth(handlers.GetSiteThreatShieldHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/threat-shield", middleware.WithAuth(handlers.ToggleThreatShieldHandler))
 
@@ -241,7 +244,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("PUT /api/global/surveys/lockdown", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.SetGlobalSurveyLockdownHandler)))
 
 	// ── Agent Management ─────────────────────────────────────────────────────
-	// Device-facing: authenticated by X-Site-Key header (no JWT)
+	// Device-facing: authenticated by enrollment or device token (no JWT)
 	mux.HandleFunc("GET /api/agent/latest", handlers.GetLatestAgentHandler)
 	mux.HandleFunc("GET /api/agent/latest/raw", handlers.GetLatestAgentRawHandler)
 	// Dashboard-facing: JWT required

@@ -96,7 +96,7 @@ if UCI_FIXTURE_STATE="$ROOT/mismatch-state" UCI_FIXTURE_LOG="$ROOT/mismatch.log"
     exit 1
 fi
 test ! -e "$NERVE_TRANSACTION_ROOT/active"
-if grep -q '^set ' "$ROOT/mismatch.log"; then
+if [ -f "$ROOT/mismatch.log" ] && grep -q '^set ' "$ROOT/mismatch.log"; then
     echo "mismatched operation reached uci"
     exit 1
 fi
@@ -109,7 +109,7 @@ if UCI_FIXTURE_STATE="$ROOT/hash-mismatch-state" UCI_FIXTURE_LOG="$ROOT/hash-mis
     exit 1
 fi
 test ! -e "$NERVE_TRANSACTION_ROOT/active"
-if grep -q '^set ' "$ROOT/hash-mismatch.log"; then
+if [ -f "$ROOT/hash-mismatch.log" ] && grep -q '^set ' "$ROOT/hash-mismatch.log"; then
     echo "hash mismatch reached uci"
     exit 1
 fi

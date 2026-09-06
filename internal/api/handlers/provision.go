@@ -73,8 +73,8 @@ func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
 }
 
 func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
-	deviceID := strings.ToLower(r.PathValue("device_id"))
-	if deviceID == "" {
+	deviceID, err := normalizeEnrollmentDeviceID(r.PathValue("device_id"))
+	if err != nil {
 		http.Error(w, `{"error": "device_id is required"}`, http.StatusBadRequest)
 		return
 	}
@@ -85,9 +85,12 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error": "Forbidden: missing device credentials"}`, http.StatusForbidden)
 		return
 	}
+	if providedToken == "" && !allowLegacyProvision() {
+		http.Error(w, `{"error": "X-Device-Token header is required"}`, http.StatusUnauthorized)
+		return
+	}
 
 	tenantSchema := ""
-	var err error
 	if providedToken != "" {
 		tenantSchema, err = database.GetTenantSchemaForDeviceToken(providedToken)
 	} else {
@@ -115,9 +118,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if token == "" {
-		// Narrow first-enrollment exception: an adopted device with no token
-		// may bootstrap using the site key and receive its token below.
-		if !allowLegacyProvision() && tokenErr == nil && storedToken.Valid && storedToken.String != "" {
+		if !allowLegacyProvision() {
 			http.Error(w, `{"error": "X-Device-Token header is required"}`, http.StatusUnauthorized)
 			return
 		}
@@ -131,7 +132,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if token == "" && !storedToken.Valid {
+	if token == "" && (!storedToken.Valid || storedToken.String == "") {
 		generated, err := ensureDeviceToken(r.Context(), tenantSchema, deviceID, storedToken)
 		if err != nil {
 			http.Error(w, `{"error":"could not initialize device token"}`, http.StatusInternalServerError)
@@ -156,7 +157,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if siteKey != nil && *siteKey != "" {
+	if token == "" && siteKey != nil && *siteKey != "" {
 		if providedKey != "" && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, `{"error": "Forbidden: invalid site key"}`, http.StatusForbidden)
 			return

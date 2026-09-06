@@ -12,7 +12,7 @@
 # ── MANDATORY CONFIGURATION ──────────────────────────────────────────────────
 CONTROLLER_IP="10.0.0.6"
 CONTROLLER_PORT="3000"
-SITE_KEY="REPLACE_WITH_SITE_API_KEY"    # From Dashboard → Site Settings
+SITE_ENROLLMENT_TOKEN="REPLACE_WITH_SITE_ENROLLMENT_TOKEN" # Short-lived site bootstrap credential
 AGENT_UPDATE_PUBLIC_KEY="oTOq5fQzxDOLLxdnTSiGow6l70MKjgl1sRh7Yg6NEws="
 
 # ── OPTIONAL CONFIGURATION ───────────────────────────────────────────────────
@@ -27,10 +27,73 @@ PPPOE_PASSWORD=""
 exec >/tmp/nerve-bootstrap.log 2>&1
 
 BASE_URL="http://$CONTROLLER_IP:$CONTROLLER_PORT/api"
+AGENT_METADATA_URL="$BASE_URL/agent/latest"
 AGENT_URL="$BASE_URL/agent/latest/raw"
 AGENT_DEST="/usr/sbin/nerve-agent.sh"
+AGENT_CONFIG_FILE="/etc/nerve/agent.conf"
+AGENT_UPDATE_PUBLIC_KEY_FILE="/etc/nerve/agent-update-public-key"
+ENROLLMENT_TOKEN_FILE="/etc/nerve/enrollment-token"
+ENROLLMENT_NONCE_FILE="/etc/nerve/enrollment-nonce"
 
 echo "[*] NERVE CENTER ZERO-TOUCH BOOTSTRAP STARTING..."
+
+verify_agent_artifact() {
+  artifact_file="$1"
+  signature_base64="$2"
+  public_key_base64="$3"
+  verify_dir="/tmp/nerve-bootstrap-verify.$$"
+  mkdir "$verify_dir" 2>/dev/null || return 1
+  if ! printf '%s' "$public_key_base64" | base64 -d > "$verify_dir/public.raw" 2>/dev/null; then
+    rm -rf "$verify_dir"
+    return 1
+  fi
+  public_key_size=$(wc -c < "$verify_dir/public.raw")
+  if [ "$public_key_size" -ne 32 ]; then
+    rm -rf "$verify_dir"
+    return 1
+  fi
+  printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$verify_dir/public.der" || {
+    rm -rf "$verify_dir"
+    return 1
+  }
+  cat "$verify_dir/public.raw" >> "$verify_dir/public.der" || {
+    rm -rf "$verify_dir"
+    return 1
+  }
+  if ! printf '%s' "$signature_base64" | base64 -d > "$verify_dir/signature" 2>/dev/null; then
+    rm -rf "$verify_dir"
+    return 1
+  fi
+  signature_size=$(wc -c < "$verify_dir/signature")
+  if [ "$signature_size" -ne 64 ] || ! command -v openssl >/dev/null 2>&1; then
+    rm -rf "$verify_dir"
+    return 1
+  fi
+  openssl pkeyutl -verify -pubin -inkey "$verify_dir/public.der" -rawin \
+    -in "$artifact_file" -sigfile "$verify_dir/signature" >/dev/null 2>&1
+  verify_status=$?
+  rm -rf "$verify_dir"
+  return "$verify_status"
+}
+
+if [ "${1:-}" = "--self-test-signature" ]; then
+  [ "$#" -eq 4 ] || exit 1
+  verify_agent_artifact "$2" "$3" "$4"
+  exit $?
+fi
+
+case "$CONTROLLER_IP" in
+  ''|*[!A-Za-z0-9:._-]*) echo "[!] Invalid controller address."; exit 1 ;;
+esac
+case "$CONTROLLER_PORT" in
+  ''|*[!0-9]*) echo "[!] Invalid controller port."; exit 1 ;;
+esac
+case "$SITE_ENROLLMENT_TOKEN" in
+  ''|REPLACE_WITH_SITE_ENROLLMENT_TOKEN|*[!A-Za-z0-9_-]*) echo "[!] Site enrollment token is not configured."; exit 1 ;;
+esac
+case "$AGENT_UPDATE_PUBLIC_KEY" in
+  ''|*[!A-Za-z0-9+/=]*) echo "[!] Agent update public key is not configured."; exit 1 ;;
+esac
 
 # 1. Set root password
 if [ -n "$ROOT_PASSWORD" ]; then
@@ -71,44 +134,86 @@ echo "[+] Controller reachable at $CONTROLLER_IP."
 # 5. Download the latest agent from the Nerve Center
 # Install required packages for remote diagnostics
 echo "[*] Installing required packages..."
-opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi; opkg install tcpdump curl iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale >/dev/null 2>&1 || true
+opkg update && if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi; opkg install tcpdump curl jsonfilter openssl-util iperf3 sqm-scripts kmod-sched-cake iptables-mod-ndpi tailscale >/dev/null 2>&1 || true
 
-echo "[*] Downloading Nerve Center agent..."
-if curl -m 15 -s \
-    -H "X-Site-Key: $SITE_KEY" \
-    -o "${AGENT_DEST}.tmp" \
-    "$AGENT_URL"; then
-
-  # Verify the download is non-empty
-  if [ -s "${AGENT_DEST}.tmp" ]; then
-    mv "${AGENT_DEST}.tmp" "$AGENT_DEST"
-    chmod +x "$AGENT_DEST"
-    echo "[+] Agent downloaded → $AGENT_DEST"
-  else
-    echo "[!] Agent download empty. Bootstrap deferred."
-    rm -f "${AGENT_DEST}.tmp"
-    exit 1
-  fi
-else
-  echo "[!] Agent download failed. Bootstrap deferred."
+echo "[*] Downloading signed Nerve Center agent metadata..."
+AGENT_METADATA_FILE="/tmp/nerve-agent-metadata.$$"
+if ! curl -m 15 -fsS \
+    -H "X-Site-Enrollment-Token: $SITE_ENROLLMENT_TOKEN" \
+    -o "$AGENT_METADATA_FILE" \
+    "$AGENT_METADATA_URL"; then
+  echo "[!] Agent metadata download failed. Bootstrap deferred."
+  rm -f "$AGENT_METADATA_FILE"
+  exit 1
+fi
+LATEST_HASH=$(jsonfilter -i "$AGENT_METADATA_FILE" -e '@.version_hash' 2>/dev/null || true)
+LATEST_SIGNATURE=$(jsonfilter -i "$AGENT_METADATA_FILE" -e '@.signature' 2>/dev/null || true)
+LATEST_SIGNATURE_ALGORITHM=$(jsonfilter -i "$AGENT_METADATA_FILE" -e '@.signature_algorithm' 2>/dev/null || true)
+if [ -z "$LATEST_HASH" ] || [ -z "$LATEST_SIGNATURE" ] || [ "$LATEST_SIGNATURE_ALGORITHM" != "Ed25519" ]; then
+  echo "[!] Agent metadata is unsigned or malformed. Bootstrap deferred."
+  rm -f "$AGENT_METADATA_FILE"
   exit 1
 fi
 
-# 6. Inject SITE_KEY into the downloaded agent
-#    The agent uses SITE_KEY to authenticate all subsequent API calls.
-sed -i "s|SITE_KEY=\"TU_API_KEY_AQUI\"|SITE_KEY=\"$SITE_KEY\"|g" "$AGENT_DEST"
-sed -i "s|CONTROLLER_IP=\"10.0.0.6\"|CONTROLLER_IP=\"$CONTROLLER_IP\"|g" "$AGENT_DEST"
-sed -i "s|PORT=\"3000\"|PORT=\"$CONTROLLER_PORT\"|g" "$AGENT_DEST"
-sed -i "s|AGENT_UPDATE_PUBLIC_KEY=\"REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64\"|AGENT_UPDATE_PUBLIC_KEY=\"$AGENT_UPDATE_PUBLIC_KEY\"|g" "$AGENT_DEST"
-echo "[+] Agent configured with site credentials."
+echo "[*] Downloading signed Nerve Center agent artifact..."
+if ! curl -m 15 -fsS \
+    -H "X-Site-Enrollment-Token: $SITE_ENROLLMENT_TOKEN" \
+    -o "${AGENT_DEST}.tmp" \
+    "$AGENT_URL"; then
+  echo "[!] Agent download failed. Bootstrap deferred."
+  rm -f "$AGENT_METADATA_FILE" "${AGENT_DEST}.tmp"
+  exit 1
+fi
+rm -f "$AGENT_METADATA_FILE"
+if [ ! -s "${AGENT_DEST}.tmp" ]; then
+  echo "[!] Agent download empty. Bootstrap deferred."
+  rm -f "${AGENT_DEST}.tmp"
+  exit 1
+fi
+if [ "$(sha256sum "${AGENT_DEST}.tmp" | awk '{print $1}')" != "$LATEST_HASH" ] || \
+    ! verify_agent_artifact "${AGENT_DEST}.tmp" "$LATEST_SIGNATURE" "$AGENT_UPDATE_PUBLIC_KEY"; then
+  echo "[!] Agent artifact hash or signature verification failed. Bootstrap deferred."
+  rm -f "${AGENT_DEST}.tmp"
+  exit 1
+fi
+if ! chmod 755 "${AGENT_DEST}.tmp"; then
+  echo "[!] Could not make the verified agent executable. Bootstrap deferred."
+  rm -f "${AGENT_DEST}.tmp"
+  exit 1
+fi
+if ! mv "${AGENT_DEST}.tmp" "$AGENT_DEST"; then
+  echo "[!] Could not install the verified agent. Bootstrap deferred."
+  rm -f "${AGENT_DEST}.tmp"
+  exit 1
+fi
+echo "[+] Signed agent verified and installed → $AGENT_DEST"
 
-# The agent performs first enrollment with the site key, then persists the
-# per-device token returned by /devices/{id}/config. Legacy provisioning may
-# remain enabled only for this first enrollment transition.
+# 6. Runtime credentials stay outside the signed artifact. The enrollment
+# token is removed by the agent after the first successful enrollment.
+umask 077
+if ! mkdir -p /etc/nerve; then
+  echo "[!] Could not create the runtime configuration directory. Bootstrap deferred."
+  exit 1
+fi
+if ! printf 'CONTROLLER_URL="http://%s:%s/api"\nDEVICE_ID_FILE="/etc/nerve-device-id"\nDEVICE_TOKEN_FILE="/etc/nerve-device-token"\nENROLLMENT_TOKEN_FILE="%s"\nENROLLMENT_NONCE_FILE="%s"\nAGENT_UPDATE_PUBLIC_KEY_FILE="%s"\n' \
+  "$CONTROLLER_IP" "$CONTROLLER_PORT" "$ENROLLMENT_TOKEN_FILE" "$ENROLLMENT_NONCE_FILE" "$AGENT_UPDATE_PUBLIC_KEY_FILE" > "$AGENT_CONFIG_FILE"; then
+  echo "[!] Could not persist the agent runtime configuration. Bootstrap deferred."
+  exit 1
+fi
+if ! printf '%s\n' "$SITE_ENROLLMENT_TOKEN" > "$ENROLLMENT_TOKEN_FILE" || \
+    ! printf '%s\n' "$AGENT_UPDATE_PUBLIC_KEY" > "$AGENT_UPDATE_PUBLIC_KEY_FILE"; then
+  echo "[!] Could not persist the bootstrap credentials. Bootstrap deferred."
+  exit 1
+fi
+if ! chmod 600 "$AGENT_CONFIG_FILE" "$ENROLLMENT_TOKEN_FILE" "$AGENT_UPDATE_PUBLIC_KEY_FILE"; then
+  echo "[!] Could not protect the bootstrap credentials. Bootstrap deferred."
+  exit 1
+fi
+echo "[+] Runtime credentials stored outside the signed agent artifact."
 
 # 7. Register service via procd (rc.local fallback for simplicity)
 #    Creates a procd-compatible init script so the agent survives reboots.
-cat > /etc/init.d/nerve-agent << 'EOF'
+if ! cat > /etc/init.d/nerve-agent << 'EOF'
 #!/bin/sh /etc/rc.common
 START=99
 STOP=10
@@ -123,22 +228,24 @@ start_service() {
   procd_close_instance
 }
 EOF
-chmod +x /etc/init.d/nerve-agent
-/etc/init.d/nerve-agent enable
-/etc/init.d/nerve-agent start
+then
+  echo "[!] Could not create the agent service. Bootstrap deferred."
+  exit 1
+fi
+if ! chmod +x /etc/init.d/nerve-agent; then
+  echo "[!] Could not enable the agent service. Bootstrap deferred."
+  exit 1
+fi
+if ! /etc/init.d/nerve-agent enable; then
+  echo "[!] Could not register the agent service. Bootstrap deferred."
+  exit 1
+fi
+if ! /etc/init.d/nerve-agent start; then
+  echo "[!] Could not start the agent service. Bootstrap deferred."
+  exit 1
+fi
 
-echo "[+] Nerve agent service registered and started."
-
-# 8. Send initial telemetry immediately (the controller will auto-adopt
-#    this device if the site has Zero-Touch Provisioning enabled)
-DEVICE_ID=$(cat /sys/class/net/br-lan/address 2>/dev/null | tr '[:lower:]' '[:upper:]')
-curl -m 10 -s -X POST \
-  -H "Content-Type: application/json" \
-  -H "X-Site-Key: $SITE_KEY" \
-  -d "{\"device_id\":\"$DEVICE_ID\",\"agent_version\":\"bootstrap\",\"timestamp\":$(date +%s),\"board\":{},\"system\":{}}" \
-  "http://$CONTROLLER_IP:$CONTROLLER_PORT/api/telemetry" >/dev/null
-
-echo "[+] Initial registration beacon sent."
+echo "[+] Nerve agent service registered and started; enrollment is handled before telemetry."
 echo "[✓] NERVE CENTER ZERO-TOUCH BOOTSTRAP COMPLETE."
 
 # Exit 0 → OpenWrt deletes this script. It will NOT run again on next boot.

@@ -16,27 +16,27 @@ func GetThreatShieldStatusHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(status)
 }
 
-// GetThreatShieldListHandler serves the raw blocklist to agents via X-Site-Key.
+// GetThreatShieldListHandler serves the raw blocklist to enrolled agents via
+// X-Device-Token. Site-key access remains only for explicitly enabled legacy
+// provisioning during migration.
 // GET /api/threat-shield/list
 func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
-	siteKey := r.Header.Get("X-Site-Key")
-	if siteKey == "" {
-		http.Error(w, "Forbidden: missing X-Site-Key", http.StatusForbidden)
+	if r.Header.Get("X-Device-Token") == "" && !allowLegacyProvision() {
+		http.Error(w, "Forbidden: X-Device-Token header is required", http.StatusForbidden)
 		return
 	}
 
-	schema, err := database.GetTenantSchemaForSiteKey(siteKey)
-	if err != nil || schema == "" {
-		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
-		return
+	var schema, siteID string
+	var err error
+	if r.Header.Get("X-Device-Token") != "" {
+		schema, siteID, err = resolveAgentSite(r)
+	} else {
+		// A site enrollment token is limited to first-boot artifact retrieval and
+		// enrollment; it must not authorize established-device data endpoints.
+		schema, siteID, err = resolveSiteByKey(r.Header.Get("X-Site-Key"))
 	}
-
-	var siteID string
-	err = database.DB.QueryRow(
-		"SELECT id FROM "+schema+".sites WHERE api_key = $1", siteKey,
-	).Scan(&siteID)
-	if err != nil || siteID == "" {
-		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+	if err != nil || schema == "" || siteID == "" {
+		http.Error(w, "Forbidden: invalid device credentials", http.StatusForbidden)
 		return
 	}
 
@@ -62,6 +62,7 @@ func GetThreatShieldListHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/plain")
 	w.Header().Set("X-IP-Count", "see Content-Length")
 	w.Write([]byte(content))

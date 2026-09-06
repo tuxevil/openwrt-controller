@@ -1,11 +1,19 @@
 #!/bin/sh
 
 # === CONFIGURACIÓN ===
-# LLAVE DE SITIO (Obtenida del Dashboard -> Settings)
-SITE_KEY="TU_API_KEY_AQUI"
-CONTROLLER_IP="REPLACE_WITH_CONTROLLER_IP"
-PORT="3000"
-BASE_URL="http://$CONTROLLER_IP:$PORT/api"
+# The signed artifact is immutable. Runtime credentials and the controller
+# endpoint live in a root-owned file written by the image bootstrap.
+NERVE_CONFIG_FILE="${NERVE_CONFIG_FILE:-/etc/nerve/agent.conf}"
+if [ -r "$NERVE_CONFIG_FILE" ]; then
+    . "$NERVE_CONFIG_FILE"
+fi
+CONTROLLER_URL="${CONTROLLER_URL:-}"
+CONTROLLER_IP="${CONTROLLER_IP:-}"
+PORT="${PORT:-3000}"
+if [ -z "$CONTROLLER_URL" ] && [ -n "$CONTROLLER_IP" ]; then
+    CONTROLLER_URL="http://$CONTROLLER_IP:$PORT/api"
+fi
+BASE_URL="$CONTROLLER_URL"
 TELEMETRY_URL="$BASE_URL/telemetry"
 DEVICE_ID_FILE="${DEVICE_ID_FILE:-/etc/nerve-device-id}"
 DEVICE_ID="$(cat "$DEVICE_ID_FILE" 2>/dev/null || true)"
@@ -20,7 +28,10 @@ fi
 CONFIG_URL="$BASE_URL/devices/$DEVICE_ID/config"
 DEVICE_TOKEN_FILE="${DEVICE_TOKEN_FILE:-/etc/nerve-device-token}"
 DEVICE_TOKEN="$(cat "$DEVICE_TOKEN_FILE" 2>/dev/null || true)"
-AGENT_UPDATE_PUBLIC_KEY="REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64"
+ENROLLMENT_TOKEN_FILE="${ENROLLMENT_TOKEN_FILE:-/etc/nerve/enrollment-token}"
+ENROLLMENT_NONCE_FILE="${ENROLLMENT_NONCE_FILE:-/etc/nerve/enrollment-nonce}"
+AGENT_UPDATE_PUBLIC_KEY_FILE="${AGENT_UPDATE_PUBLIC_KEY_FILE:-/etc/nerve/agent-update-public-key}"
+AGENT_UPDATE_PUBLIC_KEY="$(cat "$AGENT_UPDATE_PUBLIC_KEY_FILE" 2>/dev/null || true)"
 NERVE_TRANSACTION_ROOT="${NERVE_TRANSACTION_ROOT:-/etc/nerve/transactions}"
 NERVE_CONFIG_ROOT="${NERVE_CONFIG_ROOT:-/etc/config}"
 NERVE_WIFI_HASH_FILE="${NERVE_WIFI_HASH_FILE:-$NERVE_TRANSACTION_ROOT/wifi_config.hash}"
@@ -53,6 +64,64 @@ transaction_write_atomic() {
         sync
     fi
     return 0
+}
+
+agent_secret_write() {
+    local secret_file="$1"
+    local secret_value="$2"
+    local secret_dir="${secret_file%/*}"
+    local secret_tmp="$secret_file.$$"
+    [ "$secret_dir" = "$secret_file" ] && secret_dir="."
+    mkdir -p "$secret_dir" || return 1
+    printf '%s\n' "$secret_value" > "$secret_tmp" || return 1
+    chmod 600 "$secret_tmp" 2>/dev/null || return 1
+    mv "$secret_tmp" "$secret_file" || return 1
+    command -v sync >/dev/null 2>&1 && sync
+    return 0
+}
+
+# Verify an Ed25519 signature without ever placing decoded binary data in a
+# shell variable. The public key is raw 32-byte base64; OpenSSL expects the
+# SubjectPublicKeyInfo DER wrapper built below.
+verify_agent_artifact() {
+    local artifact_file="$1"
+    local signature_base64="$2"
+    local public_key_base64="$3"
+    local verify_dir="/tmp/nerve-agent-verify.$$"
+    local public_key_size
+    local signature_size
+    mkdir "$verify_dir" 2>/dev/null || return 1
+    if ! printf '%s' "$public_key_base64" | base64 -d > "$verify_dir/public.raw" 2>/dev/null; then
+        rm -rf "$verify_dir"
+        return 1
+    fi
+    public_key_size=$(wc -c < "$verify_dir/public.raw")
+    if [ "$public_key_size" -ne 32 ]; then
+        rm -rf "$verify_dir"
+        return 1
+    fi
+    printf '\060\052\060\005\006\003\053\145\160\003\041\000' > "$verify_dir/public.der" || {
+        rm -rf "$verify_dir"
+        return 1
+    }
+    cat "$verify_dir/public.raw" >> "$verify_dir/public.der" || {
+        rm -rf "$verify_dir"
+        return 1
+    }
+    if ! printf '%s' "$signature_base64" | base64 -d > "$verify_dir/signature" 2>/dev/null; then
+        rm -rf "$verify_dir"
+        return 1
+    fi
+    signature_size=$(wc -c < "$verify_dir/signature")
+    if [ "$signature_size" -ne 64 ] || ! command -v openssl >/dev/null 2>&1; then
+        rm -rf "$verify_dir"
+        return 1
+    fi
+    openssl pkeyutl -verify -pubin -inkey "$verify_dir/public.der" -rawin \
+        -in "$artifact_file" -sigfile "$verify_dir/signature" >/dev/null 2>&1
+    local verify_status=$?
+    rm -rf "$verify_dir"
+    return "$verify_status"
 }
 
 transaction_dir() {
@@ -547,6 +616,12 @@ apply_pending_operation() {
     return 0
 }
 
+if [ "${1:-}" = "--self-test-signature" ]; then
+    [ "$#" -eq 4 ] || exit 1
+    verify_agent_artifact "$2" "$3" "$4"
+    exit $?
+fi
+
 if [ "${1:-}" = "--self-test-transaction" ]; then
     transaction_begin wireless self-test-operation || exit 1
     printf '%s\n' self-test-mutated > "$NERVE_CONFIG_ROOT/wireless"
@@ -559,7 +634,7 @@ if [ "${1:-}" = "--self-test-operation" ]; then
     if [ -n "${SELF_TEST_OPERATION_JSON:-}" ]; then
         SELF_TEST_OPERATION="$SELF_TEST_OPERATION_JSON"
     else
-        SELF_TEST_OPERATION='{"operation_id":"self-operation","plan_hash":"self-operation-hash","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":true}'
+        SELF_TEST_OPERATION='{"operation_id":"self-operation","plan_hash":"self-operation","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":true}'
     fi
     apply_pending_operation "$SELF_TEST_OPERATION" || exit 1
     exit 0
@@ -580,6 +655,11 @@ if [ "${1:-}" = "--prune-transactions" ]; then
     exit $?
 fi
 
+if [ -z "$BASE_URL" ] || [ -z "$DEVICE_ID" ]; then
+    logger -t agent "Runtime configuration or device identity is missing"
+    exit 1
+fi
+
 # Recover before the first network request. A transaction left in APPLYING or
 # PENDING_CONFIRM is never trusted after a process crash or reboot.
 if ! transaction_recover_pending; then
@@ -588,19 +668,64 @@ if ! transaction_recover_pending; then
 fi
 
 bootstrap_agent() {
-    [ -n "$DEVICE_TOKEN" ] && return 0
-    logger -t agent "Device token missing; starting bootstrap provisioning"
-    bootstrap_response=$(curl -m 5 -s -X GET \
-        -H "X-Site-Key: $SITE_KEY" "$CONFIG_URL")
-    bootstrap_token=$(echo "$bootstrap_response" | jsonfilter -e '@.config.device_token' 2>/dev/null)
-    if [ -z "$bootstrap_token" ]; then
-        logger -t agent "Bootstrap failed: controller did not provide a device token"
+    [ -n "$DEVICE_TOKEN" ] && {
+        rm -f "$ENROLLMENT_TOKEN_FILE" "$ENROLLMENT_NONCE_FILE"
+        return 0
+    }
+    enrollment_token=$(cat "$ENROLLMENT_TOKEN_FILE" 2>/dev/null || true)
+    if [ -z "$enrollment_token" ]; then
+        logger -t agent "Bootstrap failed: site enrollment token is missing"
         return 1
     fi
-    printf '%s\n' "$bootstrap_token" > "$DEVICE_TOKEN_FILE"
-    chmod 600 "$DEVICE_TOKEN_FILE"
+
+    enrollment_nonce=$(cat "$ENROLLMENT_NONCE_FILE" 2>/dev/null || true)
+    if [ -z "$enrollment_nonce" ]; then
+        enrollment_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null | tr -d ' \n')
+        case "$enrollment_nonce" in
+            ????????*) ;;
+            *) logger -t agent "Bootstrap failed: could not create enrollment nonce"; return 1 ;;
+        esac
+        agent_secret_write "$ENROLLMENT_NONCE_FILE" "$enrollment_nonce" || return 1
+    else
+        case "$enrollment_nonce" in
+            *[!A-Fa-f0-9]*) logger -t agent "Bootstrap failed: enrollment nonce is invalid"; return 1 ;;
+        esac
+        [ "${#enrollment_nonce}" -eq 32 ] || {
+            logger -t agent "Bootstrap failed: enrollment nonce length is invalid"
+            return 1
+        }
+    fi
+    [ "${#enrollment_nonce}" -eq 32 ] || {
+        logger -t agent "Bootstrap failed: enrollment nonce length is invalid"
+        return 1
+    }
+
+    enrollment_arch=$(uname -m 2>/dev/null | sed 's/[^A-Za-z0-9._-]/_/g')
+    enrollment_kernel=$(uname -r 2>/dev/null | sed 's/[^A-Za-z0-9._-]/_/g')
+    enrollment_payload=$(printf '{"device_id":"%s","nonce":"%s","capabilities":{"architecture":"%s","kernel":"%s"}}' \
+        "$DEVICE_ID" "$enrollment_nonce" "$enrollment_arch" "$enrollment_kernel")
+    enrollment_response_file="/tmp/nerve-enrollment-response.$$"
+    enrollment_http_code=$(curl -m 10 -sS -X POST \
+        -H "Content-Type: application/json" \
+        -H "X-Site-Enrollment-Token: $enrollment_token" \
+        -d "$enrollment_payload" \
+        "$BASE_URL/device-enrollment" -w '%{http_code}' -o "$enrollment_response_file" 2>/dev/null || true)
+    if [ "$enrollment_http_code" != "200" ] && [ "$enrollment_http_code" != "201" ]; then
+        logger -t agent "Bootstrap enrollment failed (HTTP $enrollment_http_code)"
+        rm -f "$enrollment_response_file"
+        return 1
+    fi
+    enrolled_device_id=$(jsonfilter -i "$enrollment_response_file" -e '@.data.device_id' 2>/dev/null || true)
+    bootstrap_token=$(jsonfilter -i "$enrollment_response_file" -e '@.data.device_token' 2>/dev/null || true)
+    rm -f "$enrollment_response_file"
+    if [ "$enrolled_device_id" != "$DEVICE_ID" ] || [ -z "$bootstrap_token" ]; then
+        logger -t agent "Bootstrap failed: controller returned an invalid enrollment"
+        return 1
+    fi
+    agent_secret_write "$DEVICE_TOKEN_FILE" "$bootstrap_token" || return 1
     DEVICE_TOKEN="$bootstrap_token"
-    logger -t agent "Device token provisioned"
+    rm -f "$ENROLLMENT_TOKEN_FILE" "$ENROLLMENT_NONCE_FILE"
+    logger -t agent "Device enrolled and token provisioned"
 }
 
 # logd is a local dependency, not part of the telemetry heartbeat.  On some
@@ -671,11 +796,10 @@ T_FAILS=0
 
 while true; do
     # 0. CHECK AUTO-UPDATE
-    # Reconstruct default config before hashing to match the raw database version_hash
-    AGENT_VERSION=$(sed -e 's|^SITE_KEY=.*|SITE_KEY="TU_API_KEY_AQUI"|' \
-                        -e 's|^CONTROLLER_IP=.*|CONTROLLER_IP="REPLACE_WITH_CONTROLLER_IP"|' \
-                        -e 's|^PORT=.*|PORT="3000"|' "$0" | sha256sum | awk '{print $1}')
-    LATEST_JSON=$(curl -m 5 -s -X GET -H "X-Site-Key: $SITE_KEY" "$BASE_URL/agent/latest")
+    # The signed artifact is hashed byte-for-byte because runtime settings are
+    # stored outside this file.
+    AGENT_VERSION=$(sha256sum "$0" | awk '{print $1}')
+    LATEST_JSON=$(curl -m 5 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest")
     
     if [ -n "$LATEST_JSON" ]; then
         LATEST_HASH=$(echo "$LATEST_JSON" | jsonfilter -e '@.version_hash' 2>/dev/null)
@@ -683,48 +807,35 @@ while true; do
             LATEST_SIGNATURE=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature' 2>/dev/null)
             LATEST_SIGNATURE_ALGORITHM=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature_algorithm' 2>/dev/null)
             logger -t agent "New agent version found: $LATEST_HASH. Downloading..."
-            if curl -m 10 -s -X GET -H "X-Site-Key: $SITE_KEY" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
+            if curl -m 10 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
                 TMP_HASH=$(sha256sum "$0.tmp" | awk '{print $1}')
                 SIGNATURE_OK=0
-                if [ -n "$LATEST_SIGNATURE" ] && [ "$LATEST_SIGNATURE_ALGORITHM" = "Ed25519" ] && command -v openssl >/dev/null 2>&1 && [ "$AGENT_UPDATE_PUBLIC_KEY" != "REPLACE_WITH_ED25519_PUBLIC_KEY_BASE64" ]; then
-                    PUBKEY_HEX=$(printf '%s' "$AGENT_UPDATE_PUBLIC_KEY" | base64 -d 2>/dev/null | od -An -tx1 | tr -d ' \n')
-                    SIGNATURE_DECODED=$(printf '%s' "$LATEST_SIGNATURE" | base64 -d 2>/dev/null) || SIGNATURE_DECODED=""
-                    if [ "${#PUBKEY_HEX}" -eq 64 ] && [ "${#SIGNATURE_DECODED}" -eq 64 ] && command -v xxd >/dev/null 2>&1; then
-                        printf '302a300506032b6570032100%s' "$PUBKEY_HEX" | xxd -r -p > /tmp/nerve-agent-pubkey.$$
-                        printf '%s' "$SIGNATURE_DECODED" > /tmp/nerve-agent-signature.$$
-                        if openssl pkeyutl -verify -pubin -inkey /tmp/nerve-agent-pubkey.$$ -rawin -in "$0.tmp" -sigfile /tmp/nerve-agent-signature.$$ >/dev/null 2>&1; then
-                            SIGNATURE_OK=1
-                        fi
-                        rm -f /tmp/nerve-agent-pubkey.$$ /tmp/nerve-agent-signature.$$
+                if [ -n "$LATEST_SIGNATURE" ] && [ "$LATEST_SIGNATURE_ALGORITHM" = "Ed25519" ]; then
+                    if verify_agent_artifact "$0.tmp" "$LATEST_SIGNATURE" "$AGENT_UPDATE_PUBLIC_KEY"; then
+                        SIGNATURE_OK=1
                     fi
-                elif [ -z "$LATEST_SIGNATURE" ]; then
-                    SIGNATURE_OK=1
+                else
+                    logger -t agent "Signed update metadata is missing or uses an unsupported algorithm"
                 fi
                 if [ "$TMP_HASH" = "$LATEST_HASH" ] && [ "$SIGNATURE_OK" = "1" ]; then
                     logger -t agent "Agent downloaded securely. Updating and restarting."
-                    
-                    # Preserve config from the current agent script
-                    CURRENT_SITE_KEY=$(grep -E "^SITE_KEY=" "$0" | cut -d'"' -f2)
-                    CURRENT_CONTROLLER_IP=$(grep -E "^CONTROLLER_IP=" "$0" | cut -d'"' -f2)
-                    CURRENT_PORT=$(grep -E "^PORT=" "$0" | cut -d'"' -f2)
-                    
-                    # Replace default config in the new agent script if they were set in the old one
-                    [ -n "$CURRENT_SITE_KEY" ] && sed -i "s|^SITE_KEY=.*|SITE_KEY=\"$CURRENT_SITE_KEY\"|" "$0.tmp"
-                    [ -n "$CURRENT_CONTROLLER_IP" ] && sed -i "s|^CONTROLLER_IP=.*|CONTROLLER_IP=\"$CURRENT_CONTROLLER_IP\"|" "$0.tmp"
-                    [ -n "$CURRENT_PORT" ] && sed -i "s|^PORT=.*|PORT=\"$CURRENT_PORT\"|" "$0.tmp"
-                    
-                    cp "$0" "$0.old"
-                    mv "$0.tmp" "$0"
-                    chmod +x "$0"
-                    logger -t agent "Agent updated. Reloading in-process to preserve procd respawn budget."
-                    # Use exec to re-exec the new script in the same PID.
-                    # procd never sees a process exit, so the crash counter is preserved
-                    # across self-updates (5 clean exits within 1h would otherwise mark
-                    # the instance as crashed and procd would stop respawning it).
-                    exec /bin/sh "$0" || {
-                        logger -t agent "exec failed; falling back to exit for procd restart"
-                        exit 0
-                    }
+                    if chmod +x "$0.tmp" && cp "$0" "$0.old" && mv "$0.tmp" "$0"; then
+                        logger -t agent "Agent updated. Reloading in-process to preserve procd respawn budget."
+                        # Use exec to re-exec the new script in the same PID.
+                        # procd never sees a process exit, so the crash counter is preserved
+                        # across self-updates (5 clean exits within 1h would otherwise mark
+                        # the instance as crashed and procd would stop respawning it).
+                        if ! exec /bin/sh "$0"; then
+                            logger -t agent "exec failed; restoring the previous agent"
+                            if ! mv "$0.old" "$0"; then
+                                logger -t agent "previous agent could not be restored"
+                            fi
+                            exit 0
+                        fi
+                    else
+                        logger -t agent "Agent replacement failed; preserving the current agent"
+                        rm -f "$0.tmp"
+                    fi
                 else
                     logger -t agent "Hash mismatch on new agent. Aborting update."
                     rm -f "$0.tmp"
@@ -995,9 +1106,9 @@ while true; do
 EOF
 )
 
-    # 6. ENVÍO DE TELEMETRÍA (Con X-Site-Key y comprobación de rollback)
-    # The site key routes the request to its tenant; the device token is the
-    # credential that authenticates this enrolled device.
+    # 6. TELEMETRY (using the device token and rollback checks)
+    # The device token both routes the request to its tenant and authenticates
+    # this enrolled device.
     TELEMETRY_HEADERS="-H X-Device-Token:$DEVICE_TOKEN"
     HTTP_CODE=$(curl -m 5 -s -X POST \
         -H "Content-Type: application/json" \
@@ -1409,7 +1520,7 @@ EOF
 
         if [ "$TS_REFRESH" = "1" ]; then
             logger -t threat_shield "Downloading reputation blocklist..."
-            if curl -m 60 -s -H "X-Site-Key: $SITE_KEY" \
+            if curl -m 60 -s -H "X-Device-Token: $DEVICE_TOKEN" \
                     "$BASE_URL/threat-shield/list" \
                     -o "$TS_LIST_FILE.tmp" 2>/dev/null; then
                 TS_COUNT=$(wc -l < "$TS_LIST_FILE.tmp" 2>/dev/null || echo 0)

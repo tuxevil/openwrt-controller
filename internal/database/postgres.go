@@ -649,6 +649,18 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.sites ADD COLUMN IF NOT EXISTS wg_pubkey VARCHAR(255)", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.sites ADD COLUMN IF NOT EXISTS wg_privkey VARCHAR(255)", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.sites ADD COLUMN IF NOT EXISTS api_key TEXT UNIQUE", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.sites ADD COLUMN IF NOT EXISTS enrollment_token_hash CHAR(64)", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.sites ADD COLUMN IF NOT EXISTS enrollment_token_expires_at TIMESTAMP WITH TIME ZONE", quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sites_enrollment_token_hash ON %s.sites(enrollment_token_hash) WHERE enrollment_token_hash IS NOT NULL", quotedSchema),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.device_enrollment_nonces (
+			site_id UUID NOT NULL REFERENCES %s.sites(id) ON DELETE CASCADE,
+			nonce_hash CHAR(64) NOT NULL,
+			device_id VARCHAR(50) NOT NULL REFERENCES %s.devices(id) ON DELETE CASCADE,
+			created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+			PRIMARY KEY (site_id, nonce_hash)
+		)`, quotedSchema, quotedSchema, quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_device_enrollment_nonces_device ON %s.device_enrollment_nonces(site_id, device_id)", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.agent_versions ADD COLUMN IF NOT EXISTS site_id UUID REFERENCES %s.sites(id)", quotedSchema, quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.ai_insights ADD COLUMN IF NOT EXISTS llm_model VARCHAR(255)", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.ai_insights ADD COLUMN IF NOT EXISTS tokens_used INT DEFAULT 0", quotedSchema),

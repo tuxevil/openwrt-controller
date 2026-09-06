@@ -3,6 +3,8 @@ package handlers
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -21,5 +23,25 @@ func TestAgentSignatureVerification(t *testing.T) {
 	}
 	if verifyAgentSignature(content, "not-base64", publicKey) {
 		t.Fatal("invalid signature was accepted")
+	}
+}
+
+func TestAgentSigningFailsClosedWithoutKey(t *testing.T) {
+	t.Setenv("AGENT_UPDATE_SIGNING_KEY", "")
+
+	if _, _, err := signAgentContent("agent"); err == nil {
+		t.Fatal("unsigned agent content was accepted without a signing key")
+	}
+}
+
+func TestAgentUpdatesRejectSiteKeyOnlyClients(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/latest", nil)
+	req.Header.Set("X-Site-Key", "legacy-site-key")
+	res := httptest.NewRecorder()
+
+	GetLatestAgentHandler(res, req)
+
+	if res.Code != http.StatusForbidden {
+		t.Fatalf("status=%d, want %d", res.Code, http.StatusForbidden)
 	}
 }

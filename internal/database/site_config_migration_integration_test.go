@@ -39,6 +39,9 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 	}
 	defer DB.Exec(fmt.Sprintf("DROP SCHEMA %s CASCADE", pgx.Identifier{schema}.Sanitize()))
 
+	// The migration system is additive and has no destructive down migration.
+	// Starting from this legacy shape verifies backward compatibility, then the
+	// second run verifies that the forward migration remains idempotent.
 	if err := createLegacyTenantTables(schema); err != nil {
 		t.Fatalf("create legacy tenant schema: %v", err)
 	}
@@ -78,6 +81,44 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 		if !columns[column] {
 			t.Errorf("site_configs is missing contract column %q", column)
 		}
+	}
+
+	siteRows, err := DB.Query(`
+		SELECT column_name FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'sites'
+	`, schema)
+	if err != nil {
+		t.Fatalf("query sites columns: %v", err)
+	}
+	defer siteRows.Close()
+	siteColumns := map[string]bool{}
+	for siteRows.Next() {
+		var column string
+		if err := siteRows.Scan(&column); err != nil {
+			t.Fatalf("scan sites column: %v", err)
+		}
+		siteColumns[column] = true
+	}
+	if err := siteRows.Err(); err != nil {
+		t.Fatalf("iterate sites columns: %v", err)
+	}
+	for _, column := range []string{"enrollment_token_hash", "enrollment_token_expires_at", "auto_adopt"} {
+		if !siteColumns[column] {
+			t.Errorf("sites is missing enrollment contract column %q", column)
+		}
+	}
+
+	var nonceTableExists bool
+	if err := DB.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.tables
+			WHERE table_schema = $1 AND table_name = 'device_enrollment_nonces'
+		)
+	`, schema).Scan(&nonceTableExists); err != nil {
+		t.Fatalf("query enrollment nonce table: %v", err)
+	}
+	if !nonceTableExists {
+		t.Fatal("device_enrollment_nonces table was not created")
 	}
 }
 

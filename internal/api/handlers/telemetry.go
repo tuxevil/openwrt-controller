@@ -59,7 +59,12 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Bad request: missing device_id", http.StatusBadRequest)
 		return
 	}
-	canonicalDeviceID := deviceID
+	canonicalDeviceID, err := normalizeEnrollmentDeviceID(deviceID)
+	if err != nil {
+		http.Error(w, "Bad request: invalid device_id", http.StatusBadRequest)
+		return
+	}
+	deviceID = canonicalDeviceID
 
 	providedKey := r.Header.Get("X-Site-Key")
 	providedToken := r.Header.Get("X-Device-Token")
@@ -70,6 +75,10 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 
 	if providedKey == "" && providedToken == "" {
 		http.Error(w, "Forbidden: missing device credentials", http.StatusForbidden)
+		return
+	}
+	if providedToken == "" && !allowLegacyProvision() {
+		http.Error(w, "Forbidden: X-Device-Token header is required", http.StatusForbidden)
 		return
 	}
 
@@ -92,7 +101,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
 		WHERE d.id = $1`, deviceID).Scan(&deviceSiteID, &siteKey, &storedDeviceToken)
 	if err == sql.ErrNoRows {
-		if !allowLegacyProvision() {
+		if providedToken != "" || !allowLegacyProvision() {
 			http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
 			return
 		}
@@ -132,17 +141,17 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Forbidden: device site is not configured", http.StatusForbidden)
 			return
 		}
-		if providedKey != "" && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
+		if providedToken == "" && providedKey != "" && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
 			return
 		}
 		if storedToken == "" {
-			if providedToken != "" || providedKey == "" {
+			if providedToken != "" || (!allowLegacyProvision() && providedKey == "") {
 				http.Error(w, "Forbidden: device token is not initialized", http.StatusForbidden)
 				return
 			}
 		}
-		if storedToken != "" && validateDeviceTelemetryToken(storedToken, providedToken) != nil && !allowLegacyProvision() {
+		if storedToken != "" && validateDeviceTelemetryToken(storedToken, providedToken) != nil {
 			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}

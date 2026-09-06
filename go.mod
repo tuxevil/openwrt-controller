@@ -3,6 +3,7 @@ module openwrt-controller
 go 1.26.0
 
 require (
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/uuid v1.3.1
 	github.com/gorilla/websocket v1.5.3

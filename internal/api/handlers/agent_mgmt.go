@@ -28,7 +28,7 @@ type AgentVersion struct {
 func signAgentContent(content string) (string, string, error) {
 	rawKey := os.Getenv("AGENT_UPDATE_SIGNING_KEY")
 	if rawKey == "" {
-		return "", "", nil
+		return "", "", fmt.Errorf("AGENT_UPDATE_SIGNING_KEY is not configured")
 	}
 	privateKey, err := base64.StdEncoding.DecodeString(rawKey)
 	if err != nil || len(privateKey) != ed25519.PrivateKeySize {
@@ -38,48 +38,70 @@ func signAgentContent(content string) (string, string, error) {
 	return base64.StdEncoding.EncodeToString(signature), "Ed25519", nil
 }
 
+// resolveAgentSite accepts the enrollment token only during first bootstrap.
+// Once an agent has a device token, update metadata and raw bytes are
+// authorized by that enrolled device and scoped to its site's artifact. The
+// site-key fallback is retained only for non-update legacy endpoints.
+func resolveAgentSite(r *http.Request) (string, string, error) {
+	if token := r.Header.Get("X-Device-Token"); token != "" {
+		schema, err := database.GetTenantSchemaForDeviceToken(token)
+		if err != nil {
+			return "", "", err
+		}
+		var siteID string
+		err = database.DB.QueryRow(
+			"SELECT site_id::text FROM "+schema+".devices WHERE device_token = $1 AND site_id IS NOT NULL",
+			token,
+		).Scan(&siteID)
+		if err != nil {
+			return "", "", err
+		}
+		return schema, siteID, nil
+	}
+	if token := r.Header.Get("X-Site-Enrollment-Token"); token != "" {
+		return database.ResolveDeviceEnrollmentToken(r.Context(), token)
+	}
+	if !allowLegacyProvision() {
+		return "", "", fmt.Errorf("legacy site-key agent access is disabled")
+	}
+	return resolveSiteByKey(r.Header.Get("X-Site-Key"))
+}
+
 func verifyAgentSignature(content, signature string, publicKey ed25519.PublicKey) bool {
 	decoded, err := base64.StdEncoding.DecodeString(signature)
 	return err == nil && len(publicKey) == ed25519.PublicKeySize && ed25519.Verify(publicKey, []byte(content), decoded)
 }
 
 // resolveSiteByKey looks up a site by its api_key header value.
-// Returns the site UUID or an empty string if not found.
-func resolveSiteByKey(siteKey string) (string, error) {
+// Returns the tenant schema and site UUID or an empty value if not found.
+func resolveSiteByKey(siteKey string) (string, string, error) {
 	schema, err := database.GetTenantSchemaForSiteKey(siteKey)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var siteID string
 	err = database.DB.QueryRow(
 		"SELECT id FROM "+schema+".sites WHERE api_key = $1", siteKey,
 	).Scan(&siteID)
-	return siteID, err
+	return schema, siteID, err
 }
 
 // GetLatestAgentHandler returns the latest active agent version metadata for
-// the site identified by the X-Site-Key header. Device-facing, no JWT needed.
+// an enrolling or already-enrolled device. Device-facing, no JWT needed.
 func GetLatestAgentHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	siteKey := r.Header.Get("X-Site-Key")
-	if siteKey == "" {
-		http.Error(w, "Forbidden: missing X-Site-Key", http.StatusForbidden)
+	if r.Header.Get("X-Device-Token") == "" && r.Header.Get("X-Site-Enrollment-Token") == "" {
+		http.Error(w, "Forbidden: enrollment or device credentials required for agent updates", http.StatusForbidden)
 		return
 	}
 
-	siteID, err := resolveSiteByKey(siteKey)
+	tenantSchema, siteID, err := resolveAgentSite(r)
 	if err != nil || siteID == "" {
-		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
-		return
-	}
-
-	tenantSchema, err := database.GetTenantSchemaForSiteKey(siteKey)
-	if err != nil {
-		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+		http.Error(w, "Forbidden: invalid device credentials", http.StatusForbidden)
 		return
 	}
 
@@ -102,33 +124,27 @@ func GetLatestAgentHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(version)
 }
 
-// GetLatestAgentRawHandler returns the raw script content for the site
-// identified by the X-Site-Key header. Device-facing, no JWT needed.
+// GetLatestAgentRawHandler returns the raw script content for an enrolling or
+// already-enrolled device. Device-facing, no JWT needed.
 func GetLatestAgentRawHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	siteKey := r.Header.Get("X-Site-Key")
-	if siteKey == "" {
-		http.Error(w, "Forbidden: missing X-Site-Key", http.StatusForbidden)
+	if r.Header.Get("X-Device-Token") == "" && r.Header.Get("X-Site-Enrollment-Token") == "" {
+		http.Error(w, "Forbidden: enrollment or device credentials required for agent updates", http.StatusForbidden)
 		return
 	}
 
-	siteID, err := resolveSiteByKey(siteKey)
+	tenantSchema, siteID, err := resolveAgentSite(r)
 	if err != nil || siteID == "" {
-		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
-		return
-	}
-
-	tenantSchema, err := database.GetTenantSchemaForSiteKey(siteKey)
-	if err != nil {
-		http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
+		http.Error(w, "Forbidden: invalid device credentials", http.StatusForbidden)
 		return
 	}
 
@@ -145,6 +161,7 @@ func GetLatestAgentRawHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "text/plain")
 	w.Write([]byte(scriptContent))
 }
