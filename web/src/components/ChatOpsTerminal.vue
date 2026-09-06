@@ -1,6 +1,9 @@
 <script setup>
-import { ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { computed, ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { useRoute } from 'vue-router'
 import api from '../services/api'
+
+const route = useRoute()
 
 const props = defineProps({
   modelValue: {
@@ -17,6 +20,10 @@ const history = ref([
 ])
 const isProcessing = ref(false)
 const conversationId = ref(localStorage.getItem('sentinel_conversation_id') || '')
+const activeSiteId = computed(() => {
+  const siteID = route?.params?.site_id
+  return typeof siteID === 'string' ? siteID : ''
+})
 
 function restoreConversation(historyItems) {
   if (!historyItems || historyItems.length === 0) return
@@ -110,7 +117,9 @@ async function executeCommand() {
 
   try {
     const id = await ensureConversation()
-    let res = await api.client.post(`/sentinel/conversations/${id}/messages?async=true`, { query })
+    const payload = { query }
+    if (activeSiteId.value) payload.site_id = activeSiteId.value
+    let res = await api.client.post(`/sentinel/conversations/${id}/messages?async=true`, payload)
     if (res.status === 202) {
       res = await waitForSentinelRun(res.data.id)
     }
@@ -147,17 +156,23 @@ function scrollBottom() {
 function renderTable(rows) {
   if (!rows || rows.length === 0) return ''
   const keys = Object.keys(rows[0])
-  
+
+  const formatValue = (value) => {
+    if (value === null || value === undefined) return ''
+    if (typeof value === 'object') return JSON.stringify(value)
+    return String(value)
+  }
+
   // Custom widths
-  const colWidths = keys.map(k => Math.max(k.length, ...rows.map(r => String(r[k] || '').length)))
-  
+  const colWidths = keys.map(k => Math.max(k.length, ...rows.map(r => formatValue(r[k]).length)))
+
   const header = keys.map((k, i) => k.padEnd(colWidths[i])).join(' | ')
   const divider = keys.map((_, i) => '-'.repeat(colWidths[i])).join('-+-')
-  
-  const lines = rows.map(r => 
-    keys.map((k, i) => String(r[k] || '').padEnd(colWidths[i])).join(' | ')
+
+  const lines = rows.map(r =>
+    keys.map((k, i) => formatValue(r[k]).padEnd(colWidths[i])).join(' | ')
   )
-  
+
   return [header, divider, ...lines].join('\n')
 }
 </script>
@@ -172,7 +187,12 @@ function renderTable(rows) {
       
       <!-- Top Bar -->
       <div class="flex items-center justify-between px-4 py-2 border-b border-neon-cyan/30 bg-neon-cyan/10">
-        <div class="text-xs text-neon-cyan tracking-widest font-bold">/// SENTINEL_OPERATOR_CONSOLE</div>
+        <div>
+          <div class="text-xs text-neon-cyan tracking-widest font-bold">/// SENTINEL_OPERATOR_CONSOLE</div>
+          <div class="text-[10px] text-neon-cyan/60 tracking-widest mt-1">
+            SITE_CONTEXT: {{ activeSiteId || 'FLEET_SCOPE' }}
+          </div>
+        </div>
         <button type="button" aria-label="Close Sentinel Operator chat" @click="close" class="text-gray-500 hover:text-red-400">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>

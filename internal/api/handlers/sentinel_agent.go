@@ -19,7 +19,8 @@ type sentinelConversationRequest struct {
 }
 
 type sentinelMessageRequest struct {
-	Query string `json:"query"`
+	Query  string `json:"query"`
+	SiteID string `json:"site_id"`
 }
 
 type sentinelNoteRequest struct {
@@ -50,6 +51,17 @@ func writeSentinelError(w http.ResponseWriter, status int, code, message string)
 func parseSentinelID(w http.ResponseWriter, raw string) bool {
 	if _, err := uuid.Parse(raw); err != nil {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_ID", "invalid Sentinel resource id")
+		return false
+	}
+	return true
+}
+
+func parseOptionalSentinelSiteID(w http.ResponseWriter, raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	if _, err := uuid.Parse(raw); err != nil {
+		writeSentinelError(w, http.StatusBadRequest, "INVALID_SITE_ID", "invalid Sentinel site_id")
 		return false
 	}
 	return true
@@ -113,12 +125,15 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_JSON", "invalid Sentinel message payload")
 		return
 	}
+	if !parseOptionalSentinelSiteID(w, req.SiteID) {
+		return
+	}
 	if strings.TrimSpace(req.Query) == "" || len(req.Query) > 8000 {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_QUERY", "query must contain between 1 and 8000 characters")
 		return
 	}
 	if r.URL.Query().Get("async") == "true" {
-		run, err := services.QueueSentinelMessage(sentinelSchemaFromRequest(r), conversationID, req.Query, GetUsernameFromReq(r))
+		run, err := services.QueueSentinelMessageForSite(sentinelSchemaFromRequest(r), conversationID, req.Query, req.SiteID, GetUsernameFromReq(r))
 		if errors.Is(err, sql.ErrNoRows) {
 			writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation not found")
 			return
@@ -131,7 +146,7 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 		writeSentinelJSON(w, http.StatusAccepted, run)
 		return
 	}
-	result, proposal, err := services.ProcessSentinelMessage(sentinelSchemaFromRequest(r), conversationID, req.Query, GetUsernameFromReq(r))
+	result, proposal, err := services.ProcessSentinelMessageForSite(sentinelSchemaFromRequest(r), conversationID, req.Query, req.SiteID, GetUsernameFromReq(r))
 	if errors.Is(err, sql.ErrNoRows) {
 		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation not found")
 		return
@@ -142,6 +157,7 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSentinelJSON(w, http.StatusOK, map[string]interface{}{
 		"conversation_id": conversationID,
+		"site_id":         req.SiteID,
 		"answer":          result.Answer,
 		"evidence":        result.Evidence,
 		"proposal":        proposal,

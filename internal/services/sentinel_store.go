@@ -82,6 +82,7 @@ type SentinelProposal struct {
 type SentinelRun struct {
 	ID             string            `json:"id"`
 	ConversationID string            `json:"conversation_id"`
+	SiteID         string            `json:"site_id,omitempty"`
 	Query          string            `json:"query"`
 	Status         string            `json:"status"`
 	Answer         string            `json:"answer,omitempty"`
@@ -97,6 +98,10 @@ type SentinelRun struct {
 const SentinelHistoryRetentionDays = 90
 
 func QueueSentinelMessage(schema, conversationID, query, createdBy string) (SentinelRun, error) {
+	return QueueSentinelMessageForSite(schema, conversationID, query, "", createdBy)
+}
+
+func QueueSentinelMessageForSite(schema, conversationID, query, siteID, createdBy string) (SentinelRun, error) {
 	safeSchema, err := sentinelSchema(schema)
 	if err != nil {
 		return SentinelRun{}, err
@@ -111,10 +116,10 @@ func QueueSentinelMessage(schema, conversationID, query, createdBy string) (Sent
 		return SentinelRun{}, err
 	}
 	var run SentinelRun
-	err = database.DB.QueryRow(fmt.Sprintf(`INSERT INTO %s.sentinel_runs (conversation_id, query, created_by)
-        VALUES ($1, $2, $3) RETURNING id::text, conversation_id::text, query, status, COALESCE(answer,''), evidence,
-        COALESCE(proposal_id::text,''), COALESCE(error,''), created_by, created_at, updated_at`, safeSchema), conversationID, query, createdBy).
-		Scan(&run.ID, &run.ConversationID, &run.Query, &run.Status, &run.Answer, &run.Evidence, &run.ProposalID, &run.Error, &run.CreatedBy, &run.CreatedAt, &run.UpdatedAt)
+	err = database.DB.QueryRow(fmt.Sprintf(`INSERT INTO %s.sentinel_runs (conversation_id, site_id, query, created_by)
+		VALUES ($1, NULLIF($2, '')::uuid, $3, $4) RETURNING id::text, conversation_id::text, COALESCE(site_id::text,''), query, status, COALESCE(answer,''), evidence,
+		COALESCE(proposal_id::text,''), COALESCE(error,''), created_by, created_at, updated_at`, safeSchema), conversationID, siteID, query, createdBy).
+		Scan(&run.ID, &run.ConversationID, &run.SiteID, &run.Query, &run.Status, &run.Answer, &run.Evidence, &run.ProposalID, &run.Error, &run.CreatedBy, &run.CreatedAt, &run.UpdatedAt)
 	return run, err
 }
 
@@ -127,10 +132,10 @@ func RunSentinelMessage(schema, runID string) {
 		logSentinelInvestigationError(runID, err)
 		return
 	}
-	var conversationID, query string
+	var conversationID, siteID, query string
 	var createdBy string
 	err = database.DB.QueryRow(fmt.Sprintf(`UPDATE %s.sentinel_runs SET status = 'RUNNING', updated_at = CURRENT_TIMESTAMP
-        WHERE id = $1 AND status = 'QUEUED' RETURNING conversation_id::text, query, created_by`, safeSchema), runID).Scan(&conversationID, &query, &createdBy)
+		WHERE id = $1 AND status = 'QUEUED' RETURNING conversation_id::text, COALESCE(site_id::text,''), query, created_by`, safeSchema), runID).Scan(&conversationID, &siteID, &query, &createdBy)
 	if err == sql.ErrNoRows {
 		return
 	}
@@ -143,7 +148,7 @@ func RunSentinelMessage(schema, runID string) {
 		failSentinelRun(safeSchema, runID, err)
 		return
 	}
-	result, err := runSentinelInvestigation(schema, history, query)
+	result, err := runSentinelInvestigationForSite(schema, history, query, siteID)
 	if err != nil {
 		failSentinelRun(safeSchema, runID, err)
 		return
@@ -185,10 +190,10 @@ func GetSentinelRun(schema, runID string) (SentinelRun, error) {
 		return SentinelRun{}, err
 	}
 	var run SentinelRun
-	err = database.DB.QueryRow(fmt.Sprintf(`SELECT id::text, conversation_id::text, query, status, COALESCE(answer,''), evidence,
+	err = database.DB.QueryRow(fmt.Sprintf(`SELECT id::text, conversation_id::text, COALESCE(site_id::text,''), query, status, COALESCE(answer,''), evidence,
         COALESCE(proposal_id::text,''), COALESCE(error,''), created_by, created_at, updated_at
         FROM %s.sentinel_runs WHERE id = $1`, safeSchema), runID).
-		Scan(&run.ID, &run.ConversationID, &run.Query, &run.Status, &run.Answer, &run.Evidence, &run.ProposalID, &run.Error, &run.CreatedBy, &run.CreatedAt, &run.UpdatedAt)
+		Scan(&run.ID, &run.ConversationID, &run.SiteID, &run.Query, &run.Status, &run.Answer, &run.Evidence, &run.ProposalID, &run.Error, &run.CreatedBy, &run.CreatedAt, &run.UpdatedAt)
 	run.Answer = redactSentinelSecrets(run.Answer)
 	if err == nil && run.ProposalID != "" {
 		if proposal, proposalErr := GetSentinelProposal(schema, run.ProposalID); proposalErr == nil {
@@ -253,6 +258,10 @@ func SweepSentinelHistory(ctx context.Context, days int) (int64, error) {
 // read-only investigation, persists the answer, and records any proposal. It
 // intentionally keeps execution separate from proposal creation.
 func ProcessSentinelMessage(schema, conversationID, query, createdBy string) (SentinelInvestigationResult, *SentinelProposal, error) {
+	return ProcessSentinelMessageForSite(schema, conversationID, query, "", createdBy)
+}
+
+func ProcessSentinelMessageForSite(schema, conversationID, query, siteID, createdBy string) (SentinelInvestigationResult, *SentinelProposal, error) {
 	if strings.TrimSpace(query) == "" || len(query) > 8000 {
 		return SentinelInvestigationResult{}, nil, fmt.Errorf("query must contain between 1 and 8000 characters")
 	}
@@ -266,7 +275,7 @@ func ProcessSentinelMessage(schema, conversationID, query, createdBy string) (Se
 	if err := appendSentinelMessage(schema, conversationID, "user", query, nil); err != nil {
 		return SentinelInvestigationResult{}, nil, err
 	}
-	result, err := runSentinelInvestigation(schema, history, query)
+	result, err := runSentinelInvestigationForSite(schema, history, query, siteID)
 	if err != nil {
 		return result, nil, err
 	}
@@ -454,14 +463,14 @@ func InvestigateSentinelCase(schema, caseID string) {
 		return
 	}
 	_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_cases SET status = 'INVESTIGATING', updated_at = CURRENT_TIMESTAMP WHERE id = $1`, safeSchema), caseID)
-	var title, summary string
+	var siteID, title, summary string
 	var evidence []byte
-	if err := database.DB.QueryRow(fmt.Sprintf(`SELECT title, summary, evidence FROM %s.sentinel_cases WHERE id = $1`, safeSchema), caseID).Scan(&title, &summary, &evidence); err != nil {
+	if err := database.DB.QueryRow(fmt.Sprintf(`SELECT COALESCE(site_id::text,''), title, summary, evidence FROM %s.sentinel_cases WHERE id = $1`, safeSchema), caseID).Scan(&siteID, &title, &summary, &evidence); err != nil {
 		logSentinelInvestigationError(caseID, err)
 		return
 	}
 	query := fmt.Sprintf("Investigate proactive case %s. Event title: %s\nInitial summary: %s\nEvidence: %s", caseID, title, summary, redactSentinelSecrets(string(evidence)))
-	result, err := runSentinelInvestigation(schema, nil, query)
+	result, err := runSentinelInvestigationForSite(schema, nil, query, siteID)
 	if err != nil {
 		_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2`, safeSchema), "Investigation failed: "+err.Error(), caseID)
 		logSentinelInvestigationError(caseID, err)
