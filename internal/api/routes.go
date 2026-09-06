@@ -64,6 +64,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/sentinel/conversations", middleware.WithAuth(handlers.CreateSentinelConversationHandler))
 	mux.HandleFunc("GET /api/sentinel/conversations/{conversation_id}", middleware.WithAuth(handlers.GetSentinelConversationHandler))
 	mux.HandleFunc("POST /api/sentinel/conversations/{conversation_id}/messages", middleware.WithAuth(handlers.PostSentinelMessageHandler))
+	mux.HandleFunc("GET /api/sentinel/runs/{run_id}", middleware.WithAuth(handlers.GetSentinelRunHandler))
 	mux.HandleFunc("GET /api/sentinel/cases", middleware.WithAuth(handlers.ListSentinelCasesHandler))
 	mux.HandleFunc("GET /api/sentinel/cases/{case_id}", middleware.WithAuth(handlers.GetSentinelCaseHandler))
 	mux.HandleFunc("GET /api/sentinel/notes", middleware.WithAuth(handlers.ListSentinelNotesHandler))

@@ -117,6 +117,20 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_QUERY", "query must contain between 1 and 8000 characters")
 		return
 	}
+	if r.URL.Query().Get("async") == "true" {
+		run, err := services.QueueSentinelMessage(sentinelSchemaFromRequest(r), conversationID, req.Query, GetUsernameFromReq(r))
+		if errors.Is(err, sql.ErrNoRows) {
+			writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation not found")
+			return
+		}
+		if err != nil {
+			writeSentinelError(w, http.StatusBadRequest, "QUEUE_FAILED", "could not queue Sentinel investigation")
+			return
+		}
+		go services.RunSentinelMessage(sentinelSchemaFromRequest(r), run.ID)
+		writeSentinelJSON(w, http.StatusAccepted, run)
+		return
+	}
 	result, proposal, err := services.ProcessSentinelMessage(sentinelSchemaFromRequest(r), conversationID, req.Query, GetUsernameFromReq(r))
 	if errors.Is(err, sql.ErrNoRows) {
 		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation not found")
@@ -136,6 +150,23 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 		"llm_model":       result.LLMModel,
 		"tokens_used":     result.TokensUsed,
 	})
+}
+
+func GetSentinelRunHandler(w http.ResponseWriter, r *http.Request) {
+	runID := r.PathValue("run_id")
+	if !parseSentinelID(w, runID) {
+		return
+	}
+	run, err := services.GetSentinelRun(sentinelSchemaFromRequest(r), runID)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel run not found")
+		return
+	}
+	if err != nil {
+		writeSentinelError(w, http.StatusInternalServerError, "GET_FAILED", "could not load Sentinel run")
+		return
+	}
+	writeSentinelJSON(w, http.StatusOK, run)
 }
 
 func ListSentinelCasesHandler(w http.ResponseWriter, r *http.Request) {

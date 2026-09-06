@@ -51,4 +51,9 @@ func sweepOnce() {
 	if total > 0 {
 		log.Printf("[LOG_RETENTION] purged %d system_logs rows older than %d days across %d tenant(s)", total, LogRetentionDays, len(out))
 	}
+	if sentinelTotal, err := SweepSentinelHistory(ctx, SentinelHistoryRetentionDays); err != nil {
+		log.Printf("[SENTINEL_RETENTION] sweep failed: %v", err)
+	} else if sentinelTotal > 0 {
+		log.Printf("[SENTINEL_RETENTION] purged %d historical rows older than %d days", sentinelTotal, SentinelHistoryRetentionDays)
+	}
 }

@@ -79,6 +79,176 @@ type SentinelProposal struct {
 	ExpiresAt      time.Time       `json:"expires_at"`
 }
 
+type SentinelRun struct {
+	ID             string            `json:"id"`
+	ConversationID string            `json:"conversation_id"`
+	Query          string            `json:"query"`
+	Status         string            `json:"status"`
+	Answer         string            `json:"answer,omitempty"`
+	Evidence       json.RawMessage   `json:"evidence,omitempty"`
+	ProposalID     string            `json:"proposal_id,omitempty"`
+	Proposal       *SentinelProposal `json:"proposal,omitempty"`
+	Error          string            `json:"error,omitempty"`
+	CreatedBy      string            `json:"created_by"`
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+}
+
+const SentinelHistoryRetentionDays = 90
+
+func QueueSentinelMessage(schema, conversationID, query, createdBy string) (SentinelRun, error) {
+	safeSchema, err := sentinelSchema(schema)
+	if err != nil {
+		return SentinelRun{}, err
+	}
+	if strings.TrimSpace(query) == "" || len(query) > 8000 {
+		return SentinelRun{}, fmt.Errorf("query must contain between 1 and 8000 characters")
+	}
+	if _, err := GetSentinelConversation(schema, conversationID); err != nil {
+		return SentinelRun{}, err
+	}
+	if err := appendSentinelMessage(schema, conversationID, "user", query, nil); err != nil {
+		return SentinelRun{}, err
+	}
+	var run SentinelRun
+	err = database.DB.QueryRow(fmt.Sprintf(`INSERT INTO %s.sentinel_runs (conversation_id, query, created_by)
+        VALUES ($1, $2, $3) RETURNING id::text, conversation_id::text, query, status, COALESCE(answer,''), evidence,
+        COALESCE(proposal_id::text,''), COALESCE(error,''), created_by, created_at, updated_at`, safeSchema), conversationID, query, createdBy).
+		Scan(&run.ID, &run.ConversationID, &run.Query, &run.Status, &run.Answer, &run.Evidence, &run.ProposalID, &run.Error, &run.CreatedBy, &run.CreatedAt, &run.UpdatedAt)
+	return run, err
+}
+
+func RunSentinelMessage(schema, runID string) {
+	if database.DB == nil {
+		return
+	}
+	safeSchema, err := sentinelSchema(schema)
+	if err != nil {
+		logSentinelInvestigationError(runID, err)
+		return
+	}
+	var conversationID, query string
+	var createdBy string
+	err = database.DB.QueryRow(fmt.Sprintf(`UPDATE %s.sentinel_runs SET status = 'RUNNING', updated_at = CURRENT_TIMESTAMP
+        WHERE id = $1 AND status = 'QUEUED' RETURNING conversation_id::text, query, created_by`, safeSchema), runID).Scan(&conversationID, &query, &createdBy)
+	if err == sql.ErrNoRows {
+		return
+	}
+	if err != nil {
+		logSentinelInvestigationError(runID, err)
+		return
+	}
+	history, err := loadSentinelHistory(schema, conversationID)
+	if err != nil {
+		failSentinelRun(safeSchema, runID, err)
+		return
+	}
+	result, err := runSentinelInvestigation(schema, history, query)
+	if err != nil {
+		failSentinelRun(safeSchema, runID, err)
+		return
+	}
+	metadata, _ := json.Marshal(map[string]interface{}{
+		"evidence": result.Evidence, "tool_calls": result.ToolCalls, "rounds": result.Rounds,
+		"llm_model": result.LLMModel, "tokens_used": result.TokensUsed,
+	})
+	if err := appendSentinelMessage(schema, conversationID, "assistant", result.Answer, metadata); err != nil {
+		failSentinelRun(safeSchema, runID, err)
+		return
+	}
+	proposalID := ""
+	if result.Proposal != nil {
+		proposal, proposalErr := CreateSentinelProposal(schema, conversationID, "", createdBy, result.Proposal)
+		if proposalErr != nil {
+			failSentinelRun(safeSchema, runID, proposalErr)
+			return
+		}
+		proposalID = proposal.ID
+	}
+	evidence, _ := json.Marshal(result.Evidence)
+	_, err = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_runs SET status = 'COMPLETED', answer = $1,
+		evidence = $2, proposal_id = NULLIF($3, '')::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $4`, safeSchema), result.Answer, evidence, proposalID, runID)
+	if err != nil {
+		logSentinelInvestigationError(runID, err)
+	}
+}
+
+func failSentinelRun(safeSchema, runID string, investigationErr error) {
+	_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_runs SET status = 'FAILED', error = $1,
+        updated_at = CURRENT_TIMESTAMP WHERE id = $2`, safeSchema), investigationErr.Error(), runID)
+	logSentinelInvestigationError(runID, investigationErr)
+}
+
+func GetSentinelRun(schema, runID string) (SentinelRun, error) {
+	safeSchema, err := sentinelSchema(schema)
+	if err != nil {
+		return SentinelRun{}, err
+	}
+	var run SentinelRun
+	err = database.DB.QueryRow(fmt.Sprintf(`SELECT id::text, conversation_id::text, query, status, COALESCE(answer,''), evidence,
+        COALESCE(proposal_id::text,''), COALESCE(error,''), created_by, created_at, updated_at
+        FROM %s.sentinel_runs WHERE id = $1`, safeSchema), runID).
+		Scan(&run.ID, &run.ConversationID, &run.Query, &run.Status, &run.Answer, &run.Evidence, &run.ProposalID, &run.Error, &run.CreatedBy, &run.CreatedAt, &run.UpdatedAt)
+	run.Answer = redactSentinelSecrets(run.Answer)
+	if err == nil && run.ProposalID != "" {
+		if proposal, proposalErr := GetSentinelProposal(schema, run.ProposalID); proposalErr == nil {
+			run.Proposal = &proposal
+		}
+	}
+	return run, err
+}
+
+// SweepSentinelHistory removes completed conversational history after the
+// retention window while preserving unresolved cases and infrastructure notes.
+func SweepSentinelHistory(ctx context.Context, days int) (int64, error) {
+	if days < 1 {
+		days = SentinelHistoryRetentionDays
+	}
+	if database.DB == nil {
+		return 0, nil
+	}
+	tenants, err := ListTenants()
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().Add(-time.Duration(days) * 24 * time.Hour)
+	var total int64
+	for _, tenant := range tenants {
+		schema, err := database.SafeTenantSchema(tenant.SchemaAlias)
+		if err != nil {
+			continue
+		}
+		result, err := database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_messages m USING %s.sentinel_conversations c
+            WHERE m.conversation_id = c.id AND c.updated_at < $1`, schema, schema), cutoff)
+		if err != nil {
+			return total, err
+		}
+		count, _ := result.RowsAffected()
+		total += count
+		result, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_conversations WHERE updated_at < $1`, schema), cutoff)
+		if err != nil {
+			return total, err
+		}
+		count, _ = result.RowsAffected()
+		total += count
+		result, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_proposals
+            WHERE created_at < $1 AND status <> 'PENDING'`, schema), cutoff)
+		if err != nil {
+			return total, err
+		}
+		count, _ = result.RowsAffected()
+		total += count
+		result, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases
+            WHERE resolved_at IS NOT NULL AND resolved_at < $1`, schema), cutoff)
+		if err != nil {
+			return total, err
+		}
+		count, _ = result.RowsAffected()
+		total += count
+	}
+	return total, nil
+}
+
 // ProcessSentinelMessage persists the operator message, runs the bounded
 // read-only investigation, persists the answer, and records any proposal. It
 // intentionally keeps execution separate from proposal creation.
@@ -513,6 +683,19 @@ func ListSentinelProposals(schema, status string, limit int) ([]SentinelProposal
 		result = append(result, item)
 	}
 	return result, rows.Err()
+}
+
+func GetSentinelProposal(schema, proposalID string) (SentinelProposal, error) {
+	safeSchema, err := sentinelSchema(schema)
+	if err != nil {
+		return SentinelProposal{}, err
+	}
+	var item SentinelProposal
+	err = database.DB.QueryRow(fmt.Sprintf(`SELECT id::text, COALESCE(case_id::text,''), COALESCE(conversation_id::text,''), device_id, config, summary, plan, status,
+        COALESCE(blocked_reason,''), created_by, COALESCE(approved_by,''), approved_at, created_at, expires_at
+        FROM %s.sentinel_proposals WHERE id = $1`, safeSchema), proposalID).
+		Scan(&item.ID, &item.CaseID, &item.ConversationID, &item.DeviceID, &item.Config, &item.Summary, &item.Plan, &item.Status, &item.BlockedReason, &item.CreatedBy, &item.ApprovedBy, &item.ApprovedAt, &item.CreatedAt, &item.ExpiresAt)
+	return item, err
 }
 
 func ApproveSentinelProposal(ctx context.Context, schema, proposalID, username string) error {

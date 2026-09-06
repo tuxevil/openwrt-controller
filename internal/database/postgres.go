@@ -410,6 +410,22 @@ func createTenantTables(schema string) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_sentinel_messages_conversation ON sentinel_messages(conversation_id, created_at);
 
+	CREATE TABLE IF NOT EXISTS sentinel_runs (
+		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+		conversation_id UUID NOT NULL REFERENCES sentinel_conversations(id) ON DELETE CASCADE,
+		query TEXT NOT NULL,
+		status VARCHAR(20) NOT NULL DEFAULT 'QUEUED',
+		answer TEXT,
+		evidence JSONB NOT NULL DEFAULT '[]',
+		proposal_id UUID,
+		error TEXT,
+		created_by VARCHAR(100) NOT NULL DEFAULT '',
+		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+		CHECK (status IN ('QUEUED','RUNNING','COMPLETED','FAILED'))
+	);
+	CREATE INDEX IF NOT EXISTS idx_sentinel_runs_conversation ON sentinel_runs(conversation_id, created_at DESC);
+
 	CREATE TABLE IF NOT EXISTS sentinel_cases (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		fingerprint VARCHAR(512) NOT NULL,
@@ -681,6 +697,12 @@ func createTenantTables(schema string) error {
 			role VARCHAR(20) NOT NULL, content TEXT NOT NULL, metadata JSONB NOT NULL DEFAULT '{}',
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP)`, quotedSchema, quotedSchema),
 		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_messages_conversation ON %s.sentinel_messages(conversation_id, created_at)", quotedSchema),
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_runs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(), conversation_id UUID NOT NULL REFERENCES %s.sentinel_conversations(id) ON DELETE CASCADE,
+			query TEXT NOT NULL, status VARCHAR(20) NOT NULL DEFAULT 'QUEUED', answer TEXT, evidence JSONB NOT NULL DEFAULT '[]',
+			proposal_id UUID, error TEXT, created_by VARCHAR(100) NOT NULL DEFAULT '', created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, CHECK (status IN ('QUEUED','RUNNING','COMPLETED','FAILED')) )`, quotedSchema, quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_runs_conversation ON %s.sentinel_runs(conversation_id, created_at DESC)", quotedSchema),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_cases (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(), fingerprint VARCHAR(512) NOT NULL, source VARCHAR(80) NOT NULL,
 			site_id UUID REFERENCES %s.sites(id) ON DELETE SET NULL, device_id VARCHAR(50) REFERENCES %s.devices(id) ON DELETE SET NULL,

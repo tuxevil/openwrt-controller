@@ -48,6 +48,27 @@ async function ensureConversation() {
   return conversationId.value
 }
 
+async function waitForSentinelRun(runId) {
+  for (let attempt = 0; attempt < 180; attempt += 1) {
+    const res = await api.client.get(`/sentinel/runs/${runId}`)
+    const run = res.data
+    if (run.status === 'COMPLETED') {
+      return {
+        data: {
+          answer: run.answer,
+          evidence: run.evidence,
+          proposal: run.proposal
+        }
+      }
+    }
+    if (run.status === 'FAILED') {
+      throw new Error(run.error || 'Sentinel investigation failed')
+    }
+    await new Promise(resolve => setTimeout(resolve, 1000))
+  }
+  throw new Error('Sentinel investigation timed out')
+}
+
 function close() {
   emit('update:modelValue', false)
   command.value = ''
@@ -89,7 +110,10 @@ async function executeCommand() {
 
   try {
     const id = await ensureConversation()
-    const res = await api.client.post(`/sentinel/conversations/${id}/messages`, { query })
+    let res = await api.client.post(`/sentinel/conversations/${id}/messages?async=true`, { query })
+    if (res.status === 202) {
+      res = await waitForSentinelRun(res.data.id)
+    }
     const { answer, evidence, proposal } = res.data
 
     history.value.push({ type: 'oracle_summary', text: answer })
