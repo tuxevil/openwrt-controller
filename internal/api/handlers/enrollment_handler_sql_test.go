@@ -172,3 +172,47 @@ func TestTelemetryRejectsUnknownDeviceTokenWithoutCreatingDevice(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestResolveDeviceTenantFallsBackFromStaleTokenInLegacyMode(t *testing.T) {
+	t.Setenv("ALLOW_LEGACY_PROVISION", "true")
+	mock := mockEnrollmentHandlerDB(t)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT schema_alias FROM tenants WHERE is_active = true")).
+		WillReturnRows(sqlmock.NewRows([]string{"schema_alias"}).AddRow("demo"))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS (SELECT 1 FROM "tenant_demo"."devices" WHERE device_token = $1)`)).
+		WithArgs("stale-device-token").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT schema_alias FROM tenants WHERE is_active = true")).
+		WillReturnRows(sqlmock.NewRows([]string{"schema_alias"}).AddRow("demo"))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COUNT(*) FROM "tenant_demo"."sites" WHERE api_key = $1`)).
+		WithArgs("site-key").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+
+	schema, effectiveToken, err := resolveDeviceTenant("stale-device-token", "site-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if schema != "tenant_demo" || effectiveToken != "" {
+		t.Fatalf("legacy tenant resolution = schema %q, token %q; want site-key tenant and empty effective token", schema, effectiveToken)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestResolveDeviceTenantDoesNotFallbackFromTokenInStrictMode(t *testing.T) {
+	t.Setenv("ALLOW_LEGACY_PROVISION", "false")
+	mock := mockEnrollmentHandlerDB(t)
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT schema_alias FROM tenants WHERE is_active = true")).
+		WillReturnRows(sqlmock.NewRows([]string{"schema_alias"}).AddRow("demo"))
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT EXISTS (SELECT 1 FROM "tenant_demo"."devices" WHERE device_token = $1)`)).
+		WithArgs("stale-device-token").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
+
+	schema, effectiveToken, err := resolveDeviceTenant("stale-device-token", "site-key")
+	if err == nil || schema != "" || effectiveToken != "stale-device-token" {
+		t.Fatalf("strict tenant resolution = schema %q, token %q, error %v; want token failure without site-key fallback", schema, effectiveToken, err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

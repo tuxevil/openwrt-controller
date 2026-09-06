@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -36,6 +35,13 @@ func validateDeviceTelemetryToken(storedToken, providedToken string) error {
 		return fmt.Errorf("invalid device token")
 	}
 	return nil
+}
+
+func validateDeviceTelemetryTokenForMode(storedToken, providedToken string, legacy bool) error {
+	if storedToken != "" && providedToken == "" && legacy {
+		return nil
+	}
+	return validateDeviceTelemetryToken(storedToken, providedToken)
 }
 
 func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
@@ -82,12 +88,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantSchema := ""
-	if providedToken != "" {
-		tenantSchema, err = database.GetTenantSchemaForDeviceToken(providedToken)
-	} else {
-		tenantSchema, err = database.GetTenantSchemaForSiteKey(providedKey)
-	}
+	tenantSchema, authToken, err := resolveDeviceTenant(providedToken, providedKey)
 	if err != nil {
 		http.Error(w, "Forbidden: invalid device credentials", http.StatusForbidden)
 		return
@@ -96,37 +97,46 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	var siteKey *string
 	var storedDeviceToken *string
 	var deviceSiteID *string
+	var storedDeviceID string
 	err = database.Tx(r.Context()).QueryRow(`
-		SELECT d.site_id, s.api_key, d.device_token FROM `+tenantSchema+`.devices d
+		SELECT d.id, d.site_id, s.api_key, d.device_token FROM `+tenantSchema+`.devices d
 		LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
-		WHERE d.id = $1`, deviceID).Scan(&deviceSiteID, &siteKey, &storedDeviceToken)
+		WHERE LOWER(d.id) = LOWER($1)`, deviceID).Scan(&storedDeviceID, &deviceSiteID, &siteKey, &storedDeviceToken)
 	if err == sql.ErrNoRows {
-		if providedToken != "" || !allowLegacyProvision() {
+		if authToken != "" {
+			err = database.Tx(r.Context()).QueryRow(`
+				SELECT d.id, d.site_id, s.api_key, d.device_token FROM `+tenantSchema+`.devices d
+				LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
+				WHERE d.device_token = $1`, authToken).Scan(&storedDeviceID, &deviceSiteID, &siteKey, &storedDeviceToken)
+		}
+		if err == sql.ErrNoRows && (authToken != "" || !allowLegacyProvision()) {
 			http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
 			return
 		}
-		remoteIP := r.RemoteAddr
-		if host, _, splitErr := net.SplitHostPort(r.RemoteAddr); splitErr == nil {
-			remoteIP = host
+		if err == sql.ErrNoRows {
+			remoteIP := requestRemoteIP(r.RemoteAddr)
+			var legacyID string
+			legacyErr := database.Tx(r.Context()).QueryRow(`
+				SELECT id FROM `+tenantSchema+`.devices
+				WHERE site_id IS NOT NULL AND last_ip = $1
+				ORDER BY last_seen_at DESC NULLS LAST LIMIT 1`, remoteIP).Scan(&legacyID)
+			if legacyErr != nil {
+				http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
+				return
+			}
+			canonicalDeviceID = legacyID
+			err = database.Tx(r.Context()).QueryRow(`
+				SELECT d.id, d.site_id, s.api_key, d.device_token FROM `+tenantSchema+`.devices d
+				LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
+				WHERE LOWER(d.id) = LOWER($1)`, canonicalDeviceID).Scan(&storedDeviceID, &deviceSiteID, &siteKey, &storedDeviceToken)
 		}
-		var legacyID string
-		legacyErr := database.Tx(r.Context()).QueryRow(`
-			SELECT id FROM `+tenantSchema+`.devices
-			WHERE site_id IS NOT NULL AND last_ip = $1
-			ORDER BY last_seen_at DESC NULLS LAST LIMIT 1`, remoteIP).Scan(&legacyID)
-		if legacyErr != nil {
-			http.Error(w, "Forbidden: unknown device", http.StatusForbidden)
-			return
-		}
-		canonicalDeviceID = legacyID
-		err = database.Tx(r.Context()).QueryRow(`
-			SELECT d.site_id, s.api_key, d.device_token FROM `+tenantSchema+`.devices d
-			LEFT JOIN `+tenantSchema+`.sites s ON d.site_id = s.id
-			WHERE d.id = $1`, canonicalDeviceID).Scan(&deviceSiteID, &siteKey, &storedDeviceToken)
 	}
 	if err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
+	}
+	if storedDeviceID != "" {
+		canonicalDeviceID = storedDeviceID
 	}
 	// From this point on every stateful processor must use the canonical
 	// controller identity, not a transient bridge MAC reported by the agent.
@@ -141,26 +151,26 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Forbidden: device site is not configured", http.StatusForbidden)
 			return
 		}
-		if providedToken == "" && providedKey != "" && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
+		if authToken == "" && providedKey != "" && subtle.ConstantTimeCompare([]byte(providedKey), []byte(*siteKey)) != 1 {
 			http.Error(w, "Forbidden: invalid site key", http.StatusForbidden)
 			return
 		}
 		if storedToken == "" {
-			if providedToken != "" || (!allowLegacyProvision() && providedKey == "") {
+			if authToken != "" || (!allowLegacyProvision() && providedKey == "") {
 				http.Error(w, "Forbidden: device token is not initialized", http.StatusForbidden)
 				return
 			}
 		}
-		if storedToken != "" && validateDeviceTelemetryToken(storedToken, providedToken) != nil {
+		if storedToken != "" && validateDeviceTelemetryTokenForMode(storedToken, authToken, allowLegacyProvision()) != nil {
 			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}
 	} else if storedToken != "" {
-		if err := validateDeviceTelemetryToken(storedToken, providedToken); err != nil {
+		if err := validateDeviceTelemetryTokenForMode(storedToken, authToken, allowLegacyProvision()); err != nil {
 			http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 			return
 		}
-	} else if providedToken != "" {
+	} else if authToken != "" {
 		http.Error(w, "Forbidden: invalid device token", http.StatusForbidden)
 		return
 	}
@@ -228,10 +238,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		agentVersion = v
 	}
 
-	remoteIP := r.RemoteAddr
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		remoteIP = host
-	}
+	remoteIP := requestRemoteIP(r.RemoteAddr)
 
 	// 1. Goroutine for PostgreSQL (upsert state and explicit model)
 	go func(devID string, state, capabilities []byte, mod string, ip string, av string, schema string) {

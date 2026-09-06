@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -29,6 +30,43 @@ func ensureDeviceToken(ctx context.Context, schema, deviceID string, current sql
 		return "", err
 	}
 	return token, nil
+}
+
+func resolveDeviceIdentity(ctx context.Context, schema, requestedID string) (string, sql.NullString, error) {
+	var storedID string
+	var storedToken sql.NullString
+	err := database.Tx(ctx).QueryRow(
+		"SELECT id, device_token FROM "+schema+".devices WHERE LOWER(id) = LOWER($1)",
+		requestedID,
+	).Scan(&storedID, &storedToken)
+	return storedID, storedToken, err
+}
+
+func resolveDeviceIdentityByIP(ctx context.Context, schema, remoteIP string) (string, sql.NullString, error) {
+	var storedID string
+	var storedToken sql.NullString
+	err := database.Tx(ctx).QueryRow(
+		"SELECT id, device_token FROM "+schema+".devices WHERE site_id IS NOT NULL AND last_ip = $1 ORDER BY last_seen_at DESC NULLS LAST LIMIT 1",
+		remoteIP,
+	).Scan(&storedID, &storedToken)
+	return storedID, storedToken, err
+}
+
+func resolveDeviceIdentityByToken(ctx context.Context, schema, token string) (string, sql.NullString, error) {
+	var storedID string
+	var storedToken sql.NullString
+	err := database.Tx(ctx).QueryRow(
+		"SELECT id, device_token FROM "+schema+".devices WHERE device_token = $1",
+		token,
+	).Scan(&storedID, &storedToken)
+	return storedID, storedToken, err
+}
+
+func requestRemoteIP(remoteAddr string) string {
+	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
+		return host
+	}
+	return remoteAddr
 }
 
 // allowLegacyProvision enables the historical behaviour where a device
@@ -90,12 +128,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantSchema := ""
-	if providedToken != "" {
-		tenantSchema, err = database.GetTenantSchemaForDeviceToken(providedToken)
-	} else {
-		tenantSchema, err = database.GetTenantSchemaForSiteKey(providedKey)
-	}
+	tenantSchema, token, err := resolveDeviceTenant(providedToken, providedKey)
 	if err != nil {
 		http.Error(w, `{"error": "Forbidden: invalid device credentials"}`, http.StatusForbidden)
 		return
@@ -110,9 +143,16 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// --- Hardening: X-Device-Token is mandatory unless legacy mode is enabled ---
-	token := r.Header.Get("X-Device-Token")
-	var storedToken sql.NullString
-	tokenErr := database.Tx(r.Context()).QueryRow("SELECT device_token FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&storedToken)
+	resolvedDeviceID, storedToken, tokenErr := resolveDeviceIdentity(r.Context(), tenantSchema, deviceID)
+	if tokenErr == sql.ErrNoRows && token != "" {
+		resolvedDeviceID, storedToken, tokenErr = resolveDeviceIdentityByToken(r.Context(), tenantSchema, token)
+	}
+	if tokenErr == sql.ErrNoRows && token == "" && allowLegacyProvision() {
+		resolvedDeviceID, storedToken, tokenErr = resolveDeviceIdentityByIP(r.Context(), tenantSchema, requestRemoteIP(r.RemoteAddr))
+	}
+	if tokenErr == nil {
+		deviceID = resolvedDeviceID
+	}
 	if tokenErr != nil && tokenErr != sql.ErrNoRows {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
 		return
@@ -367,10 +407,38 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 		configPayload["apply_operation"] = pendingOperation
 	}
 
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	response := deviceConfigResponse(configPayload, deviceToken.String, allowLegacyProvision())
+	json.NewEncoder(w).Encode(response)
+}
+
+func deviceConfigResponse(configPayload map[string]interface{}, deviceToken string, legacy bool) map[string]interface{} {
+	response := map[string]interface{}{
 		"action": "apply",
 		"config": configPayload,
-	})
+	}
+	if legacy {
+		// Older agents read the token from the response root instead of config.
+		response["device_token"] = deviceToken
+	}
+	return response
+}
+
+func resolveDeviceTenant(providedToken, providedKey string) (string, string, error) {
+	if providedToken != "" {
+		tenantSchema, err := database.GetTenantSchemaForDeviceToken(providedToken)
+		if err == nil {
+			return tenantSchema, providedToken, nil
+		}
+		if !allowLegacyProvision() || providedKey == "" {
+			return "", providedToken, err
+		}
+	}
+
+	tenantSchema, err := database.GetTenantSchemaForSiteKey(providedKey)
+	if err != nil {
+		return "", "", err
+	}
+	return tenantSchema, "", nil
 }
 
 // surveyModeFor returns true if the site has an active wifi_survey.
