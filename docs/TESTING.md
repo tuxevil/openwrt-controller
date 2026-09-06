@@ -11,6 +11,12 @@ docker compose config --quiet
 git diff --check
 ```
 
+Generation and operation status changes should also exercise the SQL seam with:
+
+```bash
+go test ./internal/database -run 'TestQueueDeviceOperation|TestRecordDeviceOperationStatus' -count=1
+```
+
 Agent contracts are shell checks and should run after any agent or bootstrap change:
 
 ```bash

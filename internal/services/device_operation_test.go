@@ -26,6 +26,43 @@ func TestNewDeviceOperationPlanSeparatesAttemptAndContentIdentity(t *testing.T) 
 	}
 }
 
+func TestNewDeviceOperationPlanForGenerationBindsRevisionWithoutChangingContentIdentity(t *testing.T) {
+	commands := []UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}}
+	first, err := NewDeviceOperationPlanForGeneration(41, "system", commands, nil, true)
+	if err != nil {
+		t.Fatalf("NewDeviceOperationPlanForGeneration returned error: %v", err)
+	}
+	second, err := NewDeviceOperationPlanForGeneration(42, "system", commands, nil, true)
+	if err != nil {
+		t.Fatalf("NewDeviceOperationPlanForGeneration returned error: %v", err)
+	}
+	if first.Generation != 41 || second.Generation != 42 {
+		t.Fatalf("unexpected generations: %#v %#v", first, second)
+	}
+	if first.PlanHash == "" || first.PlanHash != second.PlanHash {
+		t.Fatalf("generation changed content identity: %#v %#v", first, second)
+	}
+	if first.OperationID == second.OperationID {
+		t.Fatalf("generation-bound attempts reused operation identity: %#v", first)
+	}
+	if err := ValidateDeviceOperationPlan(first); err != nil {
+		t.Fatalf("first generation-bound plan did not validate: %v", err)
+	}
+}
+
+func TestValidateDeviceOperationPlanRejectsNegativeGeneration(t *testing.T) {
+	plan := DeviceOperationPlan{
+		OperationID: "operation-1",
+		PlanHash:    "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Generation:  -1,
+		Config:      "system",
+		Commands:    []UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}},
+	}
+	if err := ValidateDeviceOperationPlan(plan); err == nil {
+		t.Fatal("negative generation was accepted")
+	}
+}
+
 func TestValidateDeviceOperationPlanAllowsDistinctOperationIdentity(t *testing.T) {
 	plan := DeviceOperationPlan{
 		OperationID: "rollout-147-router3-attempt1",

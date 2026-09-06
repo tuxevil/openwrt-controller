@@ -41,6 +41,10 @@ The bootstrap script installs the agent and configures the service. It does not 
 
 Existing devices must complete this transition before legacy provisioning is disabled. A token mismatch is rejected; an enrollment token is not a permanent device credential.
 
+## Operation Status Contract
+
+Typed operations carry `operation_id`, `plan_hash` and, for generation-bound plans, a positive `generation`. The agent persists the generation beside its durable transaction journal and echoes it in telemetry status. Older operations may omit the generation; the controller accepts that form only for legacy unbound operations.
+
 ## Local Responsibilities
 
 The agent runs under procd and performs bounded log collection, configuration pulls, telemetry heartbeats, optional surveys and local Threat Shield handling. It must not block its heartbeat on `logread` or an unavailable optional utility.

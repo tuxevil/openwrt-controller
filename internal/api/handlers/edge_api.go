@@ -283,7 +283,8 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
 		return
 	}
-	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+	queuedGeneration, err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON)
+	if err != nil {
 		database.InsertAuditLog(username, "EDGE_NEXUS_NETWORK_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -296,15 +297,17 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plan.Generation = queuedGeneration
 	database.InsertAuditLog(username, "EDGE_NEXUS_NETWORK_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed %d interface(s)", len(payload.Interfaces)), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
 		"plan_hash":    plan.PlanHash,
+		"generation":   plan.Generation,
 		"message":      "device agent will apply and report the durable result",
 	})
 }
@@ -382,7 +385,8 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
 		return
 	}
-	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+	queuedGeneration, err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON)
+	if err != nil {
 		database.InsertAuditLog(username, "EDGE_NEXUS_DHCP_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -395,15 +399,17 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plan.Generation = queuedGeneration
 	database.InsertAuditLog(username, "EDGE_NEXUS_DHCP_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed DHCP config for %d interface(s)", len(payload.DHCP)), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
 		"plan_hash":    plan.PlanHash,
+		"generation":   plan.Generation,
 		"message":      "device agent will apply and report the durable result",
 	})
 }
@@ -477,7 +483,8 @@ func PutEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
 		return
 	}
-	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+	queuedGeneration, err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON)
+	if err != nil {
 		database.InsertAuditLog(username, "EDGE_NEXUS_FIREWALL_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -490,15 +497,17 @@ func PutEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plan.Generation = queuedGeneration
 	database.InsertAuditLog(username, "EDGE_NEXUS_FIREWALL_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Pushed %d port-forward rule(s)", len(payload.PortForward)), r.RemoteAddr)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
 		"plan_hash":    plan.PlanHash,
+		"generation":   plan.Generation,
 		"message":      "device agent will apply and report the durable result",
 	})
 }

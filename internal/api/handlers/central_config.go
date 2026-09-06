@@ -213,7 +213,8 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
 		return
 	}
-	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+	queuedGeneration, err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON)
+	if err != nil {
 		database.InsertAuditLog(username, "CENTRAL_LUCI_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -229,12 +230,14 @@ func PutCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 	database.InsertAuditLog(username, "CENTRAL_LUCI_QUEUED", "DEVICE", deviceID,
 		fmt.Sprintf("Queued %d UCI commands to namespace: %s", len(payload.Commands), config), r.RemoteAddr)
 
+	plan.Generation = queuedGeneration
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
 		"plan_hash":    plan.PlanHash,
+		"generation":   plan.Generation,
 		"message":      "device agent will apply and report the durable result",
 	})
 }
@@ -296,7 +299,8 @@ func SafeRolloutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"could not serialize operation plan"}`, http.StatusInternalServerError)
 		return
 	}
-	if err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON); err != nil {
+	queuedGeneration, err := database.QueueDeviceOperation(r.Context(), schema, deviceID, planJSON)
+	if err != nil {
 		database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_QUEUE_FAILED", "DEVICE", deviceID, err.Error(), r.RemoteAddr)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
@@ -309,13 +313,15 @@ func SafeRolloutHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	plan.Generation = queuedGeneration
 	database.InsertAuditLog(GetUsernameFromReq(r), "SAFE_ROLLOUT_QUEUED", "DEVICE", deviceID, fmt.Sprintf("Queued %d commands to %s", len(payload.Commands), config), r.RemoteAddr)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{
+	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":       "queued",
 		"operation_id": plan.OperationID,
 		"plan_hash":    plan.PlanHash,
+		"generation":   plan.Generation,
 		"message":      "device agent will apply and report the durable result",
 	})
 }

@@ -14,6 +14,7 @@ import (
 type DeviceOperationPlan struct {
 	OperationID  string       `json:"operation_id"`
 	PlanHash     string       `json:"plan_hash"`
+	Generation   int64        `json:"generation,omitempty"`
 	Config       string       `json:"config"`
 	Commands     []UciCommand `json:"commands"`
 	HealthChecks []string     `json:"health_checks,omitempty"`
@@ -50,6 +51,9 @@ func ValidateDeviceOperationPlan(plan DeviceOperationPlan) error {
 	if !validDeviceOperationID(plan.OperationID) || !validDeviceOperationPlanHash(plan.PlanHash) {
 		return fmt.Errorf("invalid operation identity")
 	}
+	if plan.Generation < 0 {
+		return fmt.Errorf("invalid operation generation")
+	}
 	return ValidateDeviceOperation(plan.Config, plan.Commands, plan.HealthChecks)
 }
 
@@ -67,6 +71,16 @@ var deviceOperationConfigs = map[string]struct{}{
 // by the local executor and derives a stable content hash plus a unique
 // idempotency key for this attempt.
 func NewDeviceOperationPlan(config string, commands []UciCommand, healthChecks []string, autoConfirm bool) (DeviceOperationPlan, error) {
+	return NewDeviceOperationPlanForGeneration(0, config, commands, healthChecks, autoConfirm)
+}
+
+// NewDeviceOperationPlanForGeneration creates a plan bound to a desired-state
+// revision. Generation zero keeps the legacy unbound form; QueueDeviceOperation
+// assigns it atomically for standalone operations before persistence.
+func NewDeviceOperationPlanForGeneration(generation int64, config string, commands []UciCommand, healthChecks []string, autoConfirm bool) (DeviceOperationPlan, error) {
+	if generation < 0 {
+		return DeviceOperationPlan{}, fmt.Errorf("operation generation cannot be negative")
+	}
 	if err := ValidateDeviceOperation(config, commands, healthChecks); err != nil {
 		return DeviceOperationPlan{}, err
 	}
@@ -90,6 +104,7 @@ func NewDeviceOperationPlan(config string, commands []UciCommand, healthChecks [
 	return DeviceOperationPlan{
 		OperationID:  operationID,
 		PlanHash:     hashString,
+		Generation:   generation,
 		Config:       config,
 		Commands:     commands,
 		HealthChecks: append([]string(nil), healthChecks...),

@@ -16,10 +16,20 @@
 1. The browser authenticates with JWT and selects a site or tenant context.
 2. Middleware validates the token, role and tenant schema before the handler runs.
 3. Read operations query the tenant schema or InfluxDB.
-4. Mutating operations validate identifiers, write an audit event and use the SSH/UCI boundary.
+4. Mutating operations validate identifiers, write an audit event and queue typed device operations; the legacy site orchestrator still uses the SSH/UCI boundary until its migration is complete.
 5. Device operations resolve the device inside the authorized tenant, verify its host key and execute a constrained script.
 
 The shipped agent reads a complete `CONTROLLER_URL` from root-owned runtime configuration. `REQUIRE_TLS=true` rejects plain HTTP before any controller request; configure a CA file or curl public-key pin when the controller uses a private PKI.
+
+## Device Operation Identity
+
+Each typed device operation has three independent identities:
+
+- `generation` identifies the desired-state revision for that device.
+- `plan_hash` identifies the immutable command content.
+- `operation_id` identifies one application attempt.
+
+`QueueDeviceOperation` reserves an unbound plan's next device generation in the same database update that writes `pending_operation`. Generation-bound retries must name the current revision; stale or future revisions are rejected. Agent status echoes the generation when present, and the controller advances observed generations only for a matching `COMMITTED` status. Legacy status without a generation remains accepted for unbound operations during rollout.
 
 ## Desired State
 

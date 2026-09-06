@@ -731,7 +731,7 @@ func ApproveSentinelProposal(ctx context.Context, schema, proposalID, username s
 	if err != nil {
 		return err
 	}
-	if err := database.QueueDeviceOperation(ctx, schema, deviceID, plan); err != nil {
+	if _, err := database.QueueDeviceOperation(ctx, schema, deviceID, plan); err != nil {
 		_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'FAILED', blocked_reason = $1 WHERE id = $2`, safeSchema), err.Error(), proposalID)
 		return err
 	}

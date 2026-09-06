@@ -31,6 +31,9 @@ grep -q 'CONTROLLER_URL=' "$AGENT"
 grep -q 'REQUIRE_TLS=' "$AGENT"
 grep -q 'CONTROLLER_CA_FILE=' "$AGENT"
 grep -q 'controller_curl()' "$AGENT"
+grep -q 'transaction_valid_generation()' "$AGENT"
+grep -q 'operation_generation=' "$AGENT"
+grep -q '"generation":%s' "$AGENT"
 if grep -q 'CONTROLLER_IP' "$AGENT"; then
     echo "signed agent must use a complete CONTROLLER_URL" >&2
     exit 1

@@ -100,6 +100,13 @@ transaction_valid_plan_hash() {
     [ "${#1}" -eq 64 ]
 }
 
+transaction_valid_generation() {
+    case "$1" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    [ "$1" -le 9223372036854775807 ] 2>/dev/null
+}
+
 transaction_valid_config() {
     case "$1" in
         wireless|network|dhcp|firewall|dropbear|system|sqm) return 0 ;;
@@ -308,9 +315,13 @@ transaction_prune_terminal() {
 transaction_begin() {
     local transaction_config="$1"
     local transaction_id="$2"
+    local transaction_generation="${3:-}"
     local active_id active_state transaction_path transaction_state transaction_tmp
     transaction_valid_config "$transaction_config" || return 1
     transaction_valid_id "$transaction_id" || return 1
+    if [ -n "$transaction_generation" ]; then
+        transaction_valid_generation "$transaction_generation" || return 1
+    fi
     mkdir -p "$NERVE_TRANSACTION_ROOT" || return 1
     chmod 700 "$NERVE_TRANSACTION_ROOT" 2>/dev/null || return 1
 
@@ -362,6 +373,11 @@ transaction_begin() {
         transaction_write_atomic "$transaction_path/backup_exists" 0 || return 1
     fi
     transaction_write_atomic "$transaction_path/config" "$transaction_config" || return 1
+    if [ -n "$transaction_generation" ] && [ "$transaction_generation" -gt 0 ] 2>/dev/null; then
+        transaction_write_atomic "$transaction_path/generation" "$transaction_generation" || return 1
+    else
+        rm -f "$transaction_path/generation"
+    fi
     transaction_write_atomic "$transaction_path/state" APPLYING || return 1
     transaction_write_atomic "$NERVE_TRANSACTION_ROOT/active" "$transaction_id" || return 1
 }
@@ -390,7 +406,7 @@ transaction_commit() {
 }
 
 transaction_status_json() {
-    local transaction_id transaction_path transaction_config transaction_state transaction_plan_hash
+    local transaction_id transaction_path transaction_config transaction_state transaction_plan_hash transaction_generation
     transaction_id=$(cat "$NERVE_OPERATION_STATUS_FILE" 2>/dev/null || true)
     if [ -n "$transaction_id" ] && ! transaction_valid_id "$transaction_id"; then
         transaction_id=""
@@ -412,8 +428,18 @@ transaction_status_json() {
         return 0
     fi
     transaction_plan_hash=$(cat "$NERVE_TRANSACTION_ROOT/operation_${transaction_config}.hash" 2>/dev/null || true)
+    transaction_generation=$(cat "$transaction_path/generation" 2>/dev/null || true)
+    if [ -n "$transaction_generation" ] && ! transaction_valid_generation "$transaction_generation"; then
+        transaction_generation=""
+    fi
     if transaction_valid_plan_hash "$transaction_plan_hash"; then
-        printf '{"id":"%s","config":"%s","state":"%s","plan_hash":"%s"}' "$transaction_id" "$transaction_config" "$transaction_state" "$transaction_plan_hash"
+        if [ -n "$transaction_generation" ] && [ "$transaction_generation" -gt 0 ] 2>/dev/null; then
+            printf '{"id":"%s","config":"%s","state":"%s","plan_hash":"%s","generation":%s}' "$transaction_id" "$transaction_config" "$transaction_state" "$transaction_plan_hash" "$transaction_generation"
+        else
+            printf '{"id":"%s","config":"%s","state":"%s","plan_hash":"%s"}' "$transaction_id" "$transaction_config" "$transaction_state" "$transaction_plan_hash"
+        fi
+    elif [ -n "$transaction_generation" ] && [ "$transaction_generation" -gt 0 ] 2>/dev/null; then
+        printf '{"id":"%s","config":"%s","state":"%s","generation":%s}' "$transaction_id" "$transaction_config" "$transaction_state" "$transaction_generation"
     else
         printf '{"id":"%s","config":"%s","state":"%s"}' "$transaction_id" "$transaction_config" "$transaction_state"
     fi
@@ -606,19 +632,22 @@ operation_health_check() {
 
 apply_pending_operation() {
     local operation_json="$1"
-    local operation_id operation_config operation_hash operation_count operation_index
+    local operation_id operation_config operation_hash operation_generation operation_count operation_index
     local operation_action operation_command_config operation_section operation_option operation_value
     local transaction_status operation_status
     operation_id=$(printf '%s' "$operation_json" | jsonfilter -e '@.operation_id' 2>/dev/null)
     operation_config=$(printf '%s' "$operation_json" | jsonfilter -e '@.config' 2>/dev/null)
     operation_hash=$(printf '%s' "$operation_json" | jsonfilter -e '@.plan_hash' 2>/dev/null)
+    operation_generation=$(printf '%s' "$operation_json" | jsonfilter -e '@.generation' 2>/dev/null)
+    [ -n "$operation_generation" ] || operation_generation=0
     operation_count=$(printf '%s' "$operation_json" | jsonfilter -e '@.commands[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
     transaction_valid_id "$operation_id" || return 1
     transaction_valid_plan_hash "$operation_hash" || return 1
+    transaction_valid_generation "$operation_generation" || return 1
     transaction_valid_config "$operation_config" || return 1
     [ "$operation_count" -gt 0 ] || return 1
 
-    transaction_begin "$operation_config" "$operation_id"
+    transaction_begin "$operation_config" "$operation_id" "$operation_generation"
     transaction_status=$?
     if [ "$transaction_status" -eq 10 ]; then
         return 0

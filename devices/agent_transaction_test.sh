@@ -24,6 +24,7 @@ test ! -e "$NERVE_TRANSACTION_ROOT/self-test-operation/backup"
 test "$(cat "$NERVE_TRANSACTION_ROOT/wifi_config.hash")" = "self-test-hash"
 test "$(cat "$NERVE_TRANSACTION_ROOT/last")" = "self-test-operation"
 
+SELF_TEST_OPERATION_JSON='{"operation_id":"self-operation","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","generation":42,"config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":true}' \
 PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation
 test "$(cat "$NERVE_TRANSACTION_ROOT/self-operation/state")" = "COMMITTED"
 test ! -e "$NERVE_TRANSACTION_ROOT/self-operation/backup"
@@ -32,12 +33,14 @@ printf '%s\n' self-operation > "$NERVE_OPERATION_STATUS_FILE"
 printf '%s\n' self-test-operation > "$NERVE_TRANSACTION_ROOT/last"
 STATUS_JSON=$(PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-status)
 case "$STATUS_JSON" in
-    *'"id":"self-operation"'*'"plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"'*) ;;
+    *'"id":"self-operation"'*'"plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"'*'"generation":42'*) ;;
     *) echo "typed operation status was overwritten"; exit 1 ;;
 esac
 rm -f "$NERVE_OPERATION_STATUS_FILE"
 STATUS_JSON=$(PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-status)
 case "$STATUS_JSON" in
+    *'"id":"self-test-operation"'*'"generation":'*)
+        echo "legacy transaction status unexpectedly included a generation"; exit 1 ;;
     *'"id":"self-test-operation"'*) ;;
     *) echo "fallback transaction status was not reported"; exit 1 ;;
 esac
@@ -111,6 +114,12 @@ fi
 test ! -e "$NERVE_TRANSACTION_ROOT/active"
 if [ -f "$ROOT/hash-mismatch.log" ] && grep -q '^set ' "$ROOT/hash-mismatch.log"; then
     echo "hash mismatch reached uci"
+    exit 1
+fi
+
+if SELF_TEST_OPERATION_JSON='{"operation_id":"negative-generation","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","generation":-1,"config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"rejected"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation; then
+    echo "negative operation generation was accepted"
     exit 1
 fi
 
