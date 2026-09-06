@@ -129,6 +129,12 @@ export default {
   updateClientHostname(siteId, mac, hostname) {
     return apiClient.patch(`/sites/${siteId}/clients/${mac}/hostname`, { hostname })
   },
+  trustClient(siteId, mac, payload) {
+    return apiClient.put(`/sites/${siteId}/clients/${mac}/trust`, payload)
+  },
+  untrustClient(siteId, mac) {
+    return apiClient.delete(`/sites/${siteId}/clients/${mac}/trust`)
+  },
 
   // Settings
   getSiteSettings(siteId) {

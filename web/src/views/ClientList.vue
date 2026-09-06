@@ -2,13 +2,20 @@
 // CLIENT_MATRIX v2 — wireless_stations + arp_table join
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import api from '../services/api'
+import { useAuthStore } from '../stores/auth'
 
 const props = defineProps(['site_id'])
+const auth = useAuthStore()
 const clients = ref([])
 const selectedClient = ref(null)
 const showModal = ref(false)
 const editHostname = ref('')
 const isSaving = ref(false)
+const trustLabel = ref('')
+const trustReason = ref('')
+const trustExpiresAt = ref('')
+const trustError = ref('')
+const isTrusting = ref(false)
 let pollInterval
 
 const sortedClients = computed(() => {
@@ -60,6 +67,8 @@ async function fetchClients() {
       const updated = clients.value.find(c => c.mac === selectedClient.value.mac)
       if (updated) {
         selectedClient.value = { ...updated }
+        trustLabel.value = updated.trust_label || updated.hostname || trustLabel.value
+        trustReason.value = updated.trust_reason || trustReason.value
       }
     }
   } catch (e) { console.error(e) }
@@ -94,6 +103,10 @@ function formatRate(rate) {
 function selectClient(client) {
   selectedClient.value = { ...client }
   editHostname.value = client.hostname || ''
+  trustLabel.value = client.trust_label || client.hostname || ''
+  trustReason.value = client.trust_reason || ''
+  trustExpiresAt.value = client.trust_expires_at ? client.trust_expires_at.slice(0, 16) : ''
+  trustError.value = ''
   showModal.value = true
 }
 
@@ -108,6 +121,43 @@ async function saveHostname() {
     console.error('Failed to save hostname:', err)
   } finally {
     isSaving.value = false
+  }
+}
+
+async function trustSelectedClient() {
+  if (!selectedClient.value || isTrusting.value) return
+  const label = (trustLabel.value || editHostname.value || selectedClient.value.hostname || '').trim()
+  if (!label) {
+    trustError.value = 'A human-readable label is required.'
+    return
+  }
+  try {
+    isTrusting.value = true
+    trustError.value = ''
+    await api.trustClient(props.site_id, selectedClient.value.mac, {
+      label,
+      reason: trustReason.value.trim(),
+      expires_at: trustExpiresAt.value ? new Date(trustExpiresAt.value).toISOString() : ''
+    })
+    await fetchClients()
+  } catch (err) {
+    trustError.value = err.response?.data?.error || err.message || 'Failed to trust client'
+  } finally {
+    isTrusting.value = false
+  }
+}
+
+async function untrustSelectedClient() {
+  if (!selectedClient.value || isTrusting.value) return
+  try {
+    isTrusting.value = true
+    trustError.value = ''
+    await api.untrustClient(props.site_id, selectedClient.value.mac)
+    await fetchClients()
+  } catch (err) {
+    trustError.value = err.response?.data?.error || err.message || 'Failed to remove trust'
+  } finally {
+    isTrusting.value = false
   }
 }
 </script>
@@ -164,7 +214,8 @@ async function saveHostname() {
           >
             <!-- HOSTNAME -->
             <td class="py-2 px-3 text-white">
-              {{ c.hostname || 'UNKNOWN_HOST' }}
+              <span>{{ c.hostname || `client-${(c.mac || '').replaceAll(':', '').slice(-4)}` }}</span>
+              <span v-if="c.trusted" class="ml-2 px-1.5 py-0.5 text-[9px] border border-neon-green/50 text-neon-green">TRUSTED</span>
             </td>
 
             <!-- IP_ADDR -->
@@ -280,6 +331,28 @@ async function saveHostname() {
               </div>
               <div v-if="selectedClient.uplink_name && selectedClient.uplink_name !== selectedClient.uplink" class="text-xs text-muted">
                 {{ selectedClient.uplink }}
+              </div>
+            </div>
+
+            <div v-if="auth.isAdmin" class="space-y-3 col-span-2 border border-neon-green/25 bg-neon-green/5 p-4 clip-chamfer">
+              <div class="flex items-center justify-between gap-3">
+                <label class="text-xs text-neon-green block">> TRUSTED_OPERATOR_ENDPOINT</label>
+                <span v-if="selectedClient.trusted" class="text-[10px] text-neon-green border border-neon-green/50 px-2 py-1">ACTIVE</span>
+              </div>
+              <p class="text-[10px] text-muted">Contextualizes expected SSH/root administration. It never suppresses authentication failures or other anomalies.</p>
+              <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <input v-model="trustLabel" class="bg-black/50 border border-neon-green/30 px-3 py-1.5 text-white font-mono text-xs" placeholder="Label, e.g. operator-laptop" />
+                <input v-model="trustExpiresAt" type="datetime-local" class="bg-black/50 border border-neon-green/30 px-3 py-1.5 text-white font-mono text-xs" />
+              </div>
+              <input v-model="trustReason" class="w-full bg-black/50 border border-neon-green/30 px-3 py-1.5 text-white font-mono text-xs" placeholder="Reason, e.g. admin workstation" />
+              <p v-if="trustError" class="text-xs text-neon-red">{{ trustError }}</p>
+              <div class="flex gap-2">
+                <button @click="trustSelectedClient" :disabled="isTrusting" class="px-3 py-1.5 bg-neon-green/10 text-neon-green border border-neon-green/40 hover:bg-neon-green/20 disabled:opacity-50 clip-chamfer font-mono text-xs uppercase">
+                  {{ isTrusting ? '...' : (selectedClient.trusted ? 'UPDATE TRUST' : 'MARK TRUSTED') }}
+                </button>
+                <button v-if="selectedClient.trusted" @click="untrustSelectedClient" :disabled="isTrusting" class="px-3 py-1.5 text-neon-red border border-neon-red/40 hover:bg-neon-red/10 disabled:opacity-50 clip-chamfer font-mono text-xs uppercase">
+                  REMOVE TRUST
+                </button>
               </div>
             </div>
           </div>

@@ -122,16 +122,51 @@ func completeAIContext(ctx context.Context, systemPrompt, userPrompt string, jso
 }
 
 func AnalyzeFleetContext(contextLogs string) (string, string, []string, string, int, error) {
+	return AnalyzeFleetContextForSchema("", contextLogs)
+}
+
+const sentinelTrustedIdentityGuidance = `IDENTITY AND TRUST POLICY:
+The log stream may include identity annotations such as label, MAC, IP, uplink, and TRUSTED.
+Use the human-readable label as the primary identifier and keep the MAC only as a secondary reference.
+TRUSTED means an administrator declared that endpoint an expected operator/client origin for this site; it is context, not authentication and not a blanket allow-list.
+Do not call lateral movement critical solely because a TRUSTED endpoint performs expected SSH/root administration on a managed node.
+Still report failed authentication, credential abuse, persistence, unexpected destinations, privilege escalation, or activity outside the trust scope.
+If an identity is unresolved, say so instead of inventing a hostname.`
+
+func sentinelGlobalAnalysisPrompt(base string) string {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		base = defaultSentinelPrompt
+	}
+	return base + "\n\n" + sentinelTrustedIdentityGuidance
+}
+
+func AnalyzeFleetContextForSchema(schema, contextLogs string) (string, string, []string, string, int, error) {
 	settings := database.GetPlatformSettings()
-	prompt := settings.SentinelPrompt
-	if prompt == "" {
-		prompt = defaultSentinelPrompt
+	prompt := sentinelGlobalAnalysisPrompt(settings.SentinelPrompt)
+	identityDirectory := map[string]database.NetworkIdentity{}
+	if strings.TrimSpace(schema) != "" {
+		if loaded, err := database.LoadNetworkIdentityDirectory(schema, ""); err == nil {
+			identityDirectory = loaded
+			contextLogs = database.AnnotateNetworkText(contextLogs, identityDirectory)
+		}
 	}
 	content, model, tokens, err := completeAI(prompt, "LOG STREAM:\n"+contextLogs, false)
 	if err != nil {
 		return "", "Low", []string{}, model, tokens, err
 	}
-	return parseSentinelResult(content, model, tokens)
+	diagnosis, severity, devices, parsedModel, parsedTokens, parseErr := parseSentinelResult(content, model, tokens)
+	if len(identityDirectory) > 0 {
+		diagnosis = database.AnnotateNetworkText(diagnosis, identityDirectory)
+		for i, device := range devices {
+			if identity, ok := database.ResolveNetworkIdentity(identityDirectory, device); ok {
+				devices[i] = fmt.Sprintf("%s (%s)", identity.DisplayLabel(), identity.MAC)
+			} else {
+				devices[i] = database.AnnotateNetworkText(device, identityDirectory)
+			}
+		}
+	}
+	return diagnosis, severity, devices, parsedModel, parsedTokens, parseErr
 }
 
 func parseSentinelResult(content, model string, tokens int) (string, string, []string, string, int, error) {

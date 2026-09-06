@@ -106,6 +106,8 @@ func SetupRoutes() *http.ServeMux {
 
 	mux.HandleFunc("GET /api/sites/{site_id}/clients", middleware.WithAuth(handlers.GetClientsHandler))
 	mux.HandleFunc("PATCH /api/sites/{site_id}/clients/{mac}/hostname", middleware.WithAuth(handlers.UpdateClientHostnameHandler))
+	mux.HandleFunc("PUT /api/sites/{site_id}/clients/{mac}/trust", middleware.WithAuth(middleware.RequireAdmin(handlers.TrustClientHandler)))
+	mux.HandleFunc("DELETE /api/sites/{site_id}/clients/{mac}/trust", middleware.WithAuth(middleware.RequireAdmin(handlers.UntrustClientHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/settings", middleware.WithAuth(handlers.GetSiteSettingsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/settings", middleware.WithAuth(handlers.UpdateSiteSettingsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/rotate-key", middleware.WithAuth(handlers.RotateSiteKeyHandler))

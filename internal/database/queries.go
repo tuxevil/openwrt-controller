@@ -11,12 +11,15 @@ func GetGlobalContext(schema string, targetTimestamp time.Time, limit int) strin
 	if DB == nil {
 		return ""
 	}
+	identityDirectory, _ := LoadNetworkIdentityDirectory(schema, "")
 
 	start := targetTimestamp.Add(-2 * time.Minute)
 	end := targetTimestamp.Add(2 * time.Minute)
 
 	query := fmt.Sprintf(`
-		SELECT d.name, sl.log_timestamp, sl.message
+		SELECT COALESCE(d.site_id::text, ''), sl.device_id,
+		       COALESCE(NULLIF(d.name, ''), NULLIF(d.state_json->'board'->>'hostname', ''), NULLIF(d.model, ''), sl.device_id),
+		       sl.log_timestamp, sl.message
 		FROM %s.system_logs sl
 		LEFT JOIN %s.devices d ON sl.device_id = d.id
 		WHERE sl.log_timestamp >= $1 AND sl.log_timestamp <= $2
@@ -31,15 +34,19 @@ func GetGlobalContext(schema string, targetTimestamp time.Time, limit int) strin
 
 	var lines []string
 	for rows.Next() {
-		var devName *string
+		var siteID, deviceID, devName string
 		var ts time.Time
 		var msg string
-		if err := rows.Scan(&devName, &ts, &msg); err == nil {
-			name := "UNKNOWN"
-			if devName != nil {
-				name = *devName
+		if err := rows.Scan(&siteID, &deviceID, &devName, &ts, &msg); err == nil {
+			name := strings.TrimSpace(devName)
+			if identity, ok := lookupNetworkIdentity(identityDirectory, deviceID); ok {
+				name = identity.DisplayLabel()
 			}
-			lines = append(lines, fmt.Sprintf("[%s] | [%s] | %s", name, ts.Format(time.RFC3339), msg))
+			if name == "" {
+				name = "node-" + identityShortSuffix(deviceID)
+			}
+			line := fmt.Sprintf("[site=%s] [node=%s | id=%s] [%s] %s", siteID, name, deviceID, ts.Format(time.RFC3339), AnnotateNetworkText(msg, identityDirectory))
+			lines = append(lines, line)
 		}
 	}
 
@@ -59,9 +66,12 @@ func GetRecentContext(schema string, limit int) string {
 	if DB == nil {
 		return ""
 	}
+	identityDirectory, _ := LoadNetworkIdentityDirectory(schema, "")
 
 	query := fmt.Sprintf(`
-		SELECT d.name, sl.log_timestamp, sl.message
+		SELECT COALESCE(d.site_id::text, ''), sl.device_id,
+		       COALESCE(NULLIF(d.name, ''), NULLIF(d.state_json->'board'->>'hostname', ''), NULLIF(d.model, ''), sl.device_id),
+		       sl.log_timestamp, sl.message
 		FROM %s.system_logs sl
 		LEFT JOIN %s.devices d ON sl.device_id = d.id
 		ORDER BY sl.log_timestamp DESC
@@ -75,15 +85,19 @@ func GetRecentContext(schema string, limit int) string {
 
 	var lines []string
 	for rows.Next() {
-		var devName *string
+		var siteID, deviceID, devName string
 		var ts time.Time
 		var msg string
-		if err := rows.Scan(&devName, &ts, &msg); err == nil {
-			name := "UNKNOWN"
-			if devName != nil {
-				name = *devName
+		if err := rows.Scan(&siteID, &deviceID, &devName, &ts, &msg); err == nil {
+			name := strings.TrimSpace(devName)
+			if identity, ok := lookupNetworkIdentity(identityDirectory, deviceID); ok {
+				name = identity.DisplayLabel()
 			}
-			lines = append(lines, fmt.Sprintf("[%s] | [%s] | %s", name, ts.Format(time.RFC3339), msg))
+			if name == "" {
+				name = "node-" + identityShortSuffix(deviceID)
+			}
+			line := fmt.Sprintf("[site=%s] [node=%s | id=%s] [%s] %s", siteID, name, deviceID, ts.Format(time.RFC3339), AnnotateNetworkText(msg, identityDirectory))
+			lines = append(lines, line)
 		}
 	}
 

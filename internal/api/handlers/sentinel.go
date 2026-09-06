@@ -37,7 +37,7 @@ func TriggerManualSentinelHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	diagnosis, severity, involvedDevices, llmModel, tokensUsed, err := services.AnalyzeFleetContext(contextLogs)
+	diagnosis, severity, involvedDevices, llmModel, tokensUsed, err := services.AnalyzeFleetContextForSchema(middleware.GetTenantSchema(r), contextLogs)
 	if err != nil {
 		log.Printf("[SENTINEL_AI_MANUAL] Inference engine error: %v", err)
 		http.Error(w, "AI inference failed: "+err.Error(), http.StatusInternalServerError)

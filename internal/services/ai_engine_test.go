@@ -1,6 +1,9 @@
 package services
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseAICompletionAcceptsJSONAndCodeFence(t *testing.T) {
 	for _, content := range []string{
@@ -16,5 +19,14 @@ func TestParseAICompletionAcceptsJSONAndCodeFence(t *testing.T) {
 func TestParseAICompletionRejectsNonJSON(t *testing.T) {
 	if _, err := ParseAICompletion("not JSON"); err == nil {
 		t.Fatal("expected invalid provider output to be rejected")
+	}
+}
+
+func TestSentinelGlobalPromptExplainsTrustedOperatorContext(t *testing.T) {
+	prompt := sentinelGlobalAnalysisPrompt("base prompt")
+	for _, expected := range []string{"TRUSTED", "operator", "failed authentication", "MAC"} {
+		if !strings.Contains(strings.ToLower(prompt), strings.ToLower(expected)) {
+			t.Fatalf("trusted identity guidance missing %q: %s", expected, prompt)
+		}
 	}
 }

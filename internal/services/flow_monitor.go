@@ -181,7 +181,7 @@ func escalateFlowToSentinel(schema, siteID, deviceID string, suspicious []FlowEn
 		}
 	}
 
-	diagnosis, severity, involvedDevices, llmModel, tokensUsed, err := AnalyzeFleetContext(contextStr)
+	diagnosis, severity, involvedDevices, llmModel, tokensUsed, err := AnalyzeFleetContextForSchema(schema, contextStr)
 	if err != nil {
 		log.Printf("[FLOW_SENSE] Sentinel AI error: %v", err)
 		return

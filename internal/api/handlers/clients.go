@@ -3,9 +3,12 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"openwrt-controller/internal/database"
 )
@@ -31,6 +34,18 @@ type AggregatedClient struct {
 	InactiveTime       int     `json:"inactive"`
 	ExpectedThroughput string  `json:"expected_throughput"`
 	ConnectionType     string  `json:"conn_type"`
+	Trusted            bool    `json:"trusted"`
+	TrustLabel         string  `json:"trust_label,omitempty"`
+	TrustReason        string  `json:"trust_reason,omitempty"`
+	TrustExpiresAt     string  `json:"trust_expires_at,omitempty"`
+}
+
+type clientIdentityMetadata struct {
+	hostname   string
+	trusted    bool
+	trustLabel string
+	reason     string
+	expiresAt  sql.NullTime
 }
 
 func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
@@ -41,20 +56,24 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Fetch custom hostnames first so we don't interleave active queries on the same Tx connection
-	customHostnames := make(map[string]string)
-	hRows, err := database.Tx(r.Context()).Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	customHostnames := make(map[string]clientIdentityMetadata)
+	hRows, err := database.Tx(r.Context()).Query(`SELECT mac, hostname, COALESCE(trusted, false),
+		COALESCE(trusted_label, ''), COALESCE(trusted_reason, ''), trust_expires_at
+		FROM client_hostnames WHERE site_id = $1`, siteID)
 	if err == nil {
 		for hRows.Next() {
-			var m, h string
-			if err := hRows.Scan(&m, &h); err == nil {
-				customHostnames[strings.ToUpper(m)] = h
+			var m, h, trustLabel, reason string
+			var trusted bool
+			var expiresAt sql.NullTime
+			if err := hRows.Scan(&m, &h, &trusted, &trustLabel, &reason, &expiresAt); err == nil {
+				customHostnames[database.NormalizeMAC(m)] = clientIdentityMetadata{hostname: h, trusted: trusted, trustLabel: trustLabel, reason: reason, expiresAt: expiresAt}
 			}
 		}
 		hRows.Close()
 	}
 
 	rows, err := database.Tx(r.Context()).Query(
-		"SELECT id, name, state_json FROM devices WHERE site_id = $1 AND state_json IS NOT NULL",
+		"SELECT id, name, model, state_json FROM devices WHERE site_id = $1 AND state_json IS NOT NULL",
 		siteID,
 	)
 	if err != nil {
@@ -67,9 +86,9 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 
 	for rows.Next() {
 		var devID string
-		var devName sql.NullString
+		var devName, devModel sql.NullString
 		var stateJSON []byte
-		if err := rows.Scan(&devID, &devName, &stateJSON); err != nil {
+		if err := rows.Scan(&devID, &devName, &devModel, &stateJSON); err != nil {
 			continue
 		}
 		nodeName := devName.String
@@ -86,6 +105,9 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 					nodeName = bh
 				}
 			}
+		}
+		if nodeName == "" {
+			nodeName = devModel.String
 		}
 		if nodeName == "" {
 			nodeName = devID
@@ -295,8 +317,16 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 
 	clients := make([]AggregatedClient, 0, len(clientMap))
 	for mac, c := range clientMap {
-		if customHostname, ok := customHostnames[mac]; ok {
-			c.Hostname = customHostname
+		if custom, ok := customHostnames[mac]; ok {
+			if custom.hostname != "" {
+				c.Hostname = custom.hostname
+			}
+			c.Trusted = custom.trusted && (!custom.expiresAt.Valid || time.Now().Before(custom.expiresAt.Time))
+			c.TrustLabel = custom.trustLabel
+			c.TrustReason = custom.reason
+			if custom.expiresAt.Valid {
+				c.TrustExpiresAt = custom.expiresAt.Time.UTC().Format(time.RFC3339)
+			}
 		}
 		clients = append(clients, *c)
 	}
@@ -312,9 +342,9 @@ type UpdateClientHostnamePayload struct {
 
 func UpdateClientHostnameHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
-	mac := strings.ToUpper(r.PathValue("mac"))
+	mac, err := parseTrustedClientMAC(r.PathValue("mac"))
 
-	if siteID == "" || mac == "" {
+	if siteID == "" || err != nil {
 		http.Error(w, `{"error": "site_id and mac are required"}`, http.StatusBadRequest)
 		return
 	}
@@ -333,7 +363,7 @@ func UpdateClientHostnameHandler(w http.ResponseWriter, r *http.Request) {
 			site_id = EXCLUDED.site_id,
 			updated_at = CURRENT_TIMESTAMP
 	`
-	_, err := database.Tx(r.Context()).Exec(query, mac, siteID, payload.Hostname)
+	_, err = database.Tx(r.Context()).Exec(query, mac, siteID, payload.Hostname)
 	if err != nil {
 		http.Error(w, `{"error": "failed to update hostname"}`, http.StatusInternalServerError)
 		return
@@ -341,6 +371,102 @@ func UpdateClientHostnameHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{"status": "success"})
+}
+
+type TrustedClientPayload struct {
+	Label     string `json:"label"`
+	Reason    string `json:"reason"`
+	ExpiresAt string `json:"expires_at"`
+}
+
+func parseTrustedClientMAC(raw string) (string, error) {
+	canonical := database.NormalizeMAC(raw)
+	parsed, err := net.ParseMAC(canonical)
+	if err != nil || len(parsed) != 6 {
+		return "", fmt.Errorf("mac must be a six-octet address")
+	}
+	return strings.ToUpper(parsed.String()), nil
+}
+
+func parseTrustedClientExpiry(raw string) (*time.Time, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	value, err := time.Parse(time.RFC3339, strings.TrimSpace(raw))
+	if err != nil {
+		return nil, fmt.Errorf("expires_at must be RFC3339")
+	}
+	if !value.After(time.Now()) {
+		return nil, fmt.Errorf("expires_at must be in the future")
+	}
+	return &value, nil
+}
+
+func TrustClientHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := strings.TrimSpace(r.PathValue("site_id"))
+	mac, err := parseTrustedClientMAC(r.PathValue("mac"))
+	if err != nil || siteID == "" {
+		http.Error(w, `{"error":"site_id and a valid mac are required"}`, http.StatusBadRequest)
+		return
+	}
+	var payload TrustedClientPayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, `{"error":"invalid json body"}`, http.StatusBadRequest)
+		return
+	}
+	payload.Label = strings.TrimSpace(payload.Label)
+	payload.Reason = strings.TrimSpace(payload.Reason)
+	if payload.Label == "" || len(payload.Label) > 255 || len(payload.Reason) > 1000 {
+		http.Error(w, `{"error":"label is required and reason is limited to 1000 characters"}`, http.StatusBadRequest)
+		return
+	}
+	expiresAt, err := parseTrustedClientExpiry(payload.ExpiresAt)
+	if err != nil {
+		http.Error(w, `{"error":"invalid expires_at"}`, http.StatusBadRequest)
+		return
+	}
+	var expiresArg interface{}
+	if expiresAt != nil {
+		expiresArg = *expiresAt
+	}
+	_, err = database.Tx(r.Context()).Exec(`
+		INSERT INTO client_hostnames (mac, site_id, hostname, trusted, trusted_label, trusted_reason, trusted_by, trusted_at, trust_expires_at, updated_at)
+		VALUES ($1, $2, $3, true, $3, $4, $5, CURRENT_TIMESTAMP, $6, CURRENT_TIMESTAMP)
+		ON CONFLICT (mac) DO UPDATE SET
+			site_id = EXCLUDED.site_id,
+			hostname = CASE WHEN NULLIF(client_hostnames.hostname, '') IS NULL THEN EXCLUDED.hostname ELSE client_hostnames.hostname END,
+			trusted = true,
+			trusted_label = EXCLUDED.trusted_label,
+			trusted_reason = EXCLUDED.trusted_reason,
+			trusted_by = EXCLUDED.trusted_by,
+			trusted_at = CURRENT_TIMESTAMP,
+			trust_expires_at = EXCLUDED.trust_expires_at,
+			updated_at = CURRENT_TIMESTAMP`, mac, siteID, payload.Label, payload.Reason, GetUsernameFromReq(r), expiresArg)
+	if err != nil {
+		http.Error(w, `{"error":"failed to trust client"}`, http.StatusInternalServerError)
+		return
+	}
+	database.InsertAuditLog(GetUsernameFromReq(r), "CLIENT_TRUSTED", "CLIENT", siteID+"/"+mac,
+		fmt.Sprintf("label=%s reason=%s expires_at=%s", payload.Label, payload.Reason, payload.ExpiresAt), r.RemoteAddr)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "trusted", "mac": mac, "label": payload.Label, "expires_at": expiresAt})
+}
+
+func UntrustClientHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := strings.TrimSpace(r.PathValue("site_id"))
+	mac, err := parseTrustedClientMAC(r.PathValue("mac"))
+	if err != nil || siteID == "" {
+		http.Error(w, `{"error":"site_id and a valid mac are required"}`, http.StatusBadRequest)
+		return
+	}
+	_, err = database.Tx(r.Context()).Exec(`UPDATE client_hostnames SET trusted = false, trusted_label = '', trusted_reason = '', trusted_by = '', trusted_at = NULL, trust_expires_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND mac = $2`, siteID, mac)
+	if err != nil {
+		http.Error(w, `{"error":"failed to remove client trust"}`, http.StatusInternalServerError)
+		return
+	}
+	database.InsertAuditLog(GetUsernameFromReq(r), "CLIENT_UNTRUSTED", "CLIENT", siteID+"/"+mac, "", r.RemoteAddr)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "untrusted", "mac": mac})
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

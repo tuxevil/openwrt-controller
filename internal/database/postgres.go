@@ -379,6 +379,12 @@ func createTenantTables(schema string) error {
 		hostname VARCHAR(255) NOT NULL,
 		latitude NUMERIC(10, 6),
 		longitude NUMERIC(10, 6),
+		trusted BOOLEAN NOT NULL DEFAULT false,
+		trusted_label VARCHAR(255) DEFAULT '',
+		trusted_reason TEXT DEFAULT '',
+		trusted_by VARCHAR(100) DEFAULT '',
+		trusted_at TIMESTAMP WITH TIME ZONE,
+		trust_expires_at TIMESTAMP WITH TIME ZONE,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 	);
 
@@ -678,6 +684,13 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS capabilities_updated_at TIMESTAMP WITH TIME ZONE", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS pending_operation JSONB", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_operation JSONB", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted BOOLEAN NOT NULL DEFAULT false", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted_label VARCHAR(255) DEFAULT ''", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted_reason TEXT DEFAULT ''", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted_by VARCHAR(100) DEFAULT ''", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted_at TIMESTAMP WITH TIME ZONE", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trust_expires_at TIMESTAMP WITH TIME ZONE", quotedSchema),
+		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_client_hostnames_trusted ON %s.client_hostnames(site_id, trusted, trust_expires_at)", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS roaming_enabled BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211k BOOLEAN DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wlans ADD COLUMN IF NOT EXISTS ieee80211v BOOLEAN DEFAULT false", quotedSchema),
