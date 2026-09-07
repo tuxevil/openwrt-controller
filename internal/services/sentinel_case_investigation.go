@@ -82,9 +82,9 @@ func appendSentinelCaseEvidencePrompt(prompt *strings.Builder, toolName, encoded
 // The system prompt remains static and privileged. All dynamic Case data,
 // conversation history, prior evidence, telemetry, and tool results are
 // serialized as explicitly data-only JSON below that boundary.
-func runSentinelInvestigationForCase(schema, caseID string, history []SentinelStoredMessage, query, siteID string) (SentinelInvestigationResult, error) {
+func runSentinelInvestigationForCase(parent context.Context, schema, caseID string, history []SentinelStoredMessage, query, siteID string) (SentinelInvestigationResult, error) {
 	result := SentinelInvestigationResult{}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
 	toolBudget := NewSentinelToolBudget()
 
