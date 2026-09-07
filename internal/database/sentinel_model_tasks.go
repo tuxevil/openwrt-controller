@@ -52,8 +52,13 @@ func EnsureSentinelModelTaskTable(schema string) error {
 	if err != nil {
 		return err
 	}
-	_, err = DB.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_sentinel_model_tasks_ready
-		ON %s.sentinel_model_tasks(status, not_before, created_at)`, quoted))
+	if _, err = DB.Exec(fmt.Sprintf(`CREATE INDEX IF NOT EXISTS idx_sentinel_model_tasks_ready
+		ON %s.sentinel_model_tasks(status, not_before, created_at)`, quoted)); err != nil {
+		return err
+	}
+	_, err = DB.Exec(fmt.Sprintf(`CREATE UNIQUE INDEX IF NOT EXISTS idx_sentinel_model_tasks_active_unique
+		ON %s.sentinel_model_tasks(case_id, reasoning_class)
+		WHERE status IN ('QUEUED','RUNNING')`, quoted))
 	return err
 }
 
@@ -67,12 +72,9 @@ func QueueSentinelModelTask(schema, caseID, reasoningClass, prompt string) (Sent
 	}
 	var task SentinelModelTask
 	query := fmt.Sprintf(`INSERT INTO %s.sentinel_model_tasks (case_id, reasoning_class, prompt)
-		SELECT $1::uuid, $2, $3
-		WHERE NOT EXISTS (
-			SELECT 1 FROM %s.sentinel_model_tasks
-			WHERE case_id = $1::uuid AND reasoning_class = $2 AND status IN ('QUEUED','RUNNING')
-		)
-		RETURNING id::text, case_id::text, reasoning_class, prompt, status, result, attempts, last_error, created_at, updated_at`, quoted, quoted)
+		VALUES ($1::uuid, $2, $3)
+		ON CONFLICT (case_id, reasoning_class) WHERE status IN ('QUEUED','RUNNING') DO NOTHING
+		RETURNING id::text, case_id::text, reasoning_class, prompt, status, result, attempts, last_error, created_at, updated_at`, quoted)
 	err = DB.QueryRow(query, caseID, reasoningClass, prompt).Scan(
 		&task.ID, &task.CaseID, &task.ReasoningClass, &task.Prompt, &task.Status, &task.Result,
 		&task.Attempts, &task.LastError, &task.CreatedAt, &task.UpdatedAt,
