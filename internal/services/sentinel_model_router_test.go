@@ -40,6 +40,47 @@ func TestRoutineRouteRejectsImplicitCloud(t *testing.T) {
 	}
 }
 
+func TestLocalRouteOverrideDoesNotInheritPlatformCredential(t *testing.T) {
+	settings := database.PlatformSettings{
+		AIEngineBaseURL: "https://api.example.com/v1",
+		AIEngineModel:   "legacy-model",
+		AIEngineAPIKey:  "platform-secret",
+	}
+	values := map[string]string{
+		"SENTINEL_ROUTINE_BASE_URL": "http://litellm:4000/v1",
+		"SENTINEL_ROUTINE_MODEL":    "local-model",
+	}
+	route, err := resolveSentinelModelRouteWithEnv(SentinelReasoningRoutine, settings, func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.APIKey != "" {
+		t.Fatal("local endpoint override inherited the platform API key")
+	}
+}
+
+func TestRemoteRouteOverrideRequiresOwnCredential(t *testing.T) {
+	settings := database.PlatformSettings{
+		AIEngineBaseURL: "https://platform.example.com/v1",
+		AIEngineAPIKey:  "platform-secret",
+	}
+	values := map[string]string{
+		"SENTINEL_FRONTIER_BASE_URL": "https://frontier.example.net/v1",
+		"SENTINEL_FRONTIER_MODEL":    "frontier-alias",
+	}
+	if _, err := resolveSentinelModelRouteWithEnv(SentinelReasoningFrontierEscalation, settings, func(key string) string { return values[key] }); err == nil {
+		t.Fatal("remote endpoint override should require its own API key")
+	}
+	values["SENTINEL_FRONTIER_API_KEY"] = "route-secret"
+	route, err := resolveSentinelModelRouteWithEnv(SentinelReasoningFrontierEscalation, settings, func(key string) string { return values[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if route.APIKey != "route-secret" {
+		t.Fatal("remote endpoint override did not use its route-specific key")
+	}
+}
+
 func TestDeepRouteCanUseExplicitStrongerLocalAlias(t *testing.T) {
 	settings := database.PlatformSettings{AIEngineBaseURL: "http://litellm:4000/v1", AIEngineModel: "small-local"}
 	values := map[string]string{"SENTINEL_DEEP_RCA_MODEL": "strong-local"}
@@ -83,17 +124,16 @@ func TestDeepRouteFallsBackOnlyToRoutine(t *testing.T) {
 }
 
 func TestOpenAICompatibleTransportAllowsKeylessLocalEndpoint(t *testing.T) {
+	var authHeader string
+	var receivedModel interface{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "" {
-			t.Fatalf("unexpected Authorization header %q", got)
-		}
+		authHeader = r.Header.Get("Authorization")
 		var payload map[string]interface{}
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-			t.Fatal(err)
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-		if payload["model"] != "local-alias" {
-			t.Fatalf("model = %#v", payload["model"])
-		}
+		receivedModel = payload["model"]
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"local-alias","choices":[{"message":{"content":"ok"}}],"usage":{"total_tokens":7}}`))
 	}))
@@ -102,6 +142,12 @@ func TestOpenAICompatibleTransportAllowsKeylessLocalEndpoint(t *testing.T) {
 	content, model, tokens, err := completeAIEndpointContext(context.Background(), server.URL, "local-alias", "", "system", "user", false)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if authHeader != "" {
+		t.Fatalf("unexpected Authorization header %q", authHeader)
+	}
+	if receivedModel != "local-alias" {
+		t.Fatalf("model = %#v", receivedModel)
 	}
 	if content != "ok" || model != "local-alias" || tokens != 7 {
 		t.Fatalf("content=%q model=%q tokens=%d", content, model, tokens)
