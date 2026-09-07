@@ -1,0 +1,94 @@
+name: Sentinel Case formatter
+
+on:
+  push:
+    branches: [sentinel-case-context]
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: sentinel-case-context
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Apply context propagation and formatting
+        shell: python
+        run: |
+          from pathlib import Path
+
+          context_file = Path("internal/services/sentinel_case_context.go")
+          text = context_file.read_text()
+          text = text.replace("defer tx.Rollback()", "defer func() { _ = tx.Rollback() }()")
+          text = text.replace(
+              "func executeSentinelCaseRun(schema, runID string) (SentinelInvestigationResult, *SentinelProposal, string, error) {",
+              "func executeSentinelCaseRun(ctx context.Context, schema, runID string) (SentinelInvestigationResult, *SentinelProposal, string, error) {",
+          )
+          text = text.replace(
+              "result, err := runSentinelInvestigationForCase(schema, caseID, history, query, siteID)",
+              "result, err := runSentinelInvestigationForCase(ctx, schema, caseID, history, query, siteID)",
+          )
+          text = text.replace(
+              "func RunSentinelCaseMessage(schema, runID string) {\n\t_, _, _, err := executeSentinelCaseRun(schema, runID)",
+              "func RunSentinelCaseMessage(ctx context.Context, schema, runID string) {\n\t_, _, _, err := executeSentinelCaseRun(ctx, schema, runID)",
+          )
+          text = text.replace(
+              "func ProcessSentinelCaseMessageForSite(schema, conversationID, query, siteID, requestedCaseID, createdBy string) (SentinelInvestigationResult, *SentinelProposal, string, error) {",
+              "func ProcessSentinelCaseMessageForSite(ctx context.Context, schema, conversationID, query, siteID, requestedCaseID, createdBy string) (SentinelInvestigationResult, *SentinelProposal, string, error) {",
+          )
+          text = text.replace(
+              "return executeSentinelCaseRun(schema, run.ID)",
+              "return executeSentinelCaseRun(ctx, schema, run.ID)",
+          )
+          text = text.replace(
+              "result, err := runSentinelInvestigationForCase(schema, caseID, nil, query, item.SiteID)",
+              "result, err := runSentinelInvestigationForCase(context.Background(), schema, caseID, nil, query, item.SiteID)",
+          )
+          context_file.write_text(text)
+
+          handler = Path("internal/api/handlers/sentinel_agent.go")
+          text = handler.read_text()
+          text = text.replace('import (\n\t"database/sql"', 'import (\n\t"context"\n\t"database/sql"')
+          text = text.replace(
+              "go services.RunSentinelCaseMessage(schema, run.ID)",
+              "go services.RunSentinelCaseMessage(context.WithoutCancel(r.Context()), schema, run.ID)",
+          )
+          text = text.replace(
+              "services.ProcessSentinelCaseMessageForSite(schema, conversationID, req.Query, req.SiteID, req.CaseID, GetUsernameFromReq(r))",
+              "services.ProcessSentinelCaseMessageForSite(r.Context(), schema, conversationID, req.Query, req.SiteID, req.CaseID, GetUsernameFromReq(r))",
+          )
+          handler.write_text(text)
+
+          test_file = Path("internal/services/sentinel_case_context_test.go")
+          text = test_file.read_text().replace(
+              '\t"github.com/DATA-DOG/go-sqlmock"\n\t"openwrt-controller/internal/database"',
+              '\t"github.com/DATA-DOG/go-sqlmock"\n\n\t"openwrt-controller/internal/database"',
+          )
+          test_file.write_text(text)
+      - name: gofmt
+        run: |
+          gofmt -w \
+            cmd/openwrt-controller/main.go \
+            internal/api/handlers/sentinel_agent.go \
+            internal/services/sentinel_case_context.go \
+            internal/services/sentinel_case_investigation.go \
+            internal/services/sentinel_case_open.go \
+            internal/services/sentinel_case_view.go \
+            internal/services/sentinel_case_context_test.go \
+            internal/services/sentinel_case_boundary_test.go \
+            internal/services/sentinel_core.go
+      - name: Commit formatter output
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cmd/openwrt-controller/main.go internal/api/handlers/sentinel_agent.go internal/services/
+          git commit -m "fix(sentinel): propagate context and format Case compiler"
+          git push origin HEAD:sentinel-case-context
