@@ -21,6 +21,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           def patch(path, old, new):
               p = Path(path)
@@ -119,10 +120,9 @@ jobs:
 
           p = Path("internal/services/sentinel_store.go")
           text = p.read_text()
-          old = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases
-            WHERE resolved_at IS NOT NULL AND resolved_at < $1`, schema), cutoff)
-          '''
-          new = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
+          if "DELETE FROM %s.sentinel_cases c" not in text:
+              pattern = re.compile(r'\t\tresult, err = database\.DB\.ExecContext\(ctx, fmt\.Sprintf\(`DELETE FROM %s\.sentinel_cases\s+WHERE resolved_at IS NOT NULL AND resolved_at < \$1`, schema\), cutoff\)')
+              replacement = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
             WHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
             AND NOT EXISTS (
                 SELECT 1 FROM %s.sentinel_learned_memories m
@@ -134,12 +134,11 @@ jobs:
                 SELECT 1 FROM %s.sentinel_skills s
                 WHERE s.source_case_id = c.id
                 AND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
-            )`, schema, schema, schema), cutoff)
-          '''
-          if old in text:
-              p.write_text(text.replace(old, new, 1))
-          elif new not in text:
-              raise SystemExit("sentinel case retention delete pattern not found")
+            )`, schema, schema, schema), cutoff)'''
+              text, count = pattern.subn(replacement, text, count=1)
+              if count != 1:
+                  raise SystemExit("sentinel case retention delete regex not found")
+              p.write_text(text)
       - name: Format
         run: gofmt -w internal/services/sentinel_learning_store.go internal/services/sentinel_store.go
       - name: Validate
