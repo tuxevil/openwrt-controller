@@ -251,18 +251,22 @@ func SweepSentinelHistory(ctx context.Context, days int) (int64, error) {
 		count, _ = result.RowsAffected()
 		total += count
 		result, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
-  WHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
-  AND NOT EXISTS (
-      SELECT 1 FROM %s.sentinel_learned_memories m
-      WHERE m.source_case_id = c.id
-      AND m.validation_state IN ('CANDIDATE','VALIDATED')
-      AND m.expires_at > CURRENT_TIMESTAMP
-  )
-  AND NOT EXISTS (
-      SELECT 1 FROM %s.sentinel_skills s
-      WHERE s.source_case_id = c.id
-      AND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
-  )`, schema, schema, schema), cutoff)
+            WHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
+            AND NOT EXISTS (
+                SELECT 1 FROM %s.sentinel_learned_memories m
+                WHERE m.validation_state IN ('CANDIDATE','VALIDATED')
+                AND m.expires_at > CURRENT_TIMESTAMP
+                AND (
+                    m.source_case_id = c.id
+                    OR EXISTS (SELECT 1 FROM jsonb_array_elements(m.evidence_refs) e WHERE e->>'case_id' = c.id::text)
+                    OR EXISTS (SELECT 1 FROM jsonb_array_elements(m.counter_evidence_refs) e WHERE e->>'case_id' = c.id::text)
+                )
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM %s.sentinel_skills s
+                WHERE s.source_case_id = c.id
+                AND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
+            )`, schema, schema, schema), cutoff)
 		if err != nil {
 			return total, err
 		}
