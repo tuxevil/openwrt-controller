@@ -89,6 +89,6 @@ jobs:
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add cmd/openwrt-controller/main.go internal/api/handlers/sentinel_agent.go internal/services/
+          git add -u
           git commit -m "fix(sentinel): propagate context and format Case compiler"
           git push origin HEAD:sentinel-case-context
