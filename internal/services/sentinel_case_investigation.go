@@ -12,31 +12,6 @@ import (
 
 const sentinelCaseContextToolReserve = 4
 
-func sentinelToolArgumentsForCase(raw json.RawMessage, schema string, compiled SentinelCompiledContext) json.RawMessage {
-	args, err := decodeSentinelToolArguments(raw)
-	if err != nil {
-		args = map[string]interface{}{}
-	}
-	args["schema"] = schema
-	if compiled.SiteID != "" {
-		args["site_id"] = compiled.SiteID
-	}
-	if compiled.DeviceID != "" {
-		if descriptor, ok := sentinelToolRegistry.Descriptor(argumentsToolName(raw)); ok {
-			if _, supported := descriptor.InputSchema.Properties["device_id"]; supported {
-				args["device_id"] = compiled.DeviceID
-			}
-		}
-	}
-	encoded, _ := json.Marshal(args)
-	return encoded
-}
-
-// argumentsToolName is deliberately a no-op placeholder for callers that only
-// need scope injection. The actual tool-aware helper below is used by the
-// investigation loop so model arguments can never escape the Case device.
-func argumentsToolName(json.RawMessage) string { return "" }
-
 func sentinelToolArgumentsForCaseCall(call SentinelToolCall, schema string, compiled SentinelCompiledContext) json.RawMessage {
 	args, err := decodeSentinelToolArguments(call.Arguments)
 	if err != nil {
