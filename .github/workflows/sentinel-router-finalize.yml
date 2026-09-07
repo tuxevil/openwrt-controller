@@ -1,0 +1,108 @@
+name: Sentinel router finalize
+
+on:
+  push:
+    branches: [sentinel-model-routing]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: sentinel-model-routing
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+      - name: Wire optional escalation after local evidence persistence
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path("internal/services/sentinel_model_tasks.go")
+          text = p.read_text()
+          old = '''func MaybeQueueSentinelFrontierEscalation(schema, caseID string, result SentinelInvestigationResult) {
+          \tif !sentinelBoolEnv(os.Getenv, "SENTINEL_AUTO_FRONTIER_ESCALATION", false) || !sentinelInvestigationNeedsFrontier(result) {
+          \t\treturn
+          \t}
+          \tprompt := "Review the unresolved local Sentinel investigation. Use the current Case context and identify the strongest remaining hypotheses, missing evidence, and the safest next diagnostic step. Do not propose direct execution."
+          \tif _, err := QueueSentinelFrontierEscalation(schema, caseID, prompt); err != nil {
+          \t\tlog.Printf("[SENTINEL_ROUTER] optional frontier escalation for Case %s was not queued: %v", caseID, err)
+          \t}
+          }
+          '''
+          new = '''func MaybeQueueSentinelFrontierEscalation(schema, caseID string, result SentinelInvestigationResult) {
+          \tif !sentinelBoolEnv(os.Getenv, "SENTINEL_AUTO_FRONTIER_ESCALATION", false) || !sentinelInvestigationNeedsFrontier(result) {
+          \t\treturn
+          \t}
+          \tif _, err := ResolveSentinelModelRoute(SentinelReasoningFrontierEscalation); err != nil {
+          \t\tlog.Printf("[SENTINEL_ROUTER] frontier escalation for Case %s is disabled: %v", caseID, err)
+          \t\treturn
+          \t}
+          \tprompt := "Review the unresolved local Sentinel investigation. Use the current Case context and identify the strongest remaining hypotheses, missing evidence, and the safest next diagnostic step. Do not propose direct execution."
+          \tif _, err := QueueSentinelFrontierEscalation(schema, caseID, prompt); err != nil {
+          \t\tlog.Printf("[SENTINEL_ROUTER] optional frontier escalation for Case %s was not queued: %v", caseID, err)
+          \t}
+          }
+          '''
+          if old not in text:
+              raise SystemExit("frontier function pattern not found")
+          p.write_text(text.replace(old, new))
+
+          p = Path("internal/services/sentinel_case_context.go")
+          text = p.read_text()
+          old = '''\trefs, err := PersistSentinelCaseEvidence(schema, caseID, runID, "operator_chat", result.Evidence)
+          \tif err != nil {
+          \t\treturn result, nil, caseID, err
+          \t}
+          \tmetadata, _ := json.Marshal(map[string]interface{}{
+          \t\t"case_id": caseID, "evidence_refs": refs, "tool_calls": result.ToolCalls, "rounds": result.Rounds,
+          \t\t"llm_model": result.LLMModel, "tokens_used": result.TokensUsed,
+          \t})
+          '''
+          new = '''\trefs, err := PersistSentinelCaseEvidence(schema, caseID, runID, "operator_chat", result.Evidence)
+          \tif err != nil {
+          \t\treturn result, nil, caseID, err
+          \t}
+          \tMaybeQueueSentinelFrontierEscalation(schema, caseID, result)
+          \treasoningClass := ClassifySentinelReasoning(item, query)
+          \tmetadata, _ := json.Marshal(map[string]interface{}{
+          \t\t"case_id": caseID, "evidence_refs": refs, "tool_calls": result.ToolCalls, "rounds": result.Rounds,
+          \t\t"llm_model": result.LLMModel, "tokens_used": result.TokensUsed, "reasoning_class": reasoningClass,
+          \t})
+          '''
+          if old not in text:
+              raise SystemExit("operator run pattern not found")
+          text = text.replace(old, new)
+
+          old = '''\tif _, err := PersistSentinelCaseEvidence(schema, caseID, investigationID, "automation", result.Evidence); err != nil {
+          \t\tlogSentinelInvestigationError(caseID, err)
+          \t\treturn
+          \t}
+          \t// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
+          '''
+          new = '''\tif _, err := PersistSentinelCaseEvidence(schema, caseID, investigationID, "automation", result.Evidence); err != nil {
+          \t\tlogSentinelInvestigationError(caseID, err)
+          \t\treturn
+          \t}
+          \tMaybeQueueSentinelFrontierEscalation(schema, caseID, result)
+          \t// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
+          '''
+          if old not in text:
+              raise SystemExit("automation run pattern not found")
+          p.write_text(text.replace(old, new))
+      - name: Format
+        run: gofmt -w internal/services/sentinel_model_tasks.go internal/services/sentinel_case_context.go
+      - name: Commit final wiring
+        run: |
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -m "fix(sentinel): queue optional escalation after local evidence"
+          git push origin HEAD:sentinel-model-routing
