@@ -110,7 +110,7 @@ func main() {
 	defer close(logStopCh)
 
 	sentinelStopCh := make(chan struct{})
-	services.StartSentinelCaseRecovery(sentinelStopCh)
+	services.StartSentinelCaseContextRecovery(sentinelStopCh)
 	defer close(sentinelStopCh)
 
 	// Build the route mux and wrap it with the metrics middleware.
