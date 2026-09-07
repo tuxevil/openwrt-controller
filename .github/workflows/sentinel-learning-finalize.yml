@@ -42,6 +42,7 @@ jobs:
 
           # Remove placeholder imports and add a controller-owned manual curation queue.
           patch("internal/services/sentinel_learning_lifecycle.go", '\t"context"\n', '')
+          patch("internal/services/sentinel_learning_lifecycle.go", '\t"encoding/json"\n', '')
           patch("internal/services/sentinel_learning_lifecycle.go",
           '''func MaybeQueueSentinelLearningCuration(schema, caseID string) {
           \tif !sentinelBoolEnv(os.Getenv, "SENTINEL_AUTO_CURATION", false) {
