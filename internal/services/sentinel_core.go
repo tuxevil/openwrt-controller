@@ -5,33 +5,35 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"sync"
-	"time"
 
 	"openwrt-controller/internal/database"
 )
 
-var (
-	lastSentinelRun time.Time
-	sentinelMu      sync.Mutex
-)
-
-// AnalyzeLogs hooks into the LogHarvester ingestion stream to act as the Reactive Pipeline.
+// AnalyzeLogs hooks into the LogHarvester ingestion stream. Reactive AI work
+// is represented as a durable Case before any model call so automation and
+// operator chat share the same evidence/context path.
 func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
-	// 1. Evaluate Sniper Shaping (Active Defense) BEFORE any debounce or AI trigger logic
+	safeSchema, err := sentinelSchema(schema)
+	if err != nil || database.DB == nil {
+		return
+	}
+	var siteID string
+	var stateJSON []byte
+	// #nosec G201 -- safeSchema is validated by sentinelSchema; deviceID is parameterized.
+	_ = database.DB.QueryRow(fmt.Sprintf("SELECT COALESCE(site_id::text,''), state_json FROM %s.devices WHERE id = $1", safeSchema), deviceID).Scan(&siteID, &stateJSON)
+
+	// Preserve the more specific brute-force Case when the source can be
+	// resolved to a local endpoint. Any response remains proposal/approval
+	// gated; this detector only creates evidence and schedules investigation.
 	triggerSniper := false
 	var targetIP string
 	for _, l := range logs {
-		msg := l.Message
-		msgLower := strings.ToLower(msg)
-		// E.g. Bad password attempt for 'root' from 192.168.1.100:1234
-		// Or: Exit before auth from <10.0.0.144:46794>
+		msgLower := strings.ToLower(l.Message)
 		if strings.Contains(msgLower, "bad password") && strings.Contains(msgLower, "from") {
 			parts := strings.Split(msgLower, "from ")
-			// parts[1] will be something like "10.0.0.144:46794" or "<10.0.0.144:46794>..."
 			if len(parts) == 2 {
 				ipPort := strings.Fields(parts[1])[0]
-				ipPort = strings.Trim(ipPort, "<>") // Strip potential < > brackets from dropbear logs
+				ipPort = strings.Trim(ipPort, "<>")
 				ipOnly := strings.Split(ipPort, ":")[0]
 				if strings.HasPrefix(ipOnly, "192.168.") || strings.HasPrefix(ipOnly, "10.") {
 					targetIP = ipOnly
@@ -42,110 +44,64 @@ func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 		}
 	}
 
-	if triggerSniper && targetIP != "" {
-		log.Printf("[SENTINEL_AI] Local brute force detected from %s. Creating an approval-gated investigation.", targetIP)
-
-		// Resolve context from the ARP table, but leave any response action to
-		// Sentinel's proposal and approval flow.
-		var stateJSON []byte
-		var siteID string
-		err := database.DB.QueryRow(fmt.Sprintf("SELECT site_id, state_json FROM %s.devices WHERE id = $1", schema), deviceID).Scan(&siteID, &stateJSON)
-		if err == nil && len(stateJSON) > 0 {
-			var state map[string]interface{}
-			if json.Unmarshal(stateJSON, &state) == nil {
-				if arp, ok := state["arp_table"].([]interface{}); ok {
-					var targetMac string
-					for _, entry := range arp {
-						if e, ok := entry.(map[string]interface{}); ok {
-							if ip, ok := e["ip"].(string); ok && ip == targetIP {
-								if m, ok := e["mac"].(string); ok {
-									targetMac = m
-									break
-								}
+	if triggerSniper && targetIP != "" && len(stateJSON) > 0 {
+		var state map[string]interface{}
+		if json.Unmarshal(stateJSON, &state) == nil {
+			if arp, ok := state["arp_table"].([]interface{}); ok {
+				var targetMAC string
+				for _, entry := range arp {
+					if e, ok := entry.(map[string]interface{}); ok {
+						if ip, ok := e["ip"].(string); ok && ip == targetIP {
+							if mac, ok := e["mac"].(string); ok {
+								targetMAC = mac
+								break
 							}
 						}
 					}
-
-					if targetMac != "" {
-						caseID, caseErr := OpenSentinelCase(schema, "brute_force", siteID, deviceID, "HIGH",
-							"Local brute force detected", fmt.Sprintf("Failed authentication from %s resolved to %s", targetIP, targetMac), map[string]string{
-								"source_ip":  targetIP,
-								"source_mac": targetMac,
-							})
-						if caseErr == nil {
-							QueueSentinelCaseInvestigation(schema, caseID)
-						} else {
-							log.Printf("[SENTINEL_AI] failed to persist brute-force case: %v", caseErr)
-						}
+				}
+				if targetMAC != "" {
+					caseID, caseErr := OpenSentinelCasePreservingEvidence(schema, "brute_force", siteID, deviceID, "HIGH",
+						"Local brute force detected", fmt.Sprintf("Failed authentication from %s resolved to %s", targetIP, targetMAC), map[string]string{
+							"source_ip":  targetIP,
+							"source_mac": targetMAC,
+						})
+					if caseErr == nil {
+						log.Printf("[SENTINEL_AI] Local brute force detected from %s. Case %s queued.", targetIP, caseID)
+						QueueSentinelCaseContextInvestigation(schema, caseID)
+					} else {
+						log.Printf("[SENTINEL_AI] failed to persist brute-force case: %v", caseErr)
 					}
 				}
 			}
 		}
 	}
 
-	// 2. Evaluate AI Inference triggers
-	triggers := []string{"panic", "OOM", "segfault", "auth.error", "denied", "hostapd: deauthenticated", "refused", "bad password", "exit before auth"}
-
-	triggered := false
+	triggers := []string{"panic", "oom", "segfault", "auth.error", "denied", "hostapd: deauthenticated", "refused", "bad password", "exit before auth"}
+	matched := make([]string, 0, 10)
 	for _, l := range logs {
-		msgLower := strings.ToLower(l.Message)
-		for _, t := range triggers {
-			if strings.Contains(msgLower, strings.ToLower(t)) {
-				triggered = true
+		messageLower := strings.ToLower(l.Message)
+		for _, trigger := range triggers {
+			if strings.Contains(messageLower, trigger) {
+				matched = append(matched, redactSentinelSecrets(l.Message))
 				break
 			}
 		}
-		if triggered {
+		if len(matched) == 10 {
 			break
 		}
 	}
-
-	if !triggered {
+	if len(matched) == 0 {
 		return
 	}
 
-	sentinelMu.Lock()
-	if time.Since(lastSentinelRun) < 5*time.Minute {
-		sentinelMu.Unlock()
+	caseID, caseErr := OpenSentinelCasePreservingEvidence(schema, "log_anomaly", siteID, deviceID, "MEDIUM",
+		"Reactive log anomaly", "A Sentinel log trigger matched on the device. Current state must be re-read from OMEGA during investigation.", map[string]interface{}{
+			"matched_log_samples": matched,
+			"sample_count":        len(matched),
+		})
+	if caseErr != nil {
+		log.Printf("[SENTINEL_AI] failed to persist reactive log Case: %v", caseErr)
 		return
 	}
-	lastSentinelRun = time.Now()
-	sentinelMu.Unlock()
-
-	go func(targetTime time.Time) {
-		log.Println("[SENTINEL_AI] Critical trigger detected. Gathering fleet context...")
-
-		contextLogs := database.GetGlobalContext(schema, targetTime, 100)
-		if contextLogs == "" {
-			return
-		}
-
-		diagnosis, severity, involvedDevices, _, _, err := AnalyzeFleetContextForSchema(schema, contextLogs)
-		if err != nil {
-			log.Printf("[SENTINEL_AI] Inference engine error: %v", err)
-			return
-		}
-
-		// Save to ai_insights
-		correlationID := fmt.Sprintf("AI-CORR-%d", targetTime.Unix())
-		involvedJSON, _ := json.Marshal(involvedDevices)
-
-		_, err = database.DB.Exec(fmt.Sprintf(`
-			INSERT INTO %s.ai_insights (correlation_id, diagnosis, severity, involved_devices)
-			VALUES ($1, $2, $3, $4)
-		`, schema), correlationID, diagnosis, severity, string(involvedJSON))
-
-		if err != nil {
-			log.Printf("[SENTINEL_AI] DB Insert error: %v", err)
-			return
-		}
-
-		log.Printf("[SENTINEL_AI] Analysis complete. Severity: %s", severity)
-
-		sevUpper := strings.ToUpper(severity)
-		if sevUpper == "HIGH" || sevUpper == "CRITICAL" {
-			msg := fmt.Sprintf("🚨 *SENTINEL ALERT (Severity: %s)*\n\n%s", severity, diagnosis)
-			notifyTelegram(msg)
-		}
-	}(time.Now())
+	QueueSentinelCaseContextInvestigation(schema, caseID)
 }

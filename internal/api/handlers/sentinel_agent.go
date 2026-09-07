@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,7 @@ type sentinelConversationRequest struct {
 type sentinelMessageRequest struct {
 	Query  string `json:"query"`
 	SiteID string `json:"site_id"`
+	CaseID string `json:"case_id,omitempty"`
 }
 
 type sentinelNoteRequest struct {
@@ -72,6 +74,17 @@ func parseOptionalSentinelSiteID(w http.ResponseWriter, raw string) bool {
 	}
 	if _, err := uuid.Parse(raw); err != nil {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_SITE_ID", "invalid Sentinel site_id")
+		return false
+	}
+	return true
+}
+
+func parseOptionalSentinelCaseID(w http.ResponseWriter, raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return true
+	}
+	if _, err := uuid.Parse(raw); err != nil {
+		writeSentinelError(w, http.StatusBadRequest, "INVALID_CASE_ID", "invalid Sentinel case_id")
 		return false
 	}
 	return true
@@ -135,30 +148,31 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_JSON", "invalid Sentinel message payload")
 		return
 	}
-	if !parseOptionalSentinelSiteID(w, req.SiteID) {
+	if !parseOptionalSentinelSiteID(w, req.SiteID) || !parseOptionalSentinelCaseID(w, req.CaseID) {
 		return
 	}
 	if strings.TrimSpace(req.Query) == "" || len(req.Query) > 8000 {
 		writeSentinelError(w, http.StatusBadRequest, "INVALID_QUERY", "query must contain between 1 and 8000 characters")
 		return
 	}
+	schema := sentinelSchemaFromRequest(r)
 	if r.URL.Query().Get("async") == "true" {
-		run, err := services.QueueSentinelMessageForSite(sentinelSchemaFromRequest(r), conversationID, req.Query, req.SiteID, GetUsernameFromReq(r))
+		run, err := services.QueueSentinelCaseMessageForSite(schema, conversationID, req.Query, req.SiteID, req.CaseID, GetUsernameFromReq(r))
 		if errors.Is(err, sql.ErrNoRows) {
-			writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation not found")
+			writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation or Case not found")
 			return
 		}
 		if err != nil {
-			writeSentinelError(w, http.StatusBadRequest, "QUEUE_FAILED", "could not queue Sentinel investigation")
+			writeSentinelError(w, http.StatusBadRequest, "QUEUE_FAILED", err.Error())
 			return
 		}
-		go services.RunSentinelMessage(sentinelSchemaFromRequest(r), run.ID)
+		go services.RunSentinelCaseMessage(context.WithoutCancel(r.Context()), schema, run.ID)
 		writeSentinelJSON(w, http.StatusAccepted, run)
 		return
 	}
-	result, proposal, err := services.ProcessSentinelMessageForSite(sentinelSchemaFromRequest(r), conversationID, req.Query, req.SiteID, GetUsernameFromReq(r))
+	result, proposal, caseID, err := services.ProcessSentinelCaseMessageForSite(r.Context(), schema, conversationID, req.Query, req.SiteID, req.CaseID, GetUsernameFromReq(r))
 	if errors.Is(err, sql.ErrNoRows) {
-		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation not found")
+		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation or Case not found")
 		return
 	}
 	if err != nil {
@@ -167,6 +181,7 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSentinelJSON(w, http.StatusOK, map[string]interface{}{
 		"conversation_id": conversationID,
+		"case_id":         caseID,
 		"site_id":         req.SiteID,
 		"answer":          result.Answer,
 		"evidence":        result.Evidence,
@@ -192,7 +207,7 @@ func GetSentinelRunHandler(w http.ResponseWriter, r *http.Request) {
 		writeSentinelError(w, http.StatusInternalServerError, "GET_FAILED", "could not load Sentinel run")
 		return
 	}
-	writeSentinelJSON(w, http.StatusOK, run)
+	writeSentinelJSON(w, http.StatusOK, services.SentinelRunViewFor(run))
 }
 
 func ListSentinelCasesHandler(w http.ResponseWriter, r *http.Request) {

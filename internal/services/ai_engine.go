@@ -67,20 +67,37 @@ func completeAI(systemPrompt, userPrompt string, jsonMode bool) (string, string,
 	return completeAIContext(context.Background(), systemPrompt, userPrompt, jsonMode)
 }
 
+// completeAIContext preserves the platform-wide legacy AI engine contract for
+// non-Sentinel callers. Sentinel investigations use completeSentinelReasoningContext
+// so routing policy remains outside domain logic.
 func completeAIContext(ctx context.Context, systemPrompt, userPrompt string, jsonMode bool) (string, string, int, error) {
 	settings := database.GetPlatformSettings()
 	baseURL := strings.TrimRight(settings.AIEngineBaseURL, "/")
 	if baseURL == "" {
 		baseURL = "https://api.openai.com/v1"
 	}
-	if settings.AIEngineModel == "" {
-		settings.AIEngineModel = "gpt-4o-mini"
+	model := strings.TrimSpace(settings.AIEngineModel)
+	if model == "" {
+		model = "gpt-4o-mini"
 	}
-	if settings.AIEngineAPIKey == "" {
+	apiKey := openAIKey(settings.AIEngineAPIKey)
+	if apiKey == "" && !sentinelURLIsLocal(baseURL) {
 		return "", "", 0, fmt.Errorf("AI engine API key is not configured")
 	}
+	return completeAIEndpointContext(ctx, baseURL, model, apiKey, systemPrompt, userPrompt, jsonMode)
+}
+
+// completeAIEndpointContext is the provider-agnostic OpenAI-compatible
+// transport primitive. It knows an endpoint/model/key, but no Sentinel
+// reasoning classes or provider names.
+func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, systemPrompt, userPrompt string, jsonMode bool) (string, string, int, error) {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	model = strings.TrimSpace(model)
+	if baseURL == "" || model == "" {
+		return "", "", 0, fmt.Errorf("AI endpoint and model are required")
+	}
 	payload := map[string]interface{}{
-		"model": settings.AIEngineModel,
+		"model": model,
 		"messages": []map[string]string{
 			{"role": "system", "content": systemPrompt},
 			{"role": "user", "content": userPrompt},
@@ -98,12 +115,14 @@ func completeAIContext(ctx context.Context, systemPrompt, userPrompt string, jso
 		return "", "", 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+openAIKey(settings.AIEngineAPIKey))
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	resp, err := (&http.Client{Timeout: 300 * time.Second}).Do(req)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("AI engine request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	responseBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", "", 0, err
