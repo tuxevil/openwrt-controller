@@ -1,9 +1,7 @@
 package services
 
 import (
-	"context"
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -604,15 +602,19 @@ func importSentinelCurationCandidates(schema, taskID, caseID, raw string) error 
 	return nil
 }
 
+func QueueSentinelCaseCuration(schema, caseID string) (database.SentinelModelTask, error) {
+	if _, err := ResolveSentinelModelRoute(SentinelReasoningCuration); err != nil {
+		return database.SentinelModelTask{}, err
+	}
+	prompt := "Curate reusable candidate memories and declarative read-only investigation skills from this Case. Cite only evidence IDs present in the compiled Case context. Return empty arrays rather than guessing."
+	return QueueSentinelCurationTask(schema, caseID, prompt)
+}
+
 func MaybeQueueSentinelLearningCuration(schema, caseID string) {
 	if !sentinelBoolEnv(os.Getenv, "SENTINEL_AUTO_CURATION", false) {
 		return
 	}
-	if _, err := ResolveSentinelModelRoute(SentinelReasoningCuration); err != nil {
-		return
-	}
-	prompt := "Curate reusable candidate memories and declarative read-only investigation skills from this Case. Cite only evidence IDs present in the compiled Case context. Return empty arrays rather than guessing."
-	if _, err := QueueSentinelCurationTask(schema, caseID, prompt); err != nil {
+	if _, err := QueueSentinelCaseCuration(schema, caseID); err != nil {
 		log.Printf("[SENTINEL_LEARNING] queue curation for Case %s failed: %v", caseID, err)
 	}
 }
@@ -650,8 +652,3 @@ func StartSentinelLearningMaintenance(stopCh <-chan struct{}) {
 		}
 	}()
 }
-
-// Keep context imported here so future lifecycle extensions can use bounded
-// cancellation without adding execution authority. The current implementation
-// intentionally performs replay from stored evidence only.
-var _ = context.Canceled

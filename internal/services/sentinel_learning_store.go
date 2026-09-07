@@ -91,7 +91,7 @@ func ensureSentinelLearningTables(schema string) error {
 		WHERE mode = 'REPLAY';`,
 		safeSchema, safeSchema, safeSchema, safeSchema, safeSchema, safeSchema,
 		safeSchema, safeSchema, safeSchema, safeSchema, safeSchema, safeSchema,
-		safeSchema, safeSchema, safeSchema, safeSchema, safeSchema, safeSchema))
+		safeSchema, safeSchema, safeSchema, safeSchema))
 	return err
 }
 

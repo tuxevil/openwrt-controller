@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	SentinelMemoryStateCandidate   = "CANDIDATE"
-	SentinelMemoryStateValidated   = "VALIDATED"
-	SentinelMemoryStateRejected    = "REJECTED"
-	SentinelMemoryStateSuperseded  = "SUPERSEDED"
-	SentinelMemoryStateExpired     = "EXPIRED"
+	SentinelMemoryStateCandidate  = "CANDIDATE"
+	SentinelMemoryStateValidated  = "VALIDATED"
+	SentinelMemoryStateRejected   = "REJECTED"
+	SentinelMemoryStateSuperseded = "SUPERSEDED"
+	SentinelMemoryStateExpired    = "EXPIRED"
 
 	SentinelSkillStateDraft      = "DRAFT"
 	SentinelSkillStateValidated  = "VALIDATED"
@@ -90,20 +90,20 @@ type SentinelSkillSpec struct {
 }
 
 type SentinelSkill struct {
-	ID              string                `json:"id"`
-	SourceCaseID    string                `json:"source_case_id"`
-	Scope           SentinelLearningScope `json:"scope"`
-	State           string                `json:"state"`
-	Spec            SentinelSkillSpec     `json:"spec"`
-	Provenance      json.RawMessage       `json:"provenance,omitempty"`
-	StaticValidation json.RawMessage      `json:"static_validation,omitempty"`
-	CreatedBy       string                `json:"created_by"`
-	CreatedAt       time.Time             `json:"created_at"`
-	ValidatedAt     *time.Time            `json:"validated_at,omitempty"`
-	ShadowStartedAt *time.Time            `json:"shadow_started_at,omitempty"`
-	TrustedAt       *time.Time            `json:"trusted_at,omitempty"`
-	DeprecatedAt    *time.Time            `json:"deprecated_at,omitempty"`
-	RevokedAt       *time.Time            `json:"revoked_at,omitempty"`
+	ID               string                `json:"id"`
+	SourceCaseID     string                `json:"source_case_id"`
+	Scope            SentinelLearningScope `json:"scope"`
+	State            string                `json:"state"`
+	Spec             SentinelSkillSpec     `json:"spec"`
+	Provenance       json.RawMessage       `json:"provenance,omitempty"`
+	StaticValidation json.RawMessage       `json:"static_validation,omitempty"`
+	CreatedBy        string                `json:"created_by"`
+	CreatedAt        time.Time             `json:"created_at"`
+	ValidatedAt      *time.Time            `json:"validated_at,omitempty"`
+	ShadowStartedAt  *time.Time            `json:"shadow_started_at,omitempty"`
+	TrustedAt        *time.Time            `json:"trusted_at,omitempty"`
+	DeprecatedAt     *time.Time            `json:"deprecated_at,omitempty"`
+	RevokedAt        *time.Time            `json:"revoked_at,omitempty"`
 }
 
 type SentinelSkillDraftInput struct {
@@ -114,9 +114,9 @@ type SentinelSkillDraftInput struct {
 }
 
 type SentinelSkillValidation struct {
-	Valid         bool     `json:"valid"`
-	Unsafe        bool     `json:"unsafe"`
-	Errors        []string `json:"errors,omitempty"`
+	Valid          bool     `json:"valid"`
+	Unsafe         bool     `json:"unsafe"`
+	Errors         []string `json:"errors,omitempty"`
 	ValidatedTools []string `json:"validated_tools,omitempty"`
 }
 

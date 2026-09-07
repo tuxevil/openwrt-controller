@@ -66,9 +66,9 @@ func TestSentinelHistoricalEvidenceHonorsAsOf(t *testing.T) {
 
 func TestSentinelSkillPromotionThresholdsAreDeterministic(t *testing.T) {
 	stats := SentinelSkillPromotionStats{
-		ReplayCount: SentinelSkillPromotionMinReplay,
+		ReplayCount:       SentinelSkillPromotionMinReplay,
 		ReplaySuccessRate: SentinelSkillPromotionMinSuccessRatio,
-		ShadowCount: SentinelSkillPromotionMinShadow,
+		ShadowCount:       SentinelSkillPromotionMinShadow,
 		ShadowSuccessRate: SentinelSkillPromotionMinSuccessRatio,
 	}
 	if !sentinelSkillCanEnterShadow(stats) || !sentinelSkillCanPromote(stats) {

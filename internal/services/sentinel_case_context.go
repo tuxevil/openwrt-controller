@@ -359,11 +359,34 @@ func CompileSentinelCaseContext(ctx context.Context, schema, caseID string, hist
 		Data:       sentinelJSONData(map[string]string{"query": query}),
 	})
 
+	learningItems, learnedTools, learningErr := sentinelLearningContext(schema, item, query)
+	if learningErr != nil {
+		compiled.Warnings = append(compiled.Warnings, "learning context unavailable: "+learningErr.Error())
+	} else {
+		compiled.Items = append(compiled.Items, learningItems...)
+	}
+
+	toolPlan := sentinelContextToolPlan(query, item)
+	seenTools := make(map[string]bool, len(toolPlan))
+	for _, toolName := range toolPlan {
+		seenTools[toolName] = true
+	}
+	for _, toolName := range learnedTools {
+		if len(toolPlan) >= 4 {
+			compiled.Warnings = append(compiled.Warnings, "trusted skill tool plan truncated by Context Compiler budget")
+			break
+		}
+		if !seenTools[toolName] {
+			seenTools[toolName] = true
+			toolPlan = append(toolPlan, toolName)
+		}
+	}
+
 	if budget == nil {
 		budget = NewSentinelToolBudget()
 	}
 	prefetched := make([]SentinelEvidence, 0)
-	for _, toolName := range sentinelContextToolPlan(query, item) {
+	for _, toolName := range toolPlan {
 		descriptor, ok := sentinelToolRegistry.Descriptor(toolName)
 		if !ok || descriptor.SideEffectClass != SentinelToolSideEffectNone {
 			compiled.Warnings = append(compiled.Warnings, "context tool rejected: "+toolName)
@@ -576,6 +599,8 @@ func executeSentinelCaseRun(ctx context.Context, schema, runID string) (Sentinel
 	if err != nil {
 		return result, nil, caseID, err
 	}
+	EvaluateSentinelShadowSkills(schema, item, query, result.Evidence)
+	MaybeQueueSentinelLearningCuration(schema, caseID)
 	MaybeQueueSentinelFrontierEscalation(schema, caseID, result)
 	reasoningClass := ClassifySentinelReasoning(item, query)
 	metadata, _ := json.Marshal(map[string]interface{}{
@@ -661,6 +686,8 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 		logSentinelInvestigationError(caseID, err)
 		return
 	}
+	EvaluateSentinelShadowSkills(schema, item, query, result.Evidence)
+	MaybeQueueSentinelLearningCuration(schema, caseID)
 	MaybeQueueSentinelFrontierEscalation(schema, caseID, result)
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
 	_, err = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", safeSchema), result.Answer, caseID)

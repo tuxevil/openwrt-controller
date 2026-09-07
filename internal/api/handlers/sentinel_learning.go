@@ -2,7 +2,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -262,5 +261,3 @@ func QueueSentinelCaseCurationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSentinelJSON(w, http.StatusAccepted, task)
 }
-
-var _ = errors.Is
