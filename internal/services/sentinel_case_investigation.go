@@ -88,6 +88,12 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 	defer cancel()
 	toolBudget := NewSentinelToolBudget()
 
+	caseItem, err := GetSentinelCase(schema, caseID)
+	if err != nil {
+		return result, err
+	}
+	reasoningClass := ClassifySentinelReasoning(caseItem, query)
+
 	compiled, prefetched, err := CompileSentinelCaseContext(ctx, schema, caseID, history, query, toolBudget)
 	if err != nil {
 		return result, err
@@ -114,9 +120,9 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 			result.Answer = "Investigation timed out before Sentinel could complete its evidence review."
 			return result, err
 		}
-		content, model, tokens, err := completeAIContext(ctx, sentinelAgentSystemPrompt, prompt.String(), false)
+		content, execution, tokens, err := completeSentinelReasoningContext(ctx, reasoningClass, sentinelAgentSystemPrompt, prompt.String(), false)
 		result.Rounds = round + 1
-		result.LLMModel = model
+		result.LLMModel = execution.Model
 		result.TokensUsed += tokens
 		if err != nil {
 			return result, err
