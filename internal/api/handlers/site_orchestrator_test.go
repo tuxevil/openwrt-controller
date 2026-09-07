@@ -145,7 +145,7 @@ network.lan.netmask='255.255.255.0'
 
 func TestRolloutResultSuccessIncludesSkipped(t *testing.T) {
 	if !rolloutResultSuccess("SUCCESS") || !rolloutResultSuccess("SKIPPED") {
-		t.Fatal("successful and no-op rollout results should both advance generation")
+		t.Fatal("successful and no-op rollout results should both count as successful")
 	}
 	if rolloutResultSuccess("FAILED") || rolloutResultSuccess("ABORTED") {
 		t.Fatal("failed and aborted rollout results must not advance generation")
@@ -363,5 +363,64 @@ func TestSyncFleetRequiresAnImmutableDraft(t *testing.T) {
 	SyncFleetHandler(recorder, request)
 	if recorder.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
+	}
+}
+
+func TestMarkRolloutDevicesRunningDoesNotUseRolloutSequence(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previousDB := database.DB
+	database.DB = db
+	defer func() { database.DB = previousDB }()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM public.rollout_runs WHERE id = $1 AND claim_token::text = $2 FOR UPDATE")).
+		WithArgs("rollout-1", "claim-token").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("RUNNING"))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE public.devices SET last_rollout_status = 'RUNNING'")).
+		WithArgs("site-1", "device-a", "AP").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	request := httptest.NewRequest("POST", "/api/sites/site-1/orchestrator/sync", nil)
+	if err := markRolloutDevicesRunning(request, "site-1", "rollout-1", "claim-token", []rolloutDraftDevice{{DeviceID: "device-a", Role: "AP"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPersistRolloutResultsDoesNotAdvanceDeviceGeneration(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previousDB := database.DB
+	database.DB = db
+	defer func() { database.DB = previousDB }()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM public.rollout_runs WHERE id = $1 AND claim_token::text = $2 FOR UPDATE")).
+		WithArgs("rollout-1", "claim-token").
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("RUNNING"))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE public.devices SET last_rollout_status = $1, last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND id = $3 AND last_rollout_status = 'RUNNING'")).
+		WithArgs("SUCCESS", "site-1", "device-a").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE public.rollout_runs SET status = $1, results = $2, claim_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND status = 'RUNNING' AND claim_token::text = $4")).
+		WithArgs("completed", sqlmock.AnyArg(), "rollout-1", "claim-token").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	request := httptest.NewRequest("POST", "/api/sites/site-1/orchestrator/sync", nil)
+	if err := persistRolloutResults(request, "site-1", "rollout-1", "claim-token", "completed", []fleetSyncResult{{DeviceID: "device-a", Status: "SUCCESS"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -31,6 +31,11 @@ Each typed device operation has three independent identities:
 
 `QueueDeviceOperation` reserves an unbound plan's next device generation in the same database update that writes `pending_operation`. Generation-bound retries must name the current revision; stale or future revisions are rejected. Agent status echoes the generation when present, and the controller advances observed generations only for a matching `COMMITTED` status. Legacy agents may omit the generation during rollout, but their operation and plan identities must still match; such a status does not advance generation columns.
 
+Fleet rollouts have a separate site-scoped sequence in `rollout_runs`. The
+legacy SSH/UCI path uses that sequence only for ordering, audit and draft
+fencing; it does not write any device generation column. Device generations
+are reserved and advanced only by typed device operations.
+
 ## Desired State
 
 `site_configs` stores a site template. `RenderSiteConfig` turns that template into role-aware UCI commands for Gateway, AP and other supported roles. The controller can preview those commands before applying them.

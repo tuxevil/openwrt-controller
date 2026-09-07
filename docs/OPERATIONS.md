@@ -19,7 +19,8 @@ The controller creates a Vault backup before applying a confirmed change. The re
 
 Site Settings saves desired state separately from applying it. Preview renders
 commands per device role, performs read-only UCI preflight, and creates an
-immutable rollout draft with a generation and plan hash. Apply must send that
+immutable rollout draft with a site-scoped rollout sequence and plan hash. The
+rollout sequence is not a device operation generation. Apply must send that
 draft's `rollout_id`; the controller rejects missing, already-claimed, or
 stale drafts and never re-renders the site template during apply. Configure
 health targets under `ROLLOUT HEALTH CHECKS`; valid IP addresses and DNS-style

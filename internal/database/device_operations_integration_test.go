@@ -48,6 +48,7 @@ func TestRecordDeviceOperationStatusRejectsLateNonterminalStatus(t *testing.T) {
 	if _, err := DB.Exec(fmt.Sprintf(`
 		CREATE TABLE %s.devices (
 			id VARCHAR(50) PRIMARY KEY,
+			site_id UUID,
 			desired_generation BIGINT NOT NULL DEFAULT 0,
 			observed_generation BIGINT NOT NULL DEFAULT 0,
 			last_successful_generation BIGINT NOT NULL DEFAULT 0,
@@ -60,11 +61,20 @@ func TestRecordDeviceOperationStatusRejectsLateNonterminalStatus(t *testing.T) {
 		)`, quotedSchema)); err != nil {
 		t.Fatalf("create temporary devices table: %v", err)
 	}
+	if _, err := DB.Exec(fmt.Sprintf(`
+		CREATE TABLE %s.rollout_runs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			site_id UUID,
+			status VARCHAR(32) NOT NULL,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)`, quotedSchema)); err != nil {
+		t.Fatalf("create temporary rollout table: %v", err)
+	}
 
 	terminalStatus := `{"id":"operation-1","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","generation":42,"state":"COMMITTED"}`
 	if _, err := DB.Exec(fmt.Sprintf(`
-		INSERT INTO %s (id, desired_generation, last_operation)
-		VALUES ($1, $2, $3::jsonb)`, quotedDevices), "device-1", int64(42), terminalStatus); err != nil {
+		INSERT INTO %s (id, desired_generation, last_operation, last_rollout_status)
+		VALUES ($1, $2, $3::jsonb, $4)`, quotedDevices), "device-1", int64(42), terminalStatus, "RUNNING"); err != nil {
 		t.Fatalf("seed terminal operation: %v", err)
 	}
 
@@ -75,7 +85,8 @@ func TestRecordDeviceOperationStatusRejectsLateNonterminalStatus(t *testing.T) {
 	}
 
 	var stored []byte
-	if err := DB.QueryRow(fmt.Sprintf("SELECT last_operation FROM %s", quotedDevices)).Scan(&stored); err != nil {
+	var rolloutStatus string
+	if err := DB.QueryRow(fmt.Sprintf("SELECT last_operation, last_rollout_status FROM %s", quotedDevices)).Scan(&stored, &rolloutStatus); err != nil {
 		t.Fatalf("read terminal operation: %v", err)
 	}
 	var gotStatus, wantStatus map[string]interface{}
@@ -87,6 +98,9 @@ func TestRecordDeviceOperationStatusRejectsLateNonterminalStatus(t *testing.T) {
 	}
 	if !reflect.DeepEqual(gotStatus, wantStatus) {
 		t.Fatalf("last operation = %s, want terminal status", stored)
+	}
+	if rolloutStatus != "RUNNING" {
+		t.Fatalf("last rollout status = %q, want RUNNING", rolloutStatus)
 	}
 }
 
@@ -122,6 +136,7 @@ func TestQueueDeviceOperationAcceptsBoundRetryAfterLegacyStatus(t *testing.T) {
 	if _, err := DB.Exec(fmt.Sprintf(`
 		CREATE TABLE %s.devices (
 			id VARCHAR(50) PRIMARY KEY,
+			site_id UUID,
 			desired_generation BIGINT NOT NULL DEFAULT 0,
 			observed_generation BIGINT NOT NULL DEFAULT 0,
 			last_successful_generation BIGINT NOT NULL DEFAULT 0,
@@ -133,6 +148,15 @@ func TestQueueDeviceOperationAcceptsBoundRetryAfterLegacyStatus(t *testing.T) {
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		)`, quotedSchema)); err != nil {
 		t.Fatalf("create temporary devices table: %v", err)
+	}
+	if _, err := DB.Exec(fmt.Sprintf(`
+		CREATE TABLE %s.rollout_runs (
+			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+			site_id UUID,
+			status VARCHAR(32) NOT NULL,
+			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+		)`, quotedSchema)); err != nil {
+		t.Fatalf("create temporary rollout table: %v", err)
 	}
 
 	planHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"

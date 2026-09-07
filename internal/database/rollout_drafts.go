@@ -18,8 +18,10 @@ var (
 // RolloutDraftRecord is the durable metadata and immutable plan for one site
 // rollout. Results are kept separately so execution cannot rewrite the plan.
 type RolloutDraftRecord struct {
-	ID              string
-	SiteID          string
+	ID     string
+	SiteID string
+	// Generation is the site-scoped rollout sequence. It is not a device
+	// desired/observed generation and must never be copied to devices.
 	Generation      int64
 	Status          string
 	ClaimToken      string
@@ -30,8 +32,8 @@ type RolloutDraftRecord struct {
 	Results         json.RawMessage
 }
 
-// CreateRolloutDraft reserves the next site generation and stores a DRAFT plan
-// in one transaction.
+// CreateRolloutDraft reserves the next site rollout sequence and stores a DRAFT
+// plan in one transaction. The sequence is independent of device generations.
 func CreateRolloutDraft(ctx context.Context, schema, siteID, requestedBy, planHash string, targetDeviceIDs, plan json.RawMessage) (RolloutDraftRecord, error) {
 	safeSchema, err := SafeSchemaIdent(schema)
 	if err != nil {
@@ -46,21 +48,18 @@ func CreateRolloutDraft(ctx context.Context, schema, siteID, requestedBy, planHa
 	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
 		return RolloutDraftRecord{}, err
 	}
-	var generation int64
+	var rolloutSequence int64
 	if err := tx.QueryRowContext(ctx, fmt.Sprintf(
-		`SELECT GREATEST(
-			COALESCE((SELECT MAX(generation) FROM %s.rollout_runs WHERE site_id = $1), 0),
-			COALESCE((SELECT MAX(desired_generation) FROM %s.devices
-				WHERE site_id = $1
-				  AND id IN (SELECT jsonb_array_elements_text(COALESCE($2::jsonb, '[]'::jsonb)))), 0)
-		) + 1`, safeSchema, safeSchema,
-	), siteID, targetDeviceIDs).Scan(&generation); err != nil {
+		`SELECT COALESCE(MAX(generation), 0) + 1
+		   FROM %s.rollout_runs
+		  WHERE site_id = $1`, safeSchema,
+	), siteID).Scan(&rolloutSequence); err != nil {
 		return RolloutDraftRecord{}, err
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(
 		"UPDATE %s.rollout_runs SET status = 'STALE', claim_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND status = 'DRAFT' AND generation < $2",
 		safeSchema,
-	), siteID, generation); err != nil {
+	), siteID, rolloutSequence); err != nil {
 		return RolloutDraftRecord{}, err
 	}
 
@@ -70,7 +69,7 @@ func CreateRolloutDraft(ctx context.Context, schema, siteID, requestedBy, planHa
 			(site_id, generation, status, plan_hash, requested_by, target_device_ids, plan)
 		VALUES ($1, $2, 'DRAFT', $3, $4, $5, $6)
 		RETURNING id::text
-	`, safeSchema), siteID, generation, planHash, requestedBy, targetDeviceIDs, plan).Scan(&id); err != nil {
+	`, safeSchema), siteID, rolloutSequence, planHash, requestedBy, targetDeviceIDs, plan).Scan(&id); err != nil {
 		return RolloutDraftRecord{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -79,7 +78,7 @@ func CreateRolloutDraft(ctx context.Context, schema, siteID, requestedBy, planHa
 	return RolloutDraftRecord{
 		ID:              id,
 		SiteID:          siteID,
-		Generation:      generation,
+		Generation:      rolloutSequence,
 		Status:          "DRAFT",
 		PlanHash:        planHash,
 		RequestedBy:     requestedBy,
@@ -142,13 +141,12 @@ func ClaimRolloutDraft(ctx context.Context, schema, siteID, rolloutID string) (R
 			SET status = 'STALE', claim_token = NULL, updated_at = CURRENT_TIMESTAMP
 			WHERE site_id = $2 AND status = 'RUNNING'
 			  AND updated_at < CURRENT_TIMESTAMP - INTERVAL '20 minutes'
-			RETURNING site_id, generation
+			RETURNING site_id
 		), expired_devices AS (
 			UPDATE %s.devices devices
 			SET last_rollout_status = 'FAILED', last_rollout_at = CURRENT_TIMESTAMP
 			FROM expired
 			WHERE devices.site_id = expired.site_id
-			  AND devices.desired_generation = expired.generation
 			  AND devices.last_rollout_status = 'RUNNING'
 		), superseded AS (
 			UPDATE %s.rollout_runs stale
@@ -229,26 +227,41 @@ func MarkRolloutDraftStale(ctx context.Context, schema, siteID, rolloutID, claim
 	}
 	defer tx.Rollback()
 
-	var generation int64
+	var previousStatus string
 	err = tx.QueryRowContext(ctx, fmt.Sprintf(`
-		UPDATE %s.rollout_runs
-		SET status = 'STALE', claim_token = NULL, updated_at = CURRENT_TIMESTAMP
-		WHERE id = $1 AND site_id = $2
-		  AND (status = 'DRAFT' OR (status = 'RUNNING' AND claim_token::text = $3))
-		RETURNING generation
-	`, safeSchema), rolloutID, siteID, claimToken).Scan(&generation)
+		SELECT status
+		  FROM %s.rollout_runs
+		 WHERE id = $1 AND site_id = $2
+		   AND (status = 'DRAFT' OR (status = 'RUNNING' AND claim_token::text = $3))
+		 FOR UPDATE
+	`, safeSchema), rolloutID, siteID, claimToken).Scan(&previousStatus)
 	if err == sql.ErrNoRows {
 		return fmt.Errorf("%w: %s", ErrRolloutDraftNotAvailable, rolloutID)
 	}
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
+	result, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s.rollout_runs
+		   SET status = 'STALE', claim_token = NULL, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $1 AND site_id = $2
+	`, safeSchema), rolloutID, siteID)
+	if err != nil {
+		return err
+	}
+	if affected, err := result.RowsAffected(); err != nil {
+		return err
+	} else if affected != 1 {
+		return fmt.Errorf("%w: %s", ErrRolloutDraftNotAvailable, rolloutID)
+	}
+	if previousStatus == "RUNNING" {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf(`
 		UPDATE %s.devices
 		SET last_rollout_status = 'FAILED', last_rollout_at = CURRENT_TIMESTAMP
-		WHERE site_id = $1 AND desired_generation = $2 AND last_rollout_status = 'RUNNING'
-	`, safeSchema), siteID, generation); err != nil {
-		return err
+		WHERE site_id = $1 AND last_rollout_status = 'RUNNING'
+	`, safeSchema), siteID); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

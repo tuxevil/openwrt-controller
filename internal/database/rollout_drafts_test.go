@@ -8,7 +8,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
-func TestCreateRolloutDraftReservesSiteGeneration(t *testing.T) {
+func TestCreateRolloutDraftReservesIndependentSiteRolloutSequence(t *testing.T) {
 	mock := mockEnrollmentDB(t)
 	targets := json.RawMessage(`["device-1"]`)
 	plan := json.RawMessage(`{"site_id":"site-1","devices":[]}`)
@@ -17,8 +17,8 @@ func TestCreateRolloutDraftReservesSiteGeneration(t *testing.T) {
 	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")).
 		WithArgs("site-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT GREATEST(")).
-		WithArgs("site-1", sqlmock.AnyArg()).
+	mock.ExpectQuery(`SELECT COALESCE\(MAX\(generation\), 0\) \+ 1\s+FROM tenant_demo\.rollout_runs\s+WHERE site_id = \$1`).
+		WithArgs("site-1").
 		WillReturnRows(sqlmock.NewRows([]string{"generation"}).AddRow(int64(7)))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE tenant_demo.rollout_runs SET status = 'STALE'")).
 		WithArgs("site-1", int64(7)).
@@ -103,11 +103,14 @@ func TestClaimRolloutDraftUsesAnExecutionLease(t *testing.T) {
 func TestMarkRolloutDraftStaleIsConditional(t *testing.T) {
 	mock := mockEnrollmentDB(t)
 	mock.ExpectBegin()
-	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.rollout_runs SET status = 'STALE'")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status FROM tenant_demo.rollout_runs")).
 		WithArgs("rollout-1", "site-1", "claim-token").
-		WillReturnRows(sqlmock.NewRows([]string{"generation"}).AddRow(int64(7)))
+		WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow("RUNNING"))
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tenant_demo.rollout_runs SET status = 'STALE'")).
+		WithArgs("rollout-1", "site-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("UPDATE tenant_demo.devices")).
-		WithArgs("site-1", int64(7)).
+		WithArgs("site-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 

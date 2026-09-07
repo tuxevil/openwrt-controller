@@ -26,10 +26,10 @@ const fleetSyncSequential = true
 const maxRolloutDiagnosticBytes = 4096
 
 var (
-	errRolloutDraftStale         = errors.New("rollout draft observed state is stale")
-	errRolloutDraftTransport     = errors.New("rollout draft observed state could not be checked")
-	errRolloutGenerationConflict = errors.New("rollout generation is no longer current")
-	errRolloutClaimLost          = errors.New("rollout claim is no longer current")
+	errRolloutDraftStale     = errors.New("rollout draft observed state is stale")
+	errRolloutDraftTransport = errors.New("rollout draft observed state could not be checked")
+	errRolloutDeviceConflict = errors.New("rollout device state is no longer current")
+	errRolloutClaimLost      = errors.New("rollout claim is no longer current")
 )
 
 func auditRolloutEvent(r *http.Request, username, action, siteID, payload string) error {
@@ -682,7 +682,7 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_DRAFT", siteID,
-		fmt.Sprintf("Created rollout draft %s generation %d plan_hash %s", record.ID, record.Generation, record.PlanHash)); err != nil {
+		fmt.Sprintf("Created rollout draft %s rollout sequence %d plan_hash %s", record.ID, record.Generation, record.PlanHash)); err != nil {
 		http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
 		return
 	}
@@ -744,14 +744,14 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_START", siteID,
-		fmt.Sprintf("Claimed rollout draft %s generation %d plan_hash %s", rolloutID, record.Generation, record.PlanHash)); err != nil {
+		fmt.Sprintf("Claimed rollout draft %s rollout sequence %d plan_hash %s", rolloutID, record.Generation, record.PlanHash)); err != nil {
 		if releaseErr := releaseRolloutDraftForRetry(r, schema, siteID, rolloutID, record.ClaimToken); releaseErr != nil {
 			log.Printf("[SITE_ORCHESTRATOR][WARN] failed to release rollout draft %s after audit failure: %v", rolloutID, releaseErr)
 		}
 		http.Error(w, `{"error":"could not record rollout audit event; rollout was not applied"}`, http.StatusServiceUnavailable)
 		return
 	}
-	generation := record.Generation
+	rolloutSequence := record.Generation
 	executionCtx, executionCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 	defer executionCancel()
 	if err := verifyRolloutDraftTargets(executionCtx, schema, siteID, draft); err != nil {
@@ -783,30 +783,30 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
 		return
 	}
-	if err := markDesiredGeneration(r, siteID, rolloutID, record.ClaimToken, generation, draft.Devices); err != nil {
-		if errors.Is(err, errRolloutGenerationConflict) || errors.Is(err, errRolloutClaimLost) {
+	if err := markRolloutDevicesRunning(r, siteID, rolloutID, record.ClaimToken, draft.Devices); err != nil {
+		if errors.Is(err, errRolloutDeviceConflict) || errors.Is(err, errRolloutClaimLost) {
 			staleCtx, staleCancel := rolloutPersistenceContext(r)
 			if staleErr := database.MarkRolloutDraftStale(staleCtx, schema, siteID, rolloutID, record.ClaimToken); staleErr != nil {
-				log.Printf("[SITE_ORCHESTRATOR][WARN] failed to mark generation-conflicted rollout %s stale: %v", rolloutID, staleErr)
+				log.Printf("[SITE_ORCHESTRATOR][WARN] failed to mark device-conflicted rollout %s stale: %v", rolloutID, staleErr)
 			}
 			staleCancel()
 			if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_STALE", siteID,
-				fmt.Sprintf("Rollout %s rejected because a newer desired generation exists", rolloutID)); auditErr != nil {
+				fmt.Sprintf("Rollout %s rejected because a target device changed state", rolloutID)); auditErr != nil {
 				http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
 				return
 			}
-			http.Error(w, `{"error":"a newer desired generation already exists; rollout draft is stale"}`, http.StatusConflict)
+			http.Error(w, `{"error":"a target device changed state; rollout draft is stale"}`, http.StatusConflict)
 			return
 		}
 		if releaseErr := releaseRolloutDraftForRetry(r, schema, siteID, rolloutID, record.ClaimToken); releaseErr != nil {
-			log.Printf("[SITE_ORCHESTRATOR][WARN] failed to release rollout draft %s after generation failure: %v", rolloutID, releaseErr)
+			log.Printf("[SITE_ORCHESTRATOR][WARN] failed to release rollout draft %s after device-state failure: %v", rolloutID, releaseErr)
 		}
-		if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_GENERATION_FAILED", siteID,
-			fmt.Sprintf("Rollout %s could not assign generation: %v", rolloutID, err)); auditErr != nil {
+		if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_DEVICE_STATE_FAILED", siteID,
+			fmt.Sprintf("Rollout %s could not mark target devices: %v", rolloutID, err)); auditErr != nil {
 			http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
 			return
 		}
-		http.Error(w, `{"error":"could not assign rollout generation"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error":"could not mark target devices for rollout"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -920,9 +920,9 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err := persistRolloutResults(r, siteID, rolloutID, record.ClaimToken, generation, rolloutStatus, syncResults); err != nil {
+	if err := persistRolloutResults(r, siteID, rolloutID, record.ClaimToken, rolloutStatus, syncResults); err != nil {
 		log.Printf("[SITE_ORCHESTRATOR][ERROR] failed to persist rollout %s: %v", rolloutID, err)
-		if recoveryErr := markRolloutPersistenceFailure(r, siteID, rolloutID, record.ClaimToken, generation, syncResults, err); recoveryErr != nil {
+		if recoveryErr := markRolloutPersistenceFailure(r, siteID, rolloutID, record.ClaimToken, syncResults, err); recoveryErr != nil {
 			log.Printf("[SITE_ORCHESTRATOR][ERROR] failed to close rollout %s after persistence failure: %v", rolloutID, recoveryErr)
 		}
 		http.Error(w, `{"error":"could not persist rollout results"}`, http.StatusInternalServerError)
@@ -948,7 +948,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 			"error":      "rollout completed but audit persistence failed",
 			"status":     rolloutStatus,
 			"rollout_id": rolloutID,
-			"generation": generation,
+			"generation": rolloutSequence,
 			"successes":  successes,
 			"failures":   failures,
 			"results":    syncResults,
@@ -962,7 +962,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 			"error":      "rollout draft became stale during execution",
 			"status":     rolloutStatus,
 			"rollout_id": rolloutID,
-			"generation": generation,
+			"generation": rolloutSequence,
 			"successes":  successes,
 			"failures":   failures,
 			"results":    syncResults,
@@ -974,7 +974,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":           rolloutStatus,
 		"rollout_id":       rolloutID,
-		"generation":       generation,
+		"generation":       rolloutSequence,
 		"target_device_id": draft.TargetDeviceID,
 		"successes":        successes,
 		"failures":         failures,
@@ -982,7 +982,10 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func markDesiredGeneration(r *http.Request, siteID, rolloutID, claimToken string, generation int64, devices []rolloutDraftDevice) error {
+// markRolloutDevicesRunning fences typed device operations while the legacy
+// SSH rollout is active. Rollout generations are site-scoped and must never be
+// copied into device-local generation columns.
+func markRolloutDevicesRunning(r *http.Request, siteID, rolloutID, claimToken string, devices []rolloutDraftDevice) error {
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return err
@@ -998,13 +1001,13 @@ func markDesiredGeneration(r *http.Request, siteID, rolloutID, claimToken string
 		return err
 	}
 	if len(devices) == 0 {
-		if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND desired_generation <= $1 AND pending_operation IS NULL", generation, siteID); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND pending_operation IS NULL AND COALESCE(last_rollout_status, '') <> 'RUNNING'", siteID); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
 	for _, device := range devices {
-		result, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND id = $3 AND desired_generation <= $1 AND pending_operation IS NULL AND COALESCE(device_role, 'AP') = $4", generation, siteID, device.DeviceID, device.Role)
+		result, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND id = $2 AND pending_operation IS NULL AND COALESCE(last_rollout_status, '') <> 'RUNNING' AND COALESCE(device_role, 'AP') = $3", siteID, device.DeviceID, device.Role)
 		if err != nil {
 			return err
 		}
@@ -1013,13 +1016,13 @@ func markDesiredGeneration(r *http.Request, siteID, rolloutID, claimToken string
 			return err
 		}
 		if affected != 1 {
-			return fmt.Errorf("%w: device %s changed role, has a newer desired generation, or has a pending operation", errRolloutGenerationConflict, device.DeviceID)
+			return fmt.Errorf("%w: device %s changed role, is already in a rollout, or has a pending operation", errRolloutDeviceConflict, device.DeviceID)
 		}
 	}
 	return tx.Commit()
 }
 
-func persistRolloutResults(r *http.Request, siteID, rolloutID, claimToken string, generation int64, status string, results []fleetSyncResult) error {
+func persistRolloutResults(r *http.Request, siteID, rolloutID, claimToken, status string, results []fleetSyncResult) error {
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return err
@@ -1043,15 +1046,8 @@ func persistRolloutResults(r *http.Request, siteID, rolloutID, claimToken string
 		} else if result.Status == "STALE" {
 			status = "STALE"
 		}
-		query := "UPDATE " + schema + ".devices SET last_rollout_status = $1, last_rollout_at = CURRENT_TIMESTAMP"
+		query := "UPDATE " + schema + ".devices SET last_rollout_status = $1, last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND id = $3 AND last_rollout_status = 'RUNNING'"
 		args := []any{status, siteID, result.DeviceID}
-		if status == "SUCCESS" {
-			query += ", observed_generation = $4, last_successful_generation = $4 WHERE site_id = $2 AND id = $3 AND desired_generation <= $4 AND observed_generation <= $4"
-			args = []any{status, siteID, result.DeviceID, generation}
-		} else {
-			query += " WHERE site_id = $2 AND id = $3 AND desired_generation <= $4"
-			args = []any{status, siteID, result.DeviceID, generation}
-		}
 		execResult, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
 			return err
@@ -1061,7 +1057,7 @@ func persistRolloutResults(r *http.Request, siteID, rolloutID, claimToken string
 			return err
 		}
 		if affected != 1 {
-			return fmt.Errorf("device %s has a newer desired generation", result.DeviceID)
+			return fmt.Errorf("device %s rollout status is no longer current", result.DeviceID)
 		}
 	}
 	encoded, err := json.Marshal(stripFleetSyncOutput(results))
@@ -1171,7 +1167,7 @@ type rolloutRecord struct {
 	UpdatedAt       time.Time              `json:"updated_at"`
 }
 
-func markRolloutPersistenceFailure(r *http.Request, siteID, rolloutID, claimToken string, generation int64, results []fleetSyncResult, cause error) error {
+func markRolloutPersistenceFailure(r *http.Request, siteID, rolloutID, claimToken string, results []fleetSyncResult, cause error) error {
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return err
@@ -1192,7 +1188,7 @@ func markRolloutPersistenceFailure(r *http.Request, siteID, rolloutID, claimToke
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'FAILED', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND desired_generation = $2 AND last_rollout_status = 'RUNNING'", siteID, generation); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'FAILED', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND last_rollout_status = 'RUNNING'", siteID); err != nil {
 		return err
 	}
 	result, err := tx.ExecContext(ctx, "UPDATE "+schema+".rollout_runs SET status = 'FAILED', results = $1, claim_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'RUNNING' AND claim_token::text = $3", encoded, rolloutID, claimToken)

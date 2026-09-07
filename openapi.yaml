@@ -788,7 +788,11 @@ components:
         proposal_id: { type: string, format: uuid }
         operation_id: { type: string }
         plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
-        generation: { type: integer, format: int64, minimum: 1 }
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Device configuration revision reserved for this operation
     UciOperationRequest:
       type: object
       required: [commands]
@@ -838,7 +842,11 @@ components:
       properties:
         site_id: { type: string, format: uuid }
         rollout_id: { type: string, format: uuid }
-        generation: { type: integer, format: int64, minimum: 1 }
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Site-scoped rollout sequence; not a device operation generation.
         plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
         target_device_id: { type: string, nullable: true }
         health_checks:
@@ -854,7 +862,11 @@ components:
       properties:
         status: { type: string }
         rollout_id: { type: string, format: uuid }
-        generation: { type: integer, format: int64, minimum: 1 }
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Site-scoped rollout sequence; not a device operation generation.
         target_device_id: { type: string, nullable: true }
         successes: { type: integer, minimum: 0 }
         failures: { type: integer, minimum: 0 }
@@ -878,7 +890,11 @@ components:
       properties:
         id: { type: string, format: uuid }
         site_id: { type: string, format: uuid }
-        generation: { type: integer, format: int64, minimum: 1 }
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Site-scoped rollout sequence; not a device operation generation.
         status: { type: string }
         plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
         requested_by: { type: string }

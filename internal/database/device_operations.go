@@ -103,7 +103,8 @@ func validDeviceOperationState(state string) bool {
 // QueueDeviceOperation stores one durable, device-scoped operation. An
 // unbound plan reserves the next device desired generation in the same UPDATE
 // that writes pending_operation. A device cannot accept a second operation
-// until the first one reaches a terminal state.
+// until the first one reaches a terminal state or an active legacy rollout
+// lease has expired.
 func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan json.RawMessage) (int64, error) {
 	safeSchema, err := SafeSchemaIdent(schema)
 	if err != nil {
@@ -116,25 +117,33 @@ func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan jso
 	var queuedGeneration int64
 	var queuedPlan []byte
 	err = Tx(ctx).QueryRow(fmt.Sprintf(`
-		UPDATE %s.devices
+		UPDATE %s.devices AS device
 		SET pending_operation = CASE
 		        WHEN $4::bigint > 0 THEN $1::jsonb
-		        ELSE jsonb_set($1::jsonb, '{generation}', to_jsonb(desired_generation + 1), true)
+		        ELSE jsonb_set($1::jsonb, '{generation}', to_jsonb(device.desired_generation + 1), true)
 		    END,
-		    desired_generation = CASE WHEN $4::bigint > 0 THEN desired_generation ELSE desired_generation + 1 END,
+		    desired_generation = CASE WHEN $4::bigint > 0 THEN device.desired_generation ELSE device.desired_generation + 1 END,
 		    last_operation = NULL,
 		    last_rollout_status = 'QUEUED',
 		    last_rollout_at = CURRENT_TIMESTAMP,
 		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2 AND COALESCE(last_rollout_status, '') <> 'RUNNING' AND pending_operation IS NULL AND (
-		    ($4::bigint > 0 AND desired_generation = $4::bigint AND (
-		        (pending_operation IS NULL AND COALESCE(last_operation->>'id', '') <> $3)
-		        OR (pending_operation->>'operation_id' = $3 AND pending_operation = $1::jsonb)
+		WHERE device.id = $2 AND COALESCE(device.last_rollout_status, '') <> 'RUNNING' AND device.pending_operation IS NULL
+		  AND NOT EXISTS (
+		      SELECT 1
+		        FROM %s.rollout_runs AS active_rollout
+		       WHERE active_rollout.site_id = device.site_id
+		         AND active_rollout.status = 'RUNNING'
+		         AND active_rollout.updated_at >= CURRENT_TIMESTAMP - INTERVAL '20 minutes'
+		  )
+		  AND (
+		    ($4::bigint > 0 AND device.desired_generation = $4::bigint AND (
+		        (device.pending_operation IS NULL AND COALESCE(device.last_operation->>'id', '') <> $3)
+		        OR (device.pending_operation->>'operation_id' = $3 AND device.pending_operation = $1::jsonb)
 		    ))
-		    OR ($4::bigint = 0 AND pending_operation IS NULL AND COALESCE(last_operation->>'id', '') <> $3)
+		    OR ($4::bigint = 0 AND device.pending_operation IS NULL AND COALESCE(device.last_operation->>'id', '') <> $3)
 		)
-		RETURNING desired_generation, pending_operation
-	`, safeSchema), plan, deviceID, identity.ID, identity.Generation).Scan(&queuedGeneration, &queuedPlan)
+		RETURNING device.desired_generation, device.pending_operation
+	`, safeSchema, safeSchema), plan, deviceID, identity.ID, identity.Generation).Scan(&queuedGeneration, &queuedPlan)
 	if err != nil {
 		if err != sql.ErrNoRows {
 			return 0, err
@@ -251,7 +260,10 @@ func RecordDeviceOperationStatus(ctx context.Context, schema, deviceID string, s
 		        WHEN $2 = true AND %s THEN NULL
 		        ELSE pending_operation
 		    END,
-		    last_rollout_status = $4::text,
+		    last_rollout_status = CASE
+		        WHEN COALESCE(last_rollout_status, '') = 'RUNNING' THEN last_rollout_status
+		        ELSE $4::text
+		    END,
 		    last_health_check_at = CASE WHEN $2 = true THEN CURRENT_TIMESTAMP ELSE last_health_check_at END,
 		    observed_generation = CASE
 			    WHEN $2::boolean = true AND $4::text = 'COMMITTED' AND $8::bigint > 0
