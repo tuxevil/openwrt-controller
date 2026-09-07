@@ -178,6 +178,10 @@ func MaybeQueueSentinelFrontierEscalation(schema, caseID string, result Sentinel
 	if !sentinelBoolEnv(os.Getenv, "SENTINEL_AUTO_FRONTIER_ESCALATION", false) || !sentinelInvestigationNeedsFrontier(result) {
 		return
 	}
+	if _, err := ResolveSentinelModelRoute(SentinelReasoningFrontierEscalation); err != nil {
+		log.Printf("[SENTINEL_ROUTER] frontier escalation for Case %s is disabled: %v", caseID, err)
+		return
+	}
 	prompt := "Review the unresolved local Sentinel investigation. Use the current Case context and identify the strongest remaining hypotheses, missing evidence, and the safest next diagnostic step. Do not propose direct execution."
 	if _, err := QueueSentinelFrontierEscalation(schema, caseID, prompt); err != nil {
 		log.Printf("[SENTINEL_ROUTER] optional frontier escalation for Case %s was not queued: %v", caseID, err)

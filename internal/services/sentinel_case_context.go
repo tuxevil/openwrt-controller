@@ -576,9 +576,11 @@ func executeSentinelCaseRun(ctx context.Context, schema, runID string) (Sentinel
 	if err != nil {
 		return result, nil, caseID, err
 	}
+	MaybeQueueSentinelFrontierEscalation(schema, caseID, result)
+	reasoningClass := ClassifySentinelReasoning(item, query)
 	metadata, _ := json.Marshal(map[string]interface{}{
 		"case_id": caseID, "evidence_refs": refs, "tool_calls": result.ToolCalls, "rounds": result.Rounds,
-		"llm_model": result.LLMModel, "tokens_used": result.TokensUsed,
+		"llm_model": result.LLMModel, "tokens_used": result.TokensUsed, "reasoning_class": reasoningClass,
 	})
 	if err := appendSentinelMessage(schema, conversationID, "assistant", result.Answer, metadata); err != nil {
 		return result, nil, caseID, err
@@ -659,6 +661,7 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 		logSentinelInvestigationError(caseID, err)
 		return
 	}
+	MaybeQueueSentinelFrontierEscalation(schema, caseID, result)
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
 	_, err = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", safeSchema), result.Answer, caseID)
 	if err != nil {
