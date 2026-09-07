@@ -116,24 +116,30 @@ jobs:
           \t\t}
           \t\tresult, err := database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_messages m USING %s.sentinel_conversations c
           ''')
-          patch("internal/services/sentinel_store.go",
-          '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases
-          \t\t\tWHERE resolved_at IS NOT NULL AND resolved_at < $1`, schema), cutoff)
-          ''',
-          '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
-          \t\t\tWHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
-          \t\t\tAND NOT EXISTS (
-          \t\t\t\tSELECT 1 FROM %s.sentinel_learned_memories m
-          \t\t\t\tWHERE m.source_case_id = c.id
-          \t\t\t\tAND m.validation_state IN ('CANDIDATE','VALIDATED')
-          \t\t\t\tAND m.expires_at > CURRENT_TIMESTAMP
-          \t\t\t)
-          \t\t\tAND NOT EXISTS (
-          \t\t\t\tSELECT 1 FROM %s.sentinel_skills s
-          \t\t\t\tWHERE s.source_case_id = c.id
-          \t\t\t\tAND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
-          \t\t\t)`, schema, schema, schema), cutoff)
-          ''')
+
+          p = Path("internal/services/sentinel_store.go")
+          text = p.read_text()
+          old = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases
+            WHERE resolved_at IS NOT NULL AND resolved_at < $1`, schema), cutoff)
+          '''
+          new = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
+            WHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
+            AND NOT EXISTS (
+                SELECT 1 FROM %s.sentinel_learned_memories m
+                WHERE m.source_case_id = c.id
+                AND m.validation_state IN ('CANDIDATE','VALIDATED')
+                AND m.expires_at > CURRENT_TIMESTAMP
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM %s.sentinel_skills s
+                WHERE s.source_case_id = c.id
+                AND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
+            )`, schema, schema, schema), cutoff)
+          '''
+          if old in text:
+              p.write_text(text.replace(old, new, 1))
+          elif new not in text:
+              raise SystemExit("sentinel case retention delete pattern not found")
       - name: Format
         run: gofmt -w internal/services/sentinel_learning_store.go internal/services/sentinel_store.go
       - name: Validate
