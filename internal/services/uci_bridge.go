@@ -248,7 +248,7 @@ func BuildBatchScript(config string, commands []UciCommand) string {
 		restartCmd = svc + " && logger -t central_luci '" + config + " service restarted'"
 	}
 
-	return fmt.Sprintf(`#!/bin/sh
+	script := fmt.Sprintf(`#!/bin/sh
 set -e
 
 # ──────────────────────────────────────────────────────────────
@@ -305,6 +305,48 @@ exit 0
 		restartCmd, config,
 		sb.String(), config, config, config,
 		restartCmd, config, config)
+	return withUciMutationLock(script)
+}
+
+// withUciMutationLock serializes controller-generated UCI batches on a device.
+// mkdir is available in the base OpenWrt shell and is atomic across SSH
+// sessions, so the observed-state check and mutation phase share one lock.
+func withUciMutationLock(script string) string {
+	const marker = "set -e\n"
+	const lock = `
+uci_lock_dir=/tmp/central_luci_uci.lock
+uci_lock_acquired=0
+release_uci_lock() {
+  if [ "$uci_lock_acquired" -eq 1 ]; then
+    rmdir "$uci_lock_dir" 2>/dev/null || true
+    uci_lock_acquired=0
+  fi
+}
+trap release_uci_lock EXIT
+
+uci_lock_attempt=0
+while ! mkdir "$uci_lock_dir" 2>/dev/null; do
+  uci_lock_mtime=$(stat -c %Y "$uci_lock_dir" 2>/dev/null || printf '0')
+  uci_lock_now=$(date +%s)
+  if [ "$uci_lock_mtime" -gt 0 ] && [ "$uci_lock_now" -gt "$uci_lock_mtime" ] && [ "$((uci_lock_now - uci_lock_mtime))" -ge 1800 ]; then
+    rmdir "$uci_lock_dir" 2>/dev/null || true
+    continue
+  fi
+  uci_lock_attempt=$((uci_lock_attempt + 1))
+  if [ "$uci_lock_attempt" -ge 60 ]; then
+    printf 'CENTRAL_LUCI: timed out waiting for UCI lock\n' >&2
+    exit 1
+  fi
+  sleep 1
+done
+uci_lock_acquired=1
+`
+	index := strings.Index(script, marker)
+	if index == -1 {
+		return script
+	}
+	index += len(marker)
+	return script[:index] + lock + script[index:]
 }
 
 // BuildSafeBatchScript adds a post-apply connectivity check to the normal

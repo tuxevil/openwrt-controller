@@ -60,7 +60,7 @@ func GetUciHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// Fetch via ubus — config is now constrained to the allowlist.
 	cmd := fmt.Sprintf("ubus call uci get '{\"config\": \"%s\"}'", config)
-	out, err := runSSHCommand(deviceID, cmd)
+	out, err := runSSHCommandForRequest(r, deviceID, cmd)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -152,7 +152,7 @@ exit 0
 `, config, config, config, config, config, sb.String(), config, restartCmd, config)
 
 	// Execute via SSH Script
-	out, err := runSSHScript(deviceID, script)
+	out, err := runSSHScriptForRequest(r, deviceID, script)
 
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")

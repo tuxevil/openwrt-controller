@@ -8,7 +8,7 @@
 //     Bearer JWT) and receives a one-time 32-char ticket valid for
 //     30 seconds.
 //  2. The dashboard opens the WebSocket:
-//       wss://host/api/devices/{id}/ssh?ticket=<ticket>
+//     wss://host/api/devices/{id}/ssh?ticket=<ticket>
 //  3. The server redeems the ticket: validates it, marks it used,
 //     and lets the upgrade proceed. The ticket is gone from memory
 //     after the single use.
@@ -17,7 +17,8 @@
 //     username + role rather than from a fresh JWT parse.
 //
 // Tickets never reach the log file: the URL the upgrader sees is
-//     /api/devices/{id}/ssh?ticket=<redacted-by-us>
+//
+//	/api/devices/{id}/ssh?ticket=<redacted-by-us>
 package authtickets
 
 import (
@@ -37,20 +38,23 @@ const DefaultTicketTTL = 30 * time.Second
 // handler can map them to specific status codes.
 var (
 	ErrTicketNotFound = errors.New("auth ticket: not found or already consumed")
-	ErrTicketExpired = errors.New("auth ticket: expired")
+	ErrTicketExpired  = errors.New("auth ticket: expired")
 	ErrTicketReused   = errors.New("auth ticket: already used")
+	ErrTicketScope    = errors.New("auth ticket: wrong device")
 )
 
-// Ticket is the in-memory representation of an issued ticket. We
-// keep the issuing username + role so the WS handler can log
-// without re-parsing the JWT.
+// Ticket is the in-memory representation of an issued ticket. It keeps the
+// issuing identity and resource scope so the WebSocket middleware can
+// authenticate without re-parsing the JWT.
 type Ticket struct {
-	Username   string
-	Role       string
-	IssuedAt   time.Time
-	ExpiresAt  time.Time
-	Consumed   bool
-	ConsumedAt time.Time
+	Username     string
+	Role         string
+	DeviceID     string
+	TenantSchema string
+	IssuedAt     time.Time
+	ExpiresAt    time.Time
+	Consumed     bool
+	ConsumedAt   time.Time
 }
 
 // Store is the process-wide in-memory ticket registry. A single
@@ -84,10 +88,9 @@ func LoadStore(ttl time.Duration) *Store {
 // (return 503) if this returns nil.
 func GetStore() *Store { return globalStore }
 
-// Issue creates a new single-use ticket for the given user/role
-// and returns the ticket ID. The ticket has the configured TTL
-// and is associated with the supplied user identity.
-func (s *Store) Issue(username, role string) (string, *Ticket, error) {
+// Issue creates a new single-use ticket for the given user, role, tenant, and
+// device, then returns the ticket ID. The ticket has the configured TTL.
+func (s *Store) Issue(username, role, deviceID, tenantSchema string) (string, *Ticket, error) {
 	if s == nil {
 		return "", nil, errors.New("auth ticket store not initialised")
 	}
@@ -97,10 +100,12 @@ func (s *Store) Issue(username, role string) (string, *Ticket, error) {
 	}
 	now := time.Now()
 	t := &Ticket{
-		Username:  username,
-		Role:      role,
-		IssuedAt:  now,
-		ExpiresAt: now.Add(s.ttl),
+		Username:     username,
+		Role:         role,
+		DeviceID:     deviceID,
+		TenantSchema: tenantSchema,
+		IssuedAt:     now,
+		ExpiresAt:    now.Add(s.ttl),
 	}
 	s.mu.Lock()
 	s.tickets[id] = t
@@ -130,11 +135,20 @@ func (s *Store) Validate(id string) (*Ticket, error) {
 	return t, nil
 }
 
-// Consume atomically validates and marks the ticket as used. A
-// ticket can only be consumed once; subsequent calls return
-// ErrTicketReused. This is what the WS handler calls right before
-// upgrader.Upgrade so a leaked ticket cannot be used twice.
+// Consume atomically validates and marks a ticket as used without checking a
+// device scope. Device-bound WebSocket callers should use ConsumeForDevice.
 func (s *Store) Consume(id string) (*Ticket, error) {
+	return s.consume(id, "", false)
+}
+
+// ConsumeForDevice atomically validates, scopes, and marks a ticket as used.
+// A scope mismatch does not consume the ticket so the intended WebSocket can
+// still redeem it after an unrelated request presents the ticket elsewhere.
+func (s *Store) ConsumeForDevice(id, deviceID string) (*Ticket, error) {
+	return s.consume(id, deviceID, true)
+}
+
+func (s *Store) consume(id, deviceID string, enforceDevice bool) (*Ticket, error) {
 	if s == nil {
 		return nil, errors.New("auth ticket store not initialised")
 	}
@@ -150,22 +164,26 @@ func (s *Store) Consume(id string) (*Ticket, error) {
 	if time.Now().After(t.ExpiresAt) {
 		return nil, ErrTicketExpired
 	}
+	if enforceDevice && (t.DeviceID == "" || t.TenantSchema == "" || t.DeviceID != deviceID) {
+		return nil, ErrTicketScope
+	}
 	t.Consumed = true
 	t.ConsumedAt = time.Now()
 	return t, nil
 }
 
-// gcLocked removes expired tickets from the map. Caller must hold s.mu.
+// gcLocked removes expired tickets from the map, including tickets that were
+// never consumed. Caller must hold s.mu.
 func (s *Store) gcLocked(now time.Time) {
 	for id, t := range s.tickets {
-		if now.After(t.ExpiresAt) && t.Consumed {
+		if now.After(t.ExpiresAt) {
 			delete(s.tickets, id)
 		}
 	}
 }
 
 // StartGC runs a background goroutine that periodically removes
-// expired + consumed tickets. Returns immediately if the store is
+// expired tickets. Returns immediately if the store is
 // nil. The goroutine exits when the provided channel is closed.
 func (s *Store) StartGC(interval time.Duration, stop <-chan struct{}) {
 	if s == nil {

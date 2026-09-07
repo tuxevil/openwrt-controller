@@ -7,7 +7,7 @@
 //
 // Returns a `provide` key so child components can `inject` it
 // without prop-drilling.
-import { inject, reactive, ref, watch } from 'vue'
+import { inject, nextTick, ref, watch } from 'vue'
 import api from '../../services/api'
 
 const INJECTION_KEY = Symbol.for('openwrt.siteConfig')
@@ -60,12 +60,14 @@ function parseJsonField(raw, fallback) {
   return fallback
 }
 
+/** Provides reactive site template state and persistence actions. */
 export function useSiteConfig(siteId) {
   const config = ref(defaultConfig())
   const dirty = ref(false)
   const saving = ref(false)
   const error = ref(null)
   const successMsg = ref(null)
+  const suppressDirtyTracking = ref(false)
 
   // Embedded JSON fields
   const staticLeases = ref([])
@@ -77,13 +79,14 @@ export function useSiteConfig(siteId) {
   watch(
     config,
     () => {
-      dirty.value = true
+      if (!suppressDirtyTracking.value) dirty.value = true
     },
     { deep: true },
   )
 
   async function load() {
     error.value = null
+    suppressDirtyTracking.value = true
     try {
       const res = await api.getSiteConfig(siteId)
       if (res?.data?.site_id) {
@@ -91,11 +94,14 @@ export function useSiteConfig(siteId) {
         staticLeases.value = parseJsonField(res.data.dhcp_reservations, [])
         portRules.value = parseJsonField(res.data.port_forwarding_rules, [])
         wanInterfaces.value = parseJsonField(res.data.wan_interfaces, [])
+        await nextTick()
         dirty.value = false
       }
     } catch (e) {
       console.error('loadSiteConfig', e)
       error.value = e?.response?.data?.error || e.message
+    } finally {
+      suppressDirtyTracking.value = false
     }
   }
 
@@ -112,12 +118,20 @@ export function useSiteConfig(siteId) {
     saving.value = true
     error.value = null
     try {
-      await api.putSiteConfig(siteId, buildPayload())
-      dirty.value = false
-      successMsg.value = 'Template saved — no devices were touched'
+      const payload = buildPayload()
+      const payloadSignature = JSON.stringify(payload)
+      await api.putSiteConfig(siteId, payload)
+      if (JSON.stringify(buildPayload()) === payloadSignature) {
+        dirty.value = false
+        successMsg.value = 'Template saved — no devices were touched'
+      } else {
+        successMsg.value = 'Template saved; newer edits remain unsaved'
+      }
       setTimeout(() => (successMsg.value = null), 3500)
+      return true
     } catch (e) {
       error.value = e?.response?.data?.error || e.message || 'Save failed'
+      return false
     } finally {
       saving.value = false
     }
@@ -142,14 +156,16 @@ export function useSiteConfig(siteId) {
 
 // Provide/Inject helpers. Using a Symbol so accidental string-key
 // collisions are impossible.
+/** Creates site config state for a component that will provide it. */
 export function provideSiteConfig(siteId) {
-  const ctx = useSiteConfig(siteIdRef)
+  const ctx = useSiteConfig(siteId)
   // No actual provide() here — the caller wraps the return in Vue's
   // provide() inside <script setup>. The Symbol is exported for
   // child components that need to inject.
   return { ...ctx, __key: INJECTION_KEY }
 }
 
+/** Retrieves site config state provided by an ancestor component. */
 export function useSiteConfigInjection() {
   return inject(INJECTION_KEY, null)
 }

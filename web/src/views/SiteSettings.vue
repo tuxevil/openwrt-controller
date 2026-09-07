@@ -4,7 +4,7 @@
 // Originally 1445 lines; this file is now a thin shell that wires
 // the per-tab child components to the shared site_config state via
 // the useSiteConfig composable.
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import api from '../services/api'
 import { DEFAULT_TAB, findTab } from './SiteSettings/tabs.js'
 import { useSiteConfig } from './SiteSettings/useSiteConfig.js'
@@ -51,6 +51,7 @@ const overlayTitle = ref('')
 const overlayDevices = ref([])
 const syncSummary = ref(null)
 const rolloutRefreshKey = ref(0)
+const pendingDraft = ref(null)
 
 // ─── Loaders that aren't part of site_config ────────────────────────────────
 async function loadDevices() {
@@ -64,20 +65,54 @@ onMounted(async () => {
   await Promise.all([loadSiteConfig(), loadDevices()])
 })
 
+watch(dirty, (isDirty) => {
+  if (isDirty) pendingDraft.value = null
+})
+
 // ─── Device role change ─────────────────────────────────────────────────────
 async function changeRole(deviceId, role) {
   try {
     await api.putDeviceRole(deviceId, role)
     const dev = devices.value.find(d => d.device_id === deviceId)
     if (dev) dev.device_role = role
+    pendingDraft.value = null
   } catch (e) { error.value = e.message }
 }
 
-// ─── Master apply: save template + sync fleet ──────────────────────────────
-async function applyRevision() {
+async function saveTemplateAndClearDraft() {
+  pendingDraft.value = null
+  await saveTemplate()
+}
+
+function resumeDraft(run) {
+  if (run?.status !== 'DRAFT' || !run?.id || !run?.preview?.length) {
+    error.value = 'This rollout draft cannot be resumed because its immutable plan is invalid'
+    return
+  }
+  const plan = run.plan || {}
+  pendingDraft.value = {
+    site_id: run.site_id,
+    rollout_id: run.id,
+    generation: run.generation,
+    plan_hash: run.plan_hash,
+    target_device_id: plan.target_device_id || '',
+    health_checks: plan.health_checks || [],
+    devices: run.preview,
+    total: run.preview.length,
+  }
+  overlayTitle.value = `IMMUTABLE DRAFT RESUMED — GEN ${run.generation}`
+  overlayDevices.value = run.preview
+  syncSummary.value = { generation: run.generation, planHash: run.plan_hash }
+  showOverlay.value = true
+  error.value = null
+  successMsg.value = `Draft ${run.id} restored from rollout history. Review it before applying.`
+}
+
+// ─── Preview: save template + persist immutable rollout draft ───────────────
+async function previewRevision() {
   if (!confirm(
-    `⚡ APPLY REVISION TO SITE\n\n` +
-    `This will:\n 1. Save the site configuration template\n 2. Push UCI commands to all ${devices.value.length} device(s)\n\nContinue?`
+    `⚡ PREVIEW REVISION FOR SITE\n\n` +
+    `This will:\n 1. Save the site configuration template\n 2. Read current UCI state from all ${devices.value.length} device(s)\n 3. Create an immutable rollout draft\n\nContinue?`
   )) return
 
   applying.value = true
@@ -86,11 +121,56 @@ async function applyRevision() {
   syncSummary.value = null
 
   try {
-    await api.putSiteConfig(props.site_id, buildPayload())
-    dirty.value = false
+    const payload = buildPayload()
+    const payloadSignature = JSON.stringify(payload)
+    if (!(await saveTemplate())) return
 
-    const syncRes = await api.syncSiteFleet(props.site_id)
+    const previewRes = await api.previewSiteSync(props.site_id)
+    const draft = previewRes.data
+    if (JSON.stringify(buildPayload()) !== payloadSignature) {
+      pendingDraft.value = null
+      error.value = 'Configuration changed while preview was running; preview discarded'
+      return
+    }
+    dirty.value = false
+    pendingDraft.value = draft
+    rolloutRefreshKey.value++
+    overlayTitle.value = `IMMUTABLE DRAFT READY — GEN ${draft.generation}`
+    overlayDevices.value = draft.devices || []
+    syncSummary.value = { generation: draft.generation, planHash: draft.plan_hash }
+    showOverlay.value = true
+    successMsg.value = `Draft ${draft.rollout_id} ready. Review the commands, then apply the immutable draft.`
+  } catch (e) {
+    error.value = e?.response?.data?.error || e.message || 'Preview failed'
+  } finally {
+    applying.value = false
+  }
+}
+
+// ─── Apply: consume only the reviewed immutable draft ──────────────────────
+async function applyDraft() {
+  const draft = pendingDraft.value
+  if (!draft?.rollout_id) {
+    error.value = 'Create a rollout preview before applying'
+    return
+  }
+  if (!confirm(
+    `⚡ APPLY IMMUTABLE DRAFT\n\n` +
+    `Generation: ${draft.generation}\n` +
+    `Plan hash: ${draft.plan_hash}\n` +
+    `Targets: ${draft.total}\n\n` +
+    `The controller will apply exactly this reviewed draft. Continue?`
+  )) return
+
+  applying.value = true
+  error.value = null
+  successMsg.value = null
+  syncSummary.value = null
+
+  try {
+    const syncRes = await api.syncSiteFleet(props.site_id, draft.rollout_id)
     const data = syncRes.data
+    pendingDraft.value = null
     rolloutRefreshKey.value++
     overlayTitle.value = `REVISION APPLIED — ${data.successes} OK · ${data.failures} FAILED`
     overlayDevices.value = data.results || []
@@ -98,6 +178,7 @@ async function applyRevision() {
     showOverlay.value = true
     successMsg.value = `Fleet sync complete: ${data.successes} success, ${data.failures} failed`
   } catch (e) {
+    if (e?.response?.status === 409) pendingDraft.value = null
     error.value = e?.response?.data?.error || e.message || 'Apply failed'
   } finally {
     applying.value = false
@@ -111,9 +192,11 @@ async function applyRevision() {
       :dirty="dirty"
       :saving="saving"
       :applying="applying"
+      :draft-ready="Boolean(pendingDraft)"
       :device-count="devices.length"
-      @save="saveTemplate"
-      @apply="applyRevision"
+      @save="saveTemplateAndClearDraft"
+      @preview="previewRevision"
+      @apply="applyDraft"
     />
 
     <!-- ░░░ STATUS BANNERS ░░░ -->
@@ -214,7 +297,7 @@ async function applyRevision() {
             :config="config"
             @mark-dirty="dirty = true"
           />
-          <RolloutHistory :site-id="props.site_id" :refresh-key="rolloutRefreshKey" />
+          <RolloutHistory :site-id="props.site_id" :refresh-key="rolloutRefreshKey" @resume="resumeDraft" />
         </div>
       </main>
     </div>

@@ -11,6 +11,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import api from '../services/api'
 
+/** Creates and manages the SSH terminal WebSocket for one site device. */
 export function useTerminal(siteId, deviceId) {
   const terminalContainer = ref(null)
   const connectionStatus = ref('CONNECTING...')
@@ -60,7 +61,7 @@ export function useTerminal(siteId, deviceId) {
 
     let ticket
     try {
-      const ticketRes = await api.client.post('/ws-ticket', { device_id: deviceId })
+      const ticketRes = await api.client.post('/ws-ticket', { device_id: devId })
       ticket = ticketRes.data.ticket
     } catch (e) {
       connectionStatus.value = 'ERROR: TICKET_DENIED'
@@ -73,7 +74,7 @@ export function useTerminal(siteId, deviceId) {
       return
     }
 
-    const wsUrl = `${wsProtocol}//${window.location.host}/api/devices/${deviceId}/ssh?ticket=${ticket}`
+    const wsUrl = `${wsProtocol}//${window.location.host}/api/devices/${devId}/ssh?ticket=${ticket}`
 
     try {
       ws = new WebSocket(wsUrl)

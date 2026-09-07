@@ -85,7 +85,7 @@ func GetCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := runSSHCommand(deviceID, cmd)
+	out, err := runSSHCommandForRequest(r, deviceID, cmd)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -113,7 +113,7 @@ func GetCentralConfigHandler(w http.ResponseWriter, r *http.Request) {
 func ListCentralConfigsHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
 
-	out, err := runSSHCommand(deviceID, "ls /etc/config/ 2>/dev/null")
+	out, err := runSSHCommandForRequest(r, deviceID, "ls /etc/config/ 2>/dev/null")
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -408,7 +408,7 @@ func GetDeviceDriftHandler(w http.ResponseWriter, r *http.Request) {
 		if config == "sqm" || config == "firewall" {
 			// Preserve the comparison contract but avoid leaking secrets/large UCI dumps.
 		}
-		out, readErr := runSSHCommand(deviceID, "uci show "+config+" 2>&1")
+		out, readErr := runSSHCommandForRequest(r, deviceID, "uci show "+config+" 2>&1")
 		preview := services.PreviewCommands(commands)
 		redacted := make([]string, 0, len(preview))
 		for _, command := range preview {

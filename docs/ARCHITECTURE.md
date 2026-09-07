@@ -16,7 +16,7 @@
 1. The browser authenticates with JWT and selects a site or tenant context.
 2. Middleware validates the token, role and tenant schema before the handler runs.
 3. Read operations query the tenant schema or InfluxDB.
-4. Mutating operations validate identifiers, write an audit event and queue typed device operations; the legacy site orchestrator still uses the SSH/UCI boundary until its migration is complete.
+4. Mutating operations validate identifiers, write an audit event and queue typed device operations; fleet orchestration persists an immutable SSH/UCI rollout draft before execution.
 5. Device operations resolve the device inside the authorized tenant, verify its host key and execute a constrained script.
 
 The shipped agent reads a complete `CONTROLLER_URL` from root-owned runtime configuration. `REQUIRE_TLS=true` rejects plain HTTP before any controller request; configure a CA file or curl public-key pin when the controller uses a private PKI.
@@ -35,12 +35,14 @@ Each typed device operation has three independent identities:
 
 `site_configs` stores a site template. `RenderSiteConfig` turns that template into role-aware UCI commands for Gateway, AP and other supported roles. The controller can preview those commands before applying them.
 
-The rollout path is deliberately explicit:
+The rollout path is deliberately explicit. Preview is the point at which the
+rendered commands and read-only UCI observations are persisted; apply cannot
+re-render the site template or silently target a different device set.
 
 ```text
-desired config -> preview -> operator confirmation -> backup -> UCI batch
-                                                     -> health check
-                                                     -> success or rollback
+ desired config -> preview/draft -> operator confirmation -> stale check -> backup -> UCI batch
+                                                      -> health check
+                                                      -> success or rollback
 ```
 
 ## Tenant Boundary

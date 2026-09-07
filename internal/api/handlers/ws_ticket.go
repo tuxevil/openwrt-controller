@@ -9,15 +9,13 @@ import (
 	jwt "github.com/golang-jwt/jwt/v5"
 
 	"openwrt-controller/internal/authtickets"
+	"openwrt-controller/internal/database"
 )
 
-// WsTicketRequest is the JSON body of POST /api/ws-ticket. The
-// optional DeviceID field lets a future iteration scope the ticket
-// to a specific device (defence-in-depth: a stolen ticket for /ssh
-// can't be re-used for /some-other-handler). Currently accepted
-// but not enforced.
+// WsTicketRequest is the JSON body of POST /api/ws-ticket. Tickets are always
+// scoped to one tenant device before they are issued.
 type WsTicketRequest struct {
-	DeviceID string `json:"device_id,omitempty"`
+	DeviceID string `json:"device_id"`
 }
 
 // WsTicketResponse is the JSON returned by POST /api/ws-ticket. The
@@ -38,10 +36,10 @@ type WsTicketResponse struct {
 //  1. Dashboard calls this endpoint (with the regular JWT in the
 //     Authorization header) and receives a ticket.
 //  2. Dashboard opens the WS with ?ticket=<ticket>.
-//  3. The WS handler (DeviceSSHHandler) calls
-//     authtickets.Store.Consume to atomically validate + mark the
-//     ticket as used. A leaked ticket can therefore be used at
-//     most once.
+//  3. The authenticated WebSocket middleware calls
+//     authtickets.Store.ConsumeForDevice to atomically validate, scope, and
+//     mark the ticket as used. A leaked ticket can therefore be used at most
+//     once and only for its intended device.
 func IssueWSTicketHandler(w http.ResponseWriter, r *http.Request) {
 	// Accept the JWT from the Authorization header only — never from
 	// the query string (which is what we're trying to fix).
@@ -81,16 +79,41 @@ func IssueWSTicketHandler(w http.ResponseWriter, r *http.Request) {
 		username = "system"
 	}
 
-	// Parse the body (we accept but currently ignore DeviceID).
+	// The ticket is scoped before it is issued, rather than trusting the device
+	// path supplied later during the WebSocket handshake.
 	var body WsTicketRequest
-	_ = json.NewDecoder(r.Body).Decode(&body)
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		RespondError(w, http.StatusBadRequest, "invalid request body", err)
+		return
+	}
+	deviceID := strings.TrimSpace(body.DeviceID)
+	if deviceID == "" {
+		RespondError(w, http.StatusBadRequest, "device_id is required", nil)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil || schema == "public" {
+		RespondError(w, http.StatusForbidden, "tenant context required", err)
+		return
+	}
+	var deviceExists bool
+	if err := database.Tx(r.Context()).QueryRow(
+		"SELECT EXISTS(SELECT 1 FROM "+schema+".devices WHERE id = $1)", deviceID,
+	).Scan(&deviceExists); err != nil {
+		RespondError(w, http.StatusInternalServerError, "failed to resolve device", err)
+		return
+	}
+	if !deviceExists {
+		RespondError(w, http.StatusNotFound, "device not found", nil)
+		return
+	}
 
 	store := authtickets.GetStore()
 	if store == nil {
 		RespondError(w, http.StatusServiceUnavailable, "ws ticket store not initialised", nil)
 		return
 	}
-	id, t, err := store.Issue(username, role)
+	id, t, err := store.Issue(username, role, deviceID, strings.TrimPrefix(schema, "tenant_"))
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "failed to issue ticket", err)
 		return

@@ -258,11 +258,12 @@ export default {
   putDeviceRole(deviceId, role) {
     return apiClient.put(`/devices/${deviceId}/role`, { role })
   },
-  previewSiteSync(siteId) {
-    return apiClient.post(`/sites/${siteId}/orchestrator/preview`)
+  previewSiteSync(siteId, targetDeviceId = '') {
+    const params = targetDeviceId ? { target_device_id: targetDeviceId } : undefined
+    return apiClient.post(`/sites/${siteId}/orchestrator/preview`, null, { params })
   },
-  syncSiteFleet(siteId) {
-    return apiClient.post(`/sites/${siteId}/orchestrator/sync`)
+  syncSiteFleet(siteId, rolloutId) {
+    return apiClient.post(`/sites/${siteId}/orchestrator/sync`, { rollout_id: rolloutId })
   },
   getRolloutHistory(siteId, limit = 20) {
     return apiClient.get(`/sites/${siteId}/orchestrator/rollouts`, { params: { limit } })

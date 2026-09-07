@@ -8,15 +8,15 @@ import (
 
 func TestIssueAndConsume(t *testing.T) {
 	s := LoadStore(time.Minute)
-	id, t0, err := s.Issue("alice", "ADMIN")
+	id, t0, err := s.Issue("alice", "ADMIN", "device-1", "tenant_demo")
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
 	if len(id) != 32 {
 		t.Errorf("ticket id length = %d, want 32", len(id))
 	}
-	if t0.Username != "alice" || t0.Role != "ADMIN" {
-		t.Errorf("ticket = %+v, want user=alice role=ADMIN", t0)
+	if t0.Username != "alice" || t0.Role != "ADMIN" || t0.DeviceID != "device-1" || t0.TenantSchema != "tenant_demo" {
+		t.Errorf("ticket = %+v, want user=alice role=ADMIN device=device-1 schema=tenant_demo", t0)
 	}
 	if t0.Consumed {
 		t.Error("freshly issued ticket should not be consumed")
@@ -39,7 +39,7 @@ func TestIssueAndConsume(t *testing.T) {
 
 func TestValidateDoesNotConsume(t *testing.T) {
 	s := LoadStore(time.Minute)
-	id, _, _ := s.Issue("bob", "OPERATOR")
+	id, _, _ := s.Issue("bob", "OPERATOR", "device-2", "tenant_demo")
 	// Validate is read-only.
 	if _, err := s.Validate(id); err != nil {
 		t.Errorf("Validate #1: %v", err)
@@ -55,13 +55,29 @@ func TestValidateDoesNotConsume(t *testing.T) {
 
 func TestExpiredTicket(t *testing.T) {
 	s := LoadStore(10 * time.Millisecond)
-	id, _, _ := s.Issue("carol", "VIEWER")
+	id, _, _ := s.Issue("carol", "VIEWER", "device-3", "tenant_demo")
 	time.Sleep(20 * time.Millisecond)
 	if _, err := s.Validate(id); err != ErrTicketExpired {
 		t.Errorf("Validate after expiry err = %v, want ErrTicketExpired", err)
 	}
 	if _, err := s.Consume(id); err != ErrTicketExpired {
 		t.Errorf("Consume after expiry err = %v, want ErrTicketExpired", err)
+	}
+}
+
+func TestGCRemovesExpiredUnusedTickets(t *testing.T) {
+	s := LoadStore(time.Minute)
+	id, ticket, err := s.Issue("carol", "VIEWER", "device-3", "tenant_demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s.mu.Lock()
+	s.gcLocked(ticket.ExpiresAt.Add(time.Second))
+	_, ok := s.tickets[id]
+	s.mu.Unlock()
+	if ok {
+		t.Fatal("expired unused ticket remained in the store")
 	}
 }
 
@@ -79,11 +95,11 @@ func TestConcurrentConsume(t *testing.T) {
 	// Two goroutines racing to consume the same ticket: exactly one
 	// must win, the other must see ErrTicketReused.
 	s := LoadStore(time.Minute)
-	id, _, _ := s.Issue("dave", "ADMIN")
+	id, _, _ := s.Issue("dave", "ADMIN", "device-4", "tenant_demo")
 	var (
-		wg          sync.WaitGroup
-		successes   int
-		varMu       sync.Mutex
+		wg        sync.WaitGroup
+		successes int
+		varMu     sync.Mutex
 	)
 	for i := 0; i < 10; i++ {
 		wg.Add(1)
@@ -99,5 +115,19 @@ func TestConcurrentConsume(t *testing.T) {
 	wg.Wait()
 	if successes != 1 {
 		t.Errorf("consume races: %d successes, want exactly 1", successes)
+	}
+}
+
+func TestConsumeForDeviceRejectsWrongScopeWithoutConsuming(t *testing.T) {
+	s := LoadStore(time.Minute)
+	id, _, err := s.Issue("alice", "ADMIN", "device-1", "tenant_demo")
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if _, err := s.ConsumeForDevice(id, "device-2"); err != ErrTicketScope {
+		t.Fatalf("wrong-device ConsumeForDevice err = %v, want ErrTicketScope", err)
+	}
+	if _, err := s.ConsumeForDevice(id, "device-1"); err != nil {
+		t.Fatalf("correct-device ConsumeForDevice: %v", err)
 	}
 }

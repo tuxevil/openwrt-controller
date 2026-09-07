@@ -46,6 +46,8 @@ tags:
     description: Container liveness / readiness (anonymous)
   - name: metrics
     description: Prometheus exposition (anonymous)
+  - name: orchestrator
+    description: Immutable site rollout previews and execution
 
 paths:
   # ── Auth ──────────────────────────────────────────────────────────────────
@@ -77,6 +79,53 @@ paths:
                   role:     { type: string, enum: [superadmin, admin, user] }
         '401':
           $ref: '#/components/responses/Unauthorized'
+
+  /api/ws-ticket:
+    post:
+      tags: [auth]
+      operationId: issueWebSocketTicket
+      summary: Issue a single-use device-scoped WebSocket ticket
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebSocketTicketRequest'
+      responses:
+        '200':
+          description: Short-lived ticket for one device SSH session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebSocketTicketResponse'
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/devices/{device_id}/ssh:
+    get:
+      tags: [devices]
+      operationId: openDeviceSSHWebSocket
+      summary: Upgrade to a device SSH WebSocket using a single-use ticket
+      description: The ticket must have been issued for this exact device.
+      security:
+        - webSocketTicket: []
+      parameters:
+        - $ref: '#/components/parameters/DeviceID'
+        - in: query
+          name: ticket
+          required: true
+          schema: { type: string, minLength: 32, maxLength: 32 }
+      responses:
+        '101': { description: Switching Protocols }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
 
   # ── Telemetry ─────────────────────────────────────────────────────────────
   /api/telemetry:
@@ -253,6 +302,97 @@ paths:
       responses:
         '200': { description: Logs }
 
+  # ── Site orchestrator ─────────────────────────────────────────────────────
+  /api/sites/{site_id}/orchestrator/preview:
+    post:
+      tags: [orchestrator]
+      operationId: previewSiteRollout
+      summary: Render and persist an immutable rollout draft
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+        - in: query
+          name: target_device_id
+          required: false
+          schema: { type: string }
+      responses:
+        '200':
+          description: Immutable rollout draft preview
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RolloutDraftPreview' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/sites/{site_id}/orchestrator/sync:
+    post:
+      tags: [orchestrator]
+      operationId: applySiteRollout
+      summary: Apply one immutable rollout draft
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RolloutApplyRequest' }
+      responses:
+        '200':
+          description: Rollout completed or stopped by staged execution
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RolloutResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+        '502': { $ref: '#/components/responses/BadGateway' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/sites/{site_id}/orchestrator/rollouts:
+    get:
+      tags: [orchestrator]
+      operationId: listSiteRollouts
+      summary: List rollout drafts and execution history
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+      responses:
+        '200':
+          description: Rollout history
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/RolloutRecord' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
+  /api/sites/{site_id}/orchestrator/rollouts/{rollout_id}:
+    get:
+      tags: [orchestrator]
+      operationId: getSiteRollout
+      summary: Read one rollout record
+      parameters:
+        - $ref: '#/components/parameters/SiteID'
+        - in: path
+          name: rollout_id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Rollout record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RolloutRecord' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '500': { $ref: '#/components/responses/InternalServerError' }
+
   # ── Devices ───────────────────────────────────────────────────────────────
   /api/devices:
     get:
@@ -407,18 +547,6 @@ paths:
       responses:
         '200': { description: Metrics }
 
-  /api/devices/{device_id}/ssh:
-    get:
-      tags: [devices]
-      summary: Open a WebSocket SSH session
-      description: |
-        Returns a `ticket` to be exchanged via the WebSocket upgrade.
-        WebSocket tickets are single-use, 30s TTL.
-      parameters:
-        - $ref: '#/components/parameters/DeviceID'
-      responses:
-        '200': { description: Ticket issued }
-
   # ── Global ────────────────────────────────────────────────────────────────
   /api/global/health:
     get:
@@ -532,6 +660,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    webSocketTicket:
+      type: apiKey
+      in: query
+      name: ticket
 
   parameters:
     SiteID:
@@ -543,7 +675,7 @@ components:
       in: path
       name: device_id
       required: true
-      schema: { type: string, format: uuid }
+      schema: { type: string }
     EdgeDeviceID:
       in: path
       name: id
@@ -566,8 +698,38 @@ components:
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: Authenticated principal is not allowed to access the resource
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
     NotFound:
       description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadRequest:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Request conflicts with current resource state
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    BadGateway:
+      description: Device transport or preflight failure
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServiceUnavailable:
+      description: Required dependency unavailable
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -589,6 +751,19 @@ components:
       properties:
         error:    { type: string }
         request_id: { type: string, description: 'Correlation ID for log lookup' }
+    WebSocketTicketRequest:
+      type: object
+      required: [device_id]
+      properties:
+        device_id: { type: string }
+    WebSocketTicketResponse:
+      type: object
+      required: [ticket, expires_in, expires_at, token_type]
+      properties:
+        ticket: { type: string, minLength: 32, maxLength: 32 }
+        expires_in: { type: integer, minimum: 1 }
+        expires_at: { type: string, format: date-time }
+        token_type: { type: string, enum: [Ticket] }
     QueuedDeviceOperation:
       type: object
       required: [status, operation_id, plan_hash, generation, message]
@@ -635,6 +810,90 @@ components:
         health_checks:
           type: array
           items: { type: string }
+    RolloutApplyRequest:
+      type: object
+      required: [rollout_id]
+      properties:
+        rollout_id: { type: string, format: uuid }
+    RolloutDevicePreview:
+      type: object
+      required: [device_id, hostname, role, commands, count, scripts, observed_state]
+      properties:
+        device_id: { type: string }
+        hostname: { type: string }
+        role: { type: string }
+        commands:
+          type: array
+          items: { type: string }
+        count: { type: integer, minimum: 0 }
+        scripts:
+          type: object
+          additionalProperties: { type: string }
+        observed_state:
+          type: object
+          additionalProperties: { type: string }
+    RolloutDraftPreview:
+      type: object
+      required: [site_id, rollout_id, generation, plan_hash, devices, total]
+      properties:
+        site_id: { type: string, format: uuid }
+        rollout_id: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        target_device_id: { type: string, nullable: true }
+        health_checks:
+          type: array
+          items: { type: string }
+        devices:
+          type: array
+          items: { $ref: '#/components/schemas/RolloutDevicePreview' }
+        total: { type: integer, minimum: 1 }
+    RolloutResult:
+      type: object
+      required: [status, rollout_id, generation, successes, failures, results]
+      properties:
+        status: { type: string }
+        rollout_id: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        target_device_id: { type: string, nullable: true }
+        successes: { type: integer, minimum: 0 }
+        failures: { type: integer, minimum: 0 }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/RolloutDeviceResult' }
+    RolloutDeviceResult:
+      type: object
+      required: [device_id, hostname, role, status, cmd_count]
+      properties:
+        device_id: { type: string }
+        hostname: { type: string }
+        role: { type: string }
+        status: { type: string }
+        output: { type: string }
+        error: { type: string }
+        cmd_count: { type: integer, minimum: 0 }
+    RolloutRecord:
+      type: object
+      required: [id, site_id, generation, status, plan_hash, target_device_ids, plan, results]
+      properties:
+        id: { type: string, format: uuid }
+        site_id: { type: string, format: uuid }
+        generation: { type: integer, format: int64, minimum: 1 }
+        status: { type: string }
+        plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        requested_by: { type: string }
+        target_device_ids:
+          type: array
+          items: { type: string }
+        plan: { type: object, additionalProperties: true }
+        results:
+          type: array
+          items: { $ref: '#/components/schemas/RolloutDeviceResult' }
+        preview:
+          type: array
+          items: { $ref: '#/components/schemas/RolloutDevicePreview' }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
 
 security:
   - bearerAuth: []

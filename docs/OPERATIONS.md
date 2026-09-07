@@ -17,9 +17,16 @@ The controller creates a Vault backup before applying a confirmed change. The re
 
 ## Fleet Sync
 
-Site Settings saves desired state separately from applying it. A fleet sync renders commands per device role and applies them per namespace. Configure health targets under `ROLLOUT HEALTH CHECKS`; valid IP addresses and DNS-style hostnames are deduplicated before execution.
+Site Settings saves desired state separately from applying it. Preview renders
+commands per device role, performs read-only UCI preflight, and creates an
+immutable rollout draft with a generation and plan hash. Apply must send that
+draft's `rollout_id`; the controller rejects missing, already-claimed, or
+stale drafts and never re-renders the site template during apply. Configure
+health targets under `ROLLOUT HEALTH CHECKS`; valid IP addresses and DNS-style
+hostnames are deduplicated before execution.
 
-Do not use fleet sync for an unreviewed firewall, WAN, DNS or wireless change. Start with preview and a small device subset.
+Do not use fleet sync for an unreviewed firewall, WAN, DNS or wireless change.
+Start with preview and a small device subset.
 
 ## Drift And Recovery
 

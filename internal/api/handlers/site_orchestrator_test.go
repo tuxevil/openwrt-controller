@@ -1,9 +1,18 @@
 package handlers
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
+	"github.com/DATA-DOG/go-sqlmock"
+
+	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
 
@@ -107,24 +116,13 @@ func TestSelectRolloutDevicesRejectsUnknownTarget(t *testing.T) {
 	}
 }
 
-func TestFleetPlanHashIsStable(t *testing.T) {
-	first := fleetPlanHash([]services.RenderResult{{
-		DeviceID: "device-a",
-		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-a"}},
-	}})
-	second := fleetPlanHash([]services.RenderResult{{
-		DeviceID: "device-a",
-		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-a"}},
-	}})
-	if first == "" || first != second {
-		t.Fatalf("plan hash is not stable: %q != %q", first, second)
+func TestRolloutHealthTargetsPersistsEffectiveDefault(t *testing.T) {
+	targets, err := rolloutHealthTargets(services.SiteConfig{HealthChecks: []byte(`[]`)})
+	if err != nil {
+		t.Fatal(err)
 	}
-	changed := []services.RenderResult{{
-		DeviceID: "device-a",
-		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-b"}},
-	}}
-	if first == fleetPlanHash(changed) {
-		t.Fatal("different plans must have different hashes")
+	if len(targets) != 1 || targets[0] != "1.1.1.1" {
+		t.Fatalf("health targets = %#v, want effective default", targets)
 	}
 }
 
@@ -174,5 +172,196 @@ func TestRejectUnsafeNetworkMutations(t *testing.T) {
 		Commands: []services.UciCommand{{Config: "wireless", Action: "set"}},
 	}}); err != nil {
 		t.Fatalf("non-network mutations should remain allowed: %v", err)
+	}
+}
+
+func TestBuildRolloutDraftCapturesCommandsAndObservedState(t *testing.T) {
+	results := []services.RenderResult{{
+		DeviceID: "device-a",
+		Hostname: "ap-a",
+		Role:     "AP",
+		LastIP:   "192.0.2.10",
+		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "ap-a"}},
+	}}
+	observed := map[string]map[string]string{
+		"device-a": {"system": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+	}
+
+	draft, err := buildRolloutDraft("site-1", "", []string{"1.1.1.1"}, results, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if draft.SiteID != "site-1" || len(draft.Devices) != 1 {
+		t.Fatalf("draft = %#v", draft)
+	}
+	if draft.Devices[0].Commands[0].Value != "ap-a" || len(draft.Devices[0].PreviewCommands) != 1 || draft.Devices[0].Scripts["system"] == "" || draft.Devices[0].ObservedState["system"] == "" {
+		t.Fatalf("draft lost exact command, script, or observed state: %#v", draft.Devices[0])
+	}
+	if rolloutPlanHash(draft) == "" {
+		t.Fatal("draft hash is empty")
+	}
+	plan, err := json.Marshal(draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeRolloutDraft(database.RolloutDraftRecord{SiteID: draft.SiteID, PlanHash: rolloutPlanHash(draft), Plan: plan}); err != nil {
+		t.Fatalf("serialized draft failed identity validation: %v", err)
+	}
+}
+
+func TestRolloutPlanHashStableForSameDraft(t *testing.T) {
+	first, err := buildRolloutDraft("site-1", "", nil, []services.RenderResult{{
+		DeviceID: "device-a",
+		Hostname: "ap-a",
+		Role:     "AP",
+		Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "ap-a"}},
+	}}, map[string]map[string]string{"device-a": {"system": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	if rolloutPlanHash(first) != rolloutPlanHash(second) {
+		t.Fatal("equivalent immutable plans should have the same hash")
+	}
+}
+
+func TestRolloutPlanHashIncludesExecutionOrder(t *testing.T) {
+	first := rolloutDraft{
+		SiteID: "site-1",
+		Devices: []rolloutDraftDevice{
+			{DeviceID: "device-a", Commands: []services.UciCommand{{Action: "set", Config: "system", Option: "hostname", Value: "a"}}},
+			{DeviceID: "device-b", Commands: []services.UciCommand{{Action: "set", Config: "system", Option: "hostname", Value: "b"}}},
+		},
+	}
+	second := first
+	second.Devices = []rolloutDraftDevice{first.Devices[1], first.Devices[0]}
+	if rolloutPlanHash(first) == rolloutPlanHash(second) {
+		t.Fatal("changing execution order must change the immutable plan hash")
+	}
+}
+
+func TestBuildRolloutDraftOrderingDoesNotDependOnDeviceIP(t *testing.T) {
+	results := []services.RenderResult{
+		{DeviceID: "device-b", Role: "AP", LastIP: "192.0.2.2", Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "b"}}},
+		{DeviceID: "device-a", Role: "AP", LastIP: "192.0.2.1", Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "a"}}},
+	}
+	observed := map[string]map[string]string{
+		"device-a": {"system": strings.Repeat("a", 64)},
+		"device-b": {"system": strings.Repeat("b", 64)},
+	}
+	first, err := buildRolloutDraft("site-1", "", nil, results, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results[0].LastIP, results[1].LastIP = "192.0.2.200", "192.0.2.3"
+	second, err := buildRolloutDraft("site-1", "", nil, results, observed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rolloutPlanHash(first) != rolloutPlanHash(second) {
+		t.Fatal("device IP changes must not change immutable rollout ordering")
+	}
+	if first.Devices[0].DeviceID != "device-a" || first.Devices[1].DeviceID != "device-b" {
+		t.Fatalf("draft order = %#v, want deterministic device ID order", first.Devices)
+	}
+}
+
+func TestDecodeRolloutDraftRejectsTamperedPlan(t *testing.T) {
+	record := database.RolloutDraftRecord{
+		SiteID:   "site-1",
+		PlanHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Plan:     []byte(`{"site_id":"site-1","devices":[]}`),
+	}
+	if _, err := decodeRolloutDraft(record); err == nil {
+		t.Fatal("tampered rollout plan was accepted")
+	}
+}
+
+func TestRolloutRecordPreviewRejectsTamperedDraft(t *testing.T) {
+	record := rolloutRecord{
+		SiteID:   "site-1",
+		PlanHash: strings.Repeat("a", 64),
+		Plan:     json.RawMessage(`{"site_id":"site-1","devices":[]}`),
+	}
+	if previews := rolloutDevicePreviewsFromRecord(record); previews != nil {
+		t.Fatalf("tampered rollout record exposed preview: %#v", previews)
+	}
+}
+
+func TestVerifyRolloutDraftTargetsRejectsRoleChanges(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previousDB := database.DB
+	database.DB = db
+	defer func() { database.DB = previousDB }()
+
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(device_role, 'AP'), pending_operation FROM "tenant_demo".devices WHERE id = $1 AND site_id = $2`)).
+		WithArgs("device-a", "site-1").
+		WillReturnRows(sqlmock.NewRows([]string{"device_role", "pending_operation"}).AddRow("Gateway", nil))
+	draft := rolloutDraft{
+		SiteID:  "site-1",
+		Devices: []rolloutDraftDevice{{DeviceID: "device-a", Role: "AP"}},
+	}
+	if err := verifyRolloutDraftTargets(t.Context(), "tenant_demo", "site-1", draft); !errors.Is(err, errRolloutDraftStale) {
+		t.Fatalf("role change error = %v, want stale error", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRequestedRolloutIDAcceptsBodyAndQuery(t *testing.T) {
+	bodyRequest := httptest.NewRequest("POST", "/?", bytes.NewBufferString(`{"rollout_id":"00000000-0000-0000-0000-000000000001"}`))
+	if got, err := requestedRolloutID(bodyRequest); err != nil || got != "00000000-0000-0000-0000-000000000001" {
+		t.Fatalf("body rollout ID = %q, %v", got, err)
+	}
+
+	queryRequest := httptest.NewRequest("POST", "/?rollout_id=00000000-0000-0000-0000-000000000002", nil)
+	if got, err := requestedRolloutID(queryRequest); err != nil || got != "00000000-0000-0000-0000-000000000002" {
+		t.Fatalf("query rollout ID = %q, %v", got, err)
+	}
+}
+
+func TestRequestedRolloutIDRequiresAnID(t *testing.T) {
+	request := httptest.NewRequest("POST", "/", bytes.NewBufferString(`{}`))
+	if _, err := requestedRolloutID(request); err == nil {
+		t.Fatal("missing rollout ID was accepted")
+	}
+	invalid := httptest.NewRequest("POST", "/?rollout_id=not-a-uuid", nil)
+	if _, err := requestedRolloutID(invalid); err == nil {
+		t.Fatal("invalid rollout ID was accepted")
+	}
+}
+
+func TestBuildGuardedRolloutScriptChecksObservedStateBeforeMutation(t *testing.T) {
+	command := services.UciCommand{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-a"}
+	script, err := buildGuardedRolloutScript("system", []services.UciCommand{command}, nil, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script, "observed_rollout_hash=$(uci show system") || !strings.Contains(script, "exit 75") {
+		t.Fatalf("script has no stale-state guard: %s", script)
+	}
+	if strings.Index(script, "observed_rollout_hash=") > strings.Index(script, "uci set") {
+		t.Fatal("stale-state guard must precede UCI mutation")
+	}
+	if strings.Index(script, "observed_rollout_hash=") > strings.Index(script, "# Phase 2: Apply UCI mutations") {
+		t.Fatal("stale-state guard must run before the mutation phase")
+	}
+	if strings.Index(script, `mkdir "$uci_lock_dir"`) > strings.Index(script, "observed_rollout_hash=") {
+		t.Fatal("UCI lock must protect the observed-state check")
+	}
+}
+
+func TestSyncFleetRequiresAnImmutableDraft(t *testing.T) {
+	request := httptest.NewRequest("POST", "/api/sites/site-1/orchestrator/sync", bytes.NewBufferString(`{}`))
+	request.SetPathValue("site_id", "site-1")
+	recorder := httptest.NewRecorder()
+	SyncFleetHandler(recorder, request)
+	if recorder.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusBadRequest)
 	}
 }

@@ -3,14 +3,19 @@ package handlers
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
@@ -20,6 +25,53 @@ const fleetSyncMaxConcurrency = 4
 const fleetSyncSequential = true
 const maxRolloutDiagnosticBytes = 4096
 
+var (
+	errRolloutDraftStale         = errors.New("rollout draft observed state is stale")
+	errRolloutDraftTransport     = errors.New("rollout draft observed state could not be checked")
+	errRolloutGenerationConflict = errors.New("rollout generation is no longer current")
+	errRolloutClaimLost          = errors.New("rollout claim is no longer current")
+)
+
+func auditRolloutEvent(r *http.Request, username, action, siteID, payload string) error {
+	if err := database.InsertAuditLog(username, action, "SITE", siteID, payload, r.RemoteAddr); err != nil {
+		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to write audit event %s for site %s: %v", action, siteID, err)
+		return err
+	}
+	return nil
+}
+
+func releaseRolloutDraftForRetry(r *http.Request, schema, siteID, rolloutID, claimToken string) error {
+	releaseCtx, releaseCancel := rolloutPersistenceContext(r)
+	defer releaseCancel()
+	return database.ReleaseRolloutDraft(releaseCtx, schema, siteID, rolloutID, claimToken)
+}
+
+func handleRolloutDraftValidationFailure(w http.ResponseWriter, r *http.Request, schema, siteID, rolloutID, claimToken, username string, validationErr error) {
+	if errors.Is(validationErr, errRolloutDraftTransport) {
+		if releaseErr := releaseRolloutDraftForRetry(r, schema, siteID, rolloutID, claimToken); releaseErr != nil {
+			log.Printf("[SITE_ORCHESTRATOR][WARN] failed to release rollout draft %s: %v", rolloutID, releaseErr)
+		}
+		if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_RETRYABLE_FAILURE", siteID,
+			fmt.Sprintf("Rollout %s could not validate observed state: %v", rolloutID, validationErr)); auditErr != nil {
+			http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
+			return
+		}
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, validationErr.Error()), http.StatusBadGateway)
+		return
+	}
+	staleCtx, staleCancel := rolloutPersistenceContext(r)
+	if err := database.MarkRolloutDraftStale(staleCtx, schema, siteID, rolloutID, claimToken); err != nil {
+		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to mark rollout draft %s stale: %v", rolloutID, err)
+	}
+	staleCancel()
+	if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_STALE", siteID,
+		fmt.Sprintf("Rollout %s rejected: %v", rolloutID, validationErr)); auditErr != nil {
+		http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
+		return
+	}
+	http.Error(w, fmt.Sprintf(`{"error":%q}`, validationErr.Error()), http.StatusConflict)
+}
+
 type fleetSyncResult struct {
 	DeviceID string `json:"device_id"`
 	Hostname string `json:"hostname"`
@@ -28,6 +80,33 @@ type fleetSyncResult struct {
 	Output   string `json:"output"`
 	Error    string `json:"error,omitempty"`
 	CmdCount int    `json:"cmd_count"`
+}
+
+type rolloutDraft struct {
+	SiteID         string               `json:"site_id"`
+	TargetDeviceID string               `json:"target_device_id,omitempty"`
+	HealthChecks   []string             `json:"health_checks"`
+	Devices        []rolloutDraftDevice `json:"devices"`
+}
+
+type rolloutDraftDevice struct {
+	DeviceID        string                `json:"device_id"`
+	Hostname        string                `json:"hostname"`
+	Role            string                `json:"role"`
+	Commands        []services.UciCommand `json:"commands"`
+	PreviewCommands []string              `json:"preview_commands"`
+	Scripts         map[string]string     `json:"scripts"`
+	ObservedState   map[string]string     `json:"observed_state"`
+}
+
+type rolloutDevicePreview struct {
+	DeviceID      string            `json:"device_id"`
+	Hostname      string            `json:"hostname"`
+	Role          string            `json:"role"`
+	Commands      []string          `json:"commands"`
+	Count         int               `json:"count"`
+	Scripts       map[string]string `json:"scripts"`
+	ObservedState map[string]string `json:"observed_state"`
 }
 
 // ─── SITE_ORCHESTRATOR Handlers ──────────────────────────────────────────────
@@ -251,6 +330,238 @@ func selectRolloutDevices(devs []services.DeviceRoleInfo, targetID string) ([]se
 	return nil, fmt.Errorf("target device not found in site")
 }
 
+func rolloutHealthTargets(sc services.SiteConfig) ([]string, error) {
+	var targets []string
+	if len(sc.HealthChecks) > 0 {
+		if err := json.Unmarshal(sc.HealthChecks, &targets); err != nil {
+			return nil, fmt.Errorf("invalid health_checks configuration")
+		}
+	}
+	validated, err := services.ValidateHealthTargets(targets)
+	if err != nil {
+		return nil, err
+	}
+	if len(validated) == 0 {
+		// Keep the effective default in the immutable plan because the script
+		// builder uses the same target when no site targets are configured.
+		return []string{"1.1.1.1"}, nil
+	}
+	return validated, nil
+}
+
+func buildRolloutDraft(siteID, targetDeviceID string, healthChecks []string, results []services.RenderResult, observedState map[string]map[string]string) (rolloutDraft, error) {
+	draft := rolloutDraft{
+		SiteID:         siteID,
+		TargetDeviceID: targetDeviceID,
+		HealthChecks:   append([]string{}, healthChecks...),
+		Devices:        make([]rolloutDraftDevice, 0, len(results)),
+	}
+	for _, phase := range sequentialFleetRolloutPhases(results) {
+		for _, index := range phase {
+			result := results[index]
+			state := make(map[string]string)
+			for config, hash := range observedState[result.DeviceID] {
+				state[config] = hash
+			}
+			if len(result.Commands) > 0 && len(state) == 0 {
+				return rolloutDraft{}, fmt.Errorf("missing observed state for device %s", result.DeviceID)
+			}
+			scripts := make(map[string]string)
+			for config, commands := range groupCommandsByConfig(result.Commands) {
+				script, err := buildGuardedRolloutScript(config, commands, healthChecks, state[config])
+				if err != nil {
+					return rolloutDraft{}, fmt.Errorf("could not build rollout script for device %s: %w", result.DeviceID, err)
+				}
+				scripts[config] = script
+			}
+			draft.Devices = append(draft.Devices, rolloutDraftDevice{
+				DeviceID:        result.DeviceID,
+				Hostname:        result.Hostname,
+				Role:            result.Role,
+				Commands:        append([]services.UciCommand{}, result.Commands...),
+				PreviewCommands: append([]string{}, services.PreviewCommands(result.Commands)...),
+				Scripts:         scripts,
+				ObservedState:   state,
+			})
+		}
+	}
+	return draft, nil
+}
+
+func rolloutPlanHash(draft rolloutDraft) string {
+	encoded, _ := json.Marshal(draft)
+	return fmt.Sprintf("%x", sha256.Sum256(encoded))
+}
+
+func decodeRolloutDraft(record database.RolloutDraftRecord) (rolloutDraft, error) {
+	var draft rolloutDraft
+	if err := json.Unmarshal(record.Plan, &draft); err != nil {
+		return rolloutDraft{}, fmt.Errorf("invalid rollout draft: %w", err)
+	}
+	if draft.SiteID != record.SiteID || rolloutPlanHash(draft) != record.PlanHash {
+		return rolloutDraft{}, fmt.Errorf("rollout draft identity does not match its stored plan")
+	}
+	return draft, nil
+}
+
+func rolloutResultsFromDraft(draft rolloutDraft) []services.RenderResult {
+	results := make([]services.RenderResult, 0, len(draft.Devices))
+	for _, device := range draft.Devices {
+		results = append(results, services.RenderResult{
+			DeviceID: device.DeviceID,
+			Hostname: device.Hostname,
+			Role:     device.Role,
+			Commands: append([]services.UciCommand{}, device.Commands...),
+		})
+	}
+	return results
+}
+
+func verifyRolloutDraftObservedState(ctx context.Context, schema, siteID string, draft rolloutDraft) error {
+	for _, device := range draft.Devices {
+		configs := make(map[string][]services.UciCommand, len(device.ObservedState))
+		for config := range device.ObservedState {
+			configs[config] = nil
+		}
+		for _, config := range sortedConfigNames(configs) {
+			expected := device.ObservedState[config]
+			if expected == "" {
+				return fmt.Errorf("%w: no observed hash for device %s config %s", errRolloutDraftStale, device.DeviceID, config)
+			}
+			observed, err := runSSHCommandForSite(ctx, schema, siteID, device.DeviceID, "uci show "+config+" 2>&1")
+			if err != nil {
+				return fmt.Errorf("%w: device %s config %s: %v", errRolloutDraftTransport, device.DeviceID, config, err)
+			}
+			if observedStateHash(observed) != expected {
+				return fmt.Errorf("%w: device %s config %s", errRolloutDraftStale, device.DeviceID, config)
+			}
+		}
+	}
+	return nil
+}
+
+func verifyRolloutDraftTargets(ctx context.Context, schema, siteID string, draft rolloutDraft) error {
+	sqlSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return fmt.Errorf("%w: invalid tenant schema", errRolloutDraftTransport)
+	}
+	for _, device := range draft.Devices {
+		var role string
+		var pendingOperation []byte
+		err := database.DB.QueryRowContext(ctx, fmt.Sprintf(
+			"SELECT COALESCE(device_role, 'AP'), pending_operation FROM %s.devices WHERE id = $1 AND site_id = $2", sqlSchema,
+		), device.DeviceID, siteID).Scan(&role, &pendingOperation)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return fmt.Errorf("%w: device %s role changed or is no longer in site", errRolloutDraftStale, device.DeviceID)
+			}
+			return fmt.Errorf("%w: could not validate device %s: %v", errRolloutDraftTransport, device.DeviceID, err)
+		}
+		if role != device.Role {
+			return fmt.Errorf("%w: device %s role changed", errRolloutDraftStale, device.DeviceID)
+		}
+		if len(pendingOperation) > 0 && string(pendingOperation) != "null" {
+			return fmt.Errorf("%w: device %s has a pending typed operation", errRolloutDraftStale, device.DeviceID)
+		}
+	}
+	return nil
+}
+
+func observedStateHash(raw string) string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(raw)))
+}
+
+func requestedRolloutID(r *http.Request) (string, error) {
+	if rolloutID := strings.TrimSpace(r.URL.Query().Get("rollout_id")); rolloutID != "" {
+		return validateRolloutID(rolloutID)
+	}
+	if r.Body == nil {
+		return "", fmt.Errorf("rollout_id is required")
+	}
+	var payload struct {
+		RolloutID string `json:"rollout_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		return "", fmt.Errorf("invalid rollout request")
+	}
+	if strings.TrimSpace(payload.RolloutID) == "" {
+		return "", fmt.Errorf("rollout_id is required")
+	}
+	return validateRolloutID(strings.TrimSpace(payload.RolloutID))
+}
+
+func validateRolloutID(rolloutID string) (string, error) {
+	if _, err := uuid.Parse(rolloutID); err != nil {
+		return "", fmt.Errorf("invalid rollout_id")
+	}
+	return rolloutID, nil
+}
+
+func rolloutDevicePreviews(draft rolloutDraft) []rolloutDevicePreview {
+	previews := make([]rolloutDevicePreview, 0, len(draft.Devices))
+	for _, device := range draft.Devices {
+		lines := append([]string{}, device.PreviewCommands...)
+		if device.PreviewCommands == nil {
+			// Drafts created before preview_commands was persisted can still be
+			// displayed, but new drafts always use the immutable rendered text.
+			lines = services.PreviewCommands(device.Commands)
+		}
+		previews = append(previews, rolloutDevicePreview{
+			DeviceID:      device.DeviceID,
+			Hostname:      device.Hostname,
+			Role:          device.Role,
+			Commands:      lines,
+			Count:         len(lines),
+			Scripts:       copyStringMap(device.Scripts),
+			ObservedState: copyStringMap(device.ObservedState),
+		})
+	}
+	return previews
+}
+
+func copyStringMap(values map[string]string) map[string]string {
+	copy := make(map[string]string, len(values))
+	for key, value := range values {
+		copy[key] = value
+	}
+	return copy
+}
+
+func rolloutDevicePreviewsFromRecord(record rolloutRecord) []rolloutDevicePreview {
+	draft, err := decodeRolloutDraft(database.RolloutDraftRecord{
+		SiteID:   record.SiteID,
+		PlanHash: record.PlanHash,
+		Plan:     record.Plan,
+	})
+	if err != nil {
+		return nil
+	}
+	return rolloutDevicePreviews(draft)
+}
+
+func buildGuardedRolloutScript(config string, commands []services.UciCommand, healthChecks []string, expectedStateHash string) (string, error) {
+	script := services.BuildSafeBatchScript(config, commands, healthChecks)
+	if script == "" {
+		return "", fmt.Errorf("invalid rollout commands for config %s", config)
+	}
+	if expectedStateHash == "" {
+		return "", fmt.Errorf("missing observed state for config %s", config)
+	}
+	guard := fmt.Sprintf(`observed_rollout_hash=$(uci show %s 2>&1 | sha256sum | awk '{print $1}')
+if [ "$observed_rollout_hash" != %q ]; then
+  printf 'SITE_ORCHESTRATOR: rollout draft stale for config %s\n' >&2
+  exit 75
+fi
+
+`, config, expectedStateHash, config)
+	const mutationMarker = "# Phase 2: Apply UCI mutations\n"
+	markerIndex := strings.Index(script, mutationMarker)
+	if markerIndex == -1 {
+		return "", fmt.Errorf("invalid rollout script for config %s", config)
+	}
+	return script[:markerIndex] + guard + script[markerIndex:], nil
+}
+
 // PutDeviceRoleHandler updates a device's role (Gateway, AP, IoT_Node).
 func PutDeviceRoleHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
@@ -269,7 +580,16 @@ func PutDeviceRoleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := services.UpdateDeviceRole(deviceID, body.Role); err != nil {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := services.UpdateDeviceRoleForTenant(r.Context(), schema, deviceID, body.Role); err != nil {
+		if errors.Is(err, services.ErrDeviceRoleUpdateConflict) {
+			http.Error(w, `{"error":"device role cannot change while a rollout is running"}`, http.StatusConflict)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
@@ -283,71 +603,9 @@ func PutDeviceRoleHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "role": body.Role})
 }
 
-// PreviewSyncHandler renders what WOULD be deployed without executing.
+// PreviewSyncHandler renders and persists what WOULD be deployed without
+// executing. The returned rollout_id is the only input accepted by apply.
 func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
-	siteID := r.PathValue("site_id")
-
-	sc, err := services.GetSiteConfig(r.Context(), siteID)
-	if err != nil {
-		http.Error(w, `{"error":"no site config found — save a template first"}`, http.StatusBadRequest)
-		return
-	}
-
-	devs, err := services.GetSiteDevicesWithRoles(r.Context(), siteID)
-	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
-	}
-	targetDeviceID := r.URL.Query().Get("target_device_id")
-	devs, err = selectRolloutDevices(devs, targetDeviceID)
-	if err != nil {
-		http.Error(w, `{"error":"target device not found in site"}`, http.StatusBadRequest)
-		return
-	}
-
-	results := services.RenderSiteConfig(*sc, devs)
-	results, err = preflightRenderedResults(results)
-	if err != nil {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
-		return
-	}
-
-	// Convert to preview strings per device
-	type DevicePreview struct {
-		DeviceID string   `json:"device_id"`
-		Hostname string   `json:"hostname"`
-		Role     string   `json:"role"`
-		Commands []string `json:"commands"`
-		Count    int      `json:"count"`
-	}
-
-	var previews []DevicePreview
-	for _, r := range results {
-		lines := services.PreviewCommands(r.Commands)
-		previews = append(previews, DevicePreview{
-			DeviceID: r.DeviceID,
-			Hostname: r.Hostname,
-			Role:     r.Role,
-			Commands: lines,
-			Count:    len(lines),
-		})
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"site_id":          siteID,
-		"target_device_id": targetDeviceID,
-		"devices":          previews,
-		"total":            len(previews),
-	})
-}
-
-// SyncFleetHandler executes a staged fleet synchronization.
-// It validates one canary device before pushing bounded batches to the rest.
-// An explicit target_device_id query limits the run to one selected device.
-func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	username := GetUsernameFromReq(r)
 
@@ -370,26 +628,25 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"target device not found in site"}`, http.StatusBadRequest)
 		return
 	}
-
 	if len(devs) == 0 {
 		http.Error(w, `{"error":"no devices found for this site"}`, http.StatusBadRequest)
 		return
 	}
-	var healthTargets []string
-	if len(sc.HealthChecks) > 0 {
-		if err := json.Unmarshal(sc.HealthChecks, &healthTargets); err != nil {
-			http.Error(w, `{"error":"invalid health_checks configuration"}`, http.StatusBadRequest)
-			return
-		}
-	}
-	healthTargets, err = services.ValidateHealthTargets(healthTargets)
+	healthChecks, err := rolloutHealthTargets(*sc)
 	if err != nil {
 		http.Error(w, `{"error":"invalid health check target"}`, http.StatusBadRequest)
 		return
 	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
 
 	results := services.RenderSiteConfig(*sc, devs)
-	results, err = preflightRenderedResults(results)
+	preflightCtx, preflightCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
+	results, observedState, err := preflightRenderedResultsWithState(preflightCtx, schema, siteID, results)
+	preflightCancel()
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
@@ -398,16 +655,157 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusConflict)
 		return
 	}
-	rolloutID, generation, err := createRolloutRun(r, siteID, username, results)
+	draft, err := buildRolloutDraft(siteID, targetDeviceID, healthChecks, results, observedState)
 	if err != nil {
-		http.Error(w, `{"error":"could not create rollout run"}`, http.StatusInternalServerError)
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
 	}
-	targetDeviceIDs := make([]string, len(results))
-	for i, result := range results {
-		targetDeviceIDs[i] = result.DeviceID
+	plan, err := json.Marshal(draft)
+	if err != nil {
+		http.Error(w, `{"error":"could not encode rollout draft"}`, http.StatusInternalServerError)
+		return
 	}
-	if err := markDesiredGeneration(r, siteID, generation, targetDeviceIDs); err != nil {
+	targets := make([]string, 0, len(draft.Devices))
+	for _, device := range draft.Devices {
+		targets = append(targets, device.DeviceID)
+	}
+	targetDeviceIDs, err := json.Marshal(targets)
+	if err != nil {
+		http.Error(w, `{"error":"could not encode rollout targets"}`, http.StatusInternalServerError)
+		return
+	}
+	persistCtx, persistCancel := rolloutPersistenceContext(r)
+	defer persistCancel()
+	record, err := database.CreateRolloutDraft(persistCtx, schema, siteID, username, rolloutPlanHash(draft), targetDeviceIDs, plan)
+	if err != nil {
+		http.Error(w, `{"error":"could not create rollout draft"}`, http.StatusInternalServerError)
+		return
+	}
+	if err := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_DRAFT", siteID,
+		fmt.Sprintf("Created rollout draft %s generation %d plan_hash %s", record.ID, record.Generation, record.PlanHash)); err != nil {
+		http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"site_id":          siteID,
+		"target_device_id": targetDeviceID,
+		"rollout_id":       record.ID,
+		"generation":       record.Generation,
+		"plan_hash":        record.PlanHash,
+		"health_checks":    draft.HealthChecks,
+		"devices":          rolloutDevicePreviews(draft),
+		"total":            len(draft.Devices),
+	})
+}
+
+// SyncFleetHandler executes a previously previewed immutable rollout draft.
+// It validates one canary device before pushing bounded batches to the rest.
+// The draft, not the current site template, determines the target devices and
+// commands.
+func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	username := GetUsernameFromReq(r)
+	rolloutID, err := requestedRolloutID(r)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
+		return
+	}
+	claimCtx, claimCancel := rolloutPersistenceContext(r)
+	record, err := database.ClaimRolloutDraft(claimCtx, schema, siteID, rolloutID)
+	claimCancel()
+	if err != nil {
+		if errors.Is(err, database.ErrRolloutDraftNotAvailable) {
+			http.Error(w, `{"error":"rollout draft is no longer available"}`, http.StatusConflict)
+		} else {
+			http.Error(w, `{"error":"could not claim rollout draft"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+	draft, err := decodeRolloutDraft(record)
+	if err != nil {
+		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
+		return
+	}
+	results := rolloutResultsFromDraft(draft)
+	if len(results) == 0 {
+		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username,
+			fmt.Errorf("%w: rollout draft contains no devices", errRolloutDraftStale))
+		return
+	}
+	if err := rejectUnsafeNetworkMutations(results); err != nil {
+		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
+		return
+	}
+	if err := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_START", siteID,
+		fmt.Sprintf("Claimed rollout draft %s generation %d plan_hash %s", rolloutID, record.Generation, record.PlanHash)); err != nil {
+		if releaseErr := releaseRolloutDraftForRetry(r, schema, siteID, rolloutID, record.ClaimToken); releaseErr != nil {
+			log.Printf("[SITE_ORCHESTRATOR][WARN] failed to release rollout draft %s after audit failure: %v", rolloutID, releaseErr)
+		}
+		http.Error(w, `{"error":"could not record rollout audit event; rollout was not applied"}`, http.StatusServiceUnavailable)
+		return
+	}
+	generation := record.Generation
+	executionCtx, executionCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
+	defer executionCancel()
+	if err := verifyRolloutDraftTargets(executionCtx, schema, siteID, draft); err != nil {
+		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
+		return
+	}
+	if err := verifyRolloutDraftObservedState(executionCtx, schema, siteID, draft); err != nil {
+		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
+		return
+	}
+	for _, result := range results {
+		if len(result.Commands) == 0 {
+			continue
+		}
+		if err := services.CreateBackupForSite(executionCtx, schema, siteID, result.DeviceID); err != nil {
+			if releaseErr := releaseRolloutDraftForRetry(r, schema, siteID, rolloutID, record.ClaimToken); releaseErr != nil {
+				log.Printf("[SITE_ORCHESTRATOR][WARN] failed to release rollout draft %s after backup failure: %v", rolloutID, releaseErr)
+			}
+			if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_BACKUP_FAILED", siteID,
+				fmt.Sprintf("Rollout %s backup failed for device %s: %v", rolloutID, result.DeviceID, err)); auditErr != nil {
+				http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, `{"error":"pre-change backup failed; rollout was not applied"}`, http.StatusServiceUnavailable)
+			return
+		}
+	}
+	if err := verifyRolloutDraftObservedState(executionCtx, schema, siteID, draft); err != nil {
+		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
+		return
+	}
+	if err := markDesiredGeneration(r, siteID, rolloutID, record.ClaimToken, generation, draft.Devices); err != nil {
+		if errors.Is(err, errRolloutGenerationConflict) || errors.Is(err, errRolloutClaimLost) {
+			staleCtx, staleCancel := rolloutPersistenceContext(r)
+			if staleErr := database.MarkRolloutDraftStale(staleCtx, schema, siteID, rolloutID, record.ClaimToken); staleErr != nil {
+				log.Printf("[SITE_ORCHESTRATOR][WARN] failed to mark generation-conflicted rollout %s stale: %v", rolloutID, staleErr)
+			}
+			staleCancel()
+			if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_STALE", siteID,
+				fmt.Sprintf("Rollout %s rejected because a newer desired generation exists", rolloutID)); auditErr != nil {
+				http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(w, `{"error":"a newer desired generation already exists; rollout draft is stale"}`, http.StatusConflict)
+			return
+		}
+		if releaseErr := releaseRolloutDraftForRetry(r, schema, siteID, rolloutID, record.ClaimToken); releaseErr != nil {
+			log.Printf("[SITE_ORCHESTRATOR][WARN] failed to release rollout draft %s after generation failure: %v", rolloutID, releaseErr)
+		}
+		if auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_GENERATION_FAILED", siteID,
+			fmt.Sprintf("Rollout %s could not assign generation: %v", rolloutID, err)); auditErr != nil {
+			http.Error(w, `{"error":"could not record rollout audit event"}`, http.StatusServiceUnavailable)
+			return
+		}
 		http.Error(w, `{"error":"could not assign rollout generation"}`, http.StatusInternalServerError)
 		return
 	}
@@ -447,19 +845,29 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 					configGroups := groupCommandsByConfig(rr.Commands)
 					var allOutput string
 					for _, cfg := range sortedConfigNames(configGroups) {
-						cmds := configGroups[cfg]
-						script := services.BuildSafeBatchScript(cfg, cmds, healthTargets)
-						out, err := runSSHScript(rr.DeviceID, script)
+						script := draft.Devices[idx].Scripts[cfg]
+						if script == "" {
+							sr.Status = "FAILED"
+							sr.Error = boundedRolloutDiagnostic(fmt.Sprintf("missing immutable rollout script for config %s", cfg))
+							sr.Output = boundedRolloutDiagnostic(allOutput)
+							syncResults[idx] = sr
+							break
+						}
+						out, err := runSSHScriptForSite(executionCtx, schema, siteID, rr.DeviceID, script)
 						allOutput += out + "\n"
 						if err != nil {
 							sr.Status = "FAILED"
+							var exitErr *sshExitStatusError
+							if errors.As(err, &exitErr) && exitErr.status == 75 {
+								sr.Status = "STALE"
+							}
 							sr.Error = boundedRolloutDiagnostic(fmt.Sprintf("config namespace %s: %v\n%s", cfg, err, out))
 							sr.Output = boundedRolloutDiagnostic(allOutput)
 							syncResults[idx] = sr
 							break
 						}
 					}
-					if sr.Status == "FAILED" {
+					if sr.Status == "FAILED" || sr.Status == "STALE" {
 						continue
 					}
 					sr.Status = "SUCCESS"
@@ -478,13 +886,16 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 
 	phases := fleetRolloutPhases(len(results))
 	if fleetSyncSequential {
-		phases = sequentialFleetRolloutPhases(results)
+		phases = orderedFleetRolloutPhases(len(results))
 	}
 	executeBatch(phases[0])
 	canaryOK := rolloutResultSuccess(syncResults[phases[0][0]].Status)
 	rolloutStatus := "completed"
 	if !canaryOK {
 		rolloutStatus = "canary_failed"
+		if syncResults[phases[0][0]].Status == "STALE" {
+			rolloutStatus = "STALE"
+		}
 		for _, phase := range phases[1:] {
 			for _, idx := range phase {
 				syncResults[idx] = fleetSyncResult{DeviceID: results[idx].DeviceID, Hostname: results[idx].Hostname, Role: results[idx].Role, Status: "ABORTED", CmdCount: len(results[idx].Commands), Error: "canary failed; rollout not started"}
@@ -495,6 +906,9 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 			executeBatch(phase)
 			if !rolloutResultSuccess(syncResults[phase[0]].Status) {
 				rolloutStatus = "aborted"
+				if syncResults[phase[0]].Status == "STALE" {
+					rolloutStatus = "STALE"
+				}
 				for _, laterPhase := range phases[1:] {
 					for _, idx := range laterPhase {
 						if syncResults[idx].Status == "" {
@@ -506,25 +920,12 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	rolloutSchema, schemaErr := getTenantSchema(r)
-	if schemaErr != nil {
-		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
-		return
-	}
-	persistCtx, persistCancel := rolloutPersistenceContext(r)
-	defer persistCancel()
-	for _, result := range syncResults {
-		if result.Status == "ABORTED" {
-			if _, err := database.DB.ExecContext(persistCtx, "UPDATE "+rolloutSchema+".devices SET last_rollout_status = 'ABORTED', last_rollout_at = CURRENT_TIMESTAMP WHERE id = $1", result.DeviceID); err != nil {
-				log.Printf("[SITE_ORCHESTRATOR][WARN] failed to mark aborted device %s: %v", result.DeviceID, err)
-			}
+	if err := persistRolloutResults(r, siteID, rolloutID, record.ClaimToken, generation, rolloutStatus, syncResults); err != nil {
+		log.Printf("[SITE_ORCHESTRATOR][ERROR] failed to persist rollout %s: %v", rolloutID, err)
+		if recoveryErr := markRolloutPersistenceFailure(r, siteID, rolloutID, record.ClaimToken, generation, syncResults, err); recoveryErr != nil {
+			log.Printf("[SITE_ORCHESTRATOR][ERROR] failed to close rollout %s after persistence failure: %v", rolloutID, recoveryErr)
 		}
-	}
-	if err := updateRolloutRun(r, rolloutID, rolloutStatus, syncResults); err != nil {
-		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to persist rollout %s: %v", rolloutID, err)
-	}
-	if err := markObservedGenerations(r, generation, syncResults); err != nil {
-		http.Error(w, `{"error":"could not persist device generations"}`, http.StatusInternalServerError)
+		http.Error(w, `{"error":"could not persist rollout results"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -538,22 +939,50 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	database.InsertAuditLog(username, "SITE_ORCHESTRATOR_FLEET_SYNC", "SITE", siteID,
-		fmt.Sprintf("Fleet sync: %d success, %d failed, SSID: %s", successes, failures, sc.GlobalSSID), r.RemoteAddr)
+	auditErr := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_FLEET_SYNC", siteID,
+		fmt.Sprintf("Fleet sync: %d success, %d failed, rollout: %s", successes, failures, rolloutID))
+	if auditErr != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "rollout completed but audit persistence failed",
+			"status":     rolloutStatus,
+			"rollout_id": rolloutID,
+			"generation": generation,
+			"successes":  successes,
+			"failures":   failures,
+			"results":    syncResults,
+		})
+		return
+	}
+	if rolloutStatus == "STALE" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"error":      "rollout draft became stale during execution",
+			"status":     rolloutStatus,
+			"rollout_id": rolloutID,
+			"generation": generation,
+			"successes":  successes,
+			"failures":   failures,
+			"results":    syncResults,
+		})
+		return
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"status":           rolloutStatus,
 		"rollout_id":       rolloutID,
 		"generation":       generation,
-		"target_device_id": targetDeviceID,
+		"target_device_id": draft.TargetDeviceID,
 		"successes":        successes,
 		"failures":         failures,
 		"results":          syncResults,
 	})
 }
 
-func markDesiredGeneration(r *http.Request, siteID string, generation int64, deviceIDs []string) error {
+func markDesiredGeneration(r *http.Request, siteID, rolloutID, claimToken string, generation int64, devices []rolloutDraftDevice) error {
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return err
@@ -565,21 +994,32 @@ func markDesiredGeneration(r *http.Request, siteID string, generation int64, dev
 		return err
 	}
 	defer tx.Rollback()
-	if len(deviceIDs) == 0 {
-		if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2", generation, siteID); err != nil {
+	if err := assertRolloutClaim(ctx, tx, schema, rolloutID, claimToken); err != nil {
+		return err
+	}
+	if len(devices) == 0 {
+		if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND desired_generation <= $1 AND pending_operation IS NULL", generation, siteID); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
-	for _, deviceID := range deviceIDs {
-		if _, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND id = $3", generation, siteID, deviceID); err != nil {
+	for _, device := range devices {
+		result, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET desired_generation = $1, last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $2 AND id = $3 AND desired_generation <= $1 AND pending_operation IS NULL AND COALESCE(device_role, 'AP') = $4", generation, siteID, device.DeviceID, device.Role)
+		if err != nil {
 			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("%w: device %s changed role, has a newer desired generation, or has a pending operation", errRolloutGenerationConflict, device.DeviceID)
 		}
 	}
 	return tx.Commit()
 }
 
-func markObservedGenerations(r *http.Request, generation int64, results []fleetSyncResult) error {
+func persistRolloutResults(r *http.Request, siteID, rolloutID, claimToken string, generation int64, status string, results []fleetSyncResult) error {
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return err
@@ -591,27 +1031,70 @@ func markObservedGenerations(r *http.Request, generation int64, results []fleetS
 		return err
 	}
 	defer tx.Rollback()
+	if err := assertRolloutClaim(ctx, tx, schema, rolloutID, claimToken); err != nil {
+		return err
+	}
 	for _, result := range results {
-		if result.Status == "ABORTED" {
-			continue
-		}
 		status := "FAILED"
 		if rolloutResultSuccess(result.Status) {
 			status = "SUCCESS"
+		} else if result.Status == "ABORTED" {
+			status = "ABORTED"
+		} else if result.Status == "STALE" {
+			status = "STALE"
 		}
 		query := "UPDATE " + schema + ".devices SET last_rollout_status = $1, last_rollout_at = CURRENT_TIMESTAMP"
-		args := []any{status, result.DeviceID}
+		args := []any{status, siteID, result.DeviceID}
 		if status == "SUCCESS" {
-			query += ", observed_generation = $2, last_successful_generation = $2 WHERE id = $3"
-			args = []any{status, generation, result.DeviceID}
+			query += ", observed_generation = $4, last_successful_generation = $4 WHERE site_id = $2 AND id = $3 AND desired_generation <= $4 AND observed_generation <= $4"
+			args = []any{status, siteID, result.DeviceID, generation}
 		} else {
-			query += " WHERE id = $2"
+			query += " WHERE site_id = $2 AND id = $3 AND desired_generation <= $4"
+			args = []any{status, siteID, result.DeviceID, generation}
 		}
-		if _, err := tx.ExecContext(ctx, query, args...); err != nil {
+		execResult, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
 			return err
 		}
+		affected, err := execResult.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected != 1 {
+			return fmt.Errorf("device %s has a newer desired generation", result.DeviceID)
+		}
+	}
+	encoded, err := json.Marshal(stripFleetSyncOutput(results))
+	if err != nil {
+		return err
+	}
+	runResult, err := tx.ExecContext(ctx, "UPDATE "+schema+".rollout_runs SET status = $1, results = $2, claim_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $3 AND status = 'RUNNING' AND claim_token::text = $4", status, encoded, rolloutID, claimToken)
+	if err != nil {
+		return err
+	}
+	affected, err := runResult.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return errRolloutClaimLost
 	}
 	return tx.Commit()
+}
+
+func assertRolloutClaim(ctx context.Context, tx *sql.Tx, schema, rolloutID, claimToken string) error {
+	var status string
+	err := tx.QueryRowContext(ctx, "SELECT status FROM "+schema+".rollout_runs WHERE id = $1 AND claim_token::text = $2 FOR UPDATE", rolloutID, claimToken).Scan(&status)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errRolloutClaimLost
+		}
+		return err
+	}
+	if status != "RUNNING" {
+		return errRolloutClaimLost
+	}
+	return nil
 }
 
 func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
@@ -628,7 +1111,7 @@ func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rows, err := database.Tx(r.Context()).QueryContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE site_id = $1 ORDER BY created_at DESC LIMIT $2", r.PathValue("site_id"), limit)
+	rows, err := database.Tx(r.Context()).QueryContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, plan, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE site_id = $1 ORDER BY created_at DESC LIMIT $2", r.PathValue("site_id"), limit)
 	if err != nil {
 		http.Error(w, `{"error":"could not load rollout history"}`, http.StatusInternalServerError)
 		return
@@ -637,9 +1120,12 @@ func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	rollouts := make([]rolloutRecord, 0)
 	for rows.Next() {
 		var rollout rolloutRecord
-		if err := rows.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
+		if err := rows.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Plan, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
 			http.Error(w, `{"error":"could not read rollout history"}`, http.StatusInternalServerError)
 			return
+		}
+		if rollout.Status == "DRAFT" {
+			rollout.Preview = rolloutDevicePreviewsFromRecord(rollout)
 		}
 		rollouts = append(rollouts, rollout)
 	}
@@ -657,77 +1143,45 @@ func GetRolloutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
 		return
 	}
-	row := database.Tx(r.Context()).QueryRowContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE id = $1 AND site_id = $2", r.PathValue("rollout_id"), r.PathValue("site_id"))
+	row := database.Tx(r.Context()).QueryRowContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, plan, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE id = $1 AND site_id = $2", r.PathValue("rollout_id"), r.PathValue("site_id"))
 	var rollout rolloutRecord
-	if err := row.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
+	if err := row.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Plan, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
 		http.Error(w, `{"error":"rollout not found"}`, http.StatusNotFound)
 		return
+	}
+	if rollout.Status == "DRAFT" {
+		rollout.Preview = rolloutDevicePreviewsFromRecord(rollout)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(rollout)
 }
 
 type rolloutRecord struct {
-	ID              string          `json:"id"`
-	SiteID          string          `json:"site_id"`
-	Generation      int64           `json:"generation"`
-	Status          string          `json:"status"`
-	PlanHash        string          `json:"plan_hash"`
-	RequestedBy     string          `json:"requested_by"`
-	TargetDeviceIDs json.RawMessage `json:"target_device_ids"`
-	Results         json.RawMessage `json:"results"`
-	CreatedAt       time.Time       `json:"created_at"`
-	UpdatedAt       time.Time       `json:"updated_at"`
+	ID              string                 `json:"id"`
+	SiteID          string                 `json:"site_id"`
+	Generation      int64                  `json:"generation"`
+	Status          string                 `json:"status"`
+	PlanHash        string                 `json:"plan_hash"`
+	RequestedBy     string                 `json:"requested_by"`
+	TargetDeviceIDs json.RawMessage        `json:"target_device_ids"`
+	Plan            json.RawMessage        `json:"plan"`
+	Results         json.RawMessage        `json:"results"`
+	Preview         []rolloutDevicePreview `json:"preview,omitempty"`
+	CreatedAt       time.Time              `json:"created_at"`
+	UpdatedAt       time.Time              `json:"updated_at"`
 }
 
-func createRolloutRun(r *http.Request, siteID, username string, results []services.RenderResult) (string, int64, error) {
-	targets := make([]string, len(results))
-	for i, result := range results {
-		targets[i] = result.DeviceID
-	}
-	planHash := fleetPlanHash(results)
-	targetDeviceIDs, err := json.Marshal(targets)
-	if err != nil {
-		return "", 0, err
-	}
-	schema, err := getTenantSchema(r)
-	if err != nil {
-		return "", 0, err
-	}
-	ctx, cancel := rolloutPersistenceContext(r)
-	defer cancel()
-	tx, err := database.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return "", 0, err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
-		return "", 0, err
-	}
-	var generation int64
-	err = tx.QueryRowContext(ctx, "SELECT COALESCE(MAX(generation), 0) + 1 FROM "+schema+".rollout_runs WHERE site_id = $1", siteID).Scan(&generation)
-	if err != nil {
-		return "", 0, err
-	}
-	var id string
-	err = tx.QueryRowContext(ctx, "INSERT INTO "+schema+".rollout_runs (site_id, generation, status, plan_hash, requested_by, target_device_ids) VALUES ($1, $2, 'RUNNING', $3, $4, $5) RETURNING id", siteID, generation, planHash, username, targetDeviceIDs).Scan(&id)
-	if err != nil {
-		return "", 0, err
-	}
-	return id, generation, tx.Commit()
-}
-
-func fleetPlanHash(results []services.RenderResult) string {
-	encoded, _ := json.Marshal(results)
-	return fmt.Sprintf("%x", sha256.Sum256(encoded))
-}
-
-func updateRolloutRun(r *http.Request, rolloutID, status string, results []fleetSyncResult) error {
+func markRolloutPersistenceFailure(r *http.Request, siteID, rolloutID, claimToken string, generation int64, results []fleetSyncResult, cause error) error {
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return err
 	}
-	encoded, err := json.Marshal(stripFleetSyncOutput(results))
+	failureResults := append([]fleetSyncResult{}, results...)
+	failureResults = append(failureResults, fleetSyncResult{
+		Status: "FAILED",
+		Error:  boundedRolloutDiagnostic("rollout result persistence failed: " + cause.Error()),
+	})
+	encoded, err := json.Marshal(stripFleetSyncOutput(failureResults))
 	if err != nil {
 		return err
 	}
@@ -738,8 +1192,19 @@ func updateRolloutRun(r *http.Request, rolloutID, status string, results []fleet
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".rollout_runs SET status = $1, results = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3", status, encoded, rolloutID); err != nil {
+	if _, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'FAILED', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND desired_generation = $2 AND last_rollout_status = 'RUNNING'", siteID, generation); err != nil {
 		return err
+	}
+	result, err := tx.ExecContext(ctx, "UPDATE "+schema+".rollout_runs SET status = 'FAILED', results = $1, claim_token = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'RUNNING' AND claim_token::text = $3", encoded, rolloutID, claimToken)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return errRolloutClaimLost
 	}
 	return tx.Commit()
 }
@@ -796,23 +1261,27 @@ func rejectUnsafeNetworkMutations(results []services.RenderResult) error {
 	return nil
 }
 
-func preflightRenderedResults(results []services.RenderResult) ([]services.RenderResult, error) {
+func preflightRenderedResultsWithState(ctx context.Context, schema, siteID string, results []services.RenderResult) ([]services.RenderResult, map[string]map[string]string, error) {
 	filtered := make([]services.RenderResult, len(results))
 	copy(filtered, results)
+	observedState := make(map[string]map[string]string, len(results))
 	for index, result := range filtered {
 		groups := groupCommandsByConfig(result.Commands)
 		commands := make([]services.UciCommand, 0, len(result.Commands))
+		deviceState := make(map[string]string, len(groups))
 		for _, config := range sortedConfigNames(groups) {
-			observed, err := runSSHCommand(result.DeviceID, "uci show "+config+" 2>&1")
+			observed, err := runSSHCommandForSite(ctx, schema, siteID, result.DeviceID, "uci show "+config+" 2>&1")
 			if err != nil {
-				return nil, fmt.Errorf("preflight failed for device %s config %s: %w", result.DeviceID, config, err)
+				return nil, nil, fmt.Errorf("preflight failed for device %s config %s: %w", result.DeviceID, config, err)
 			}
+			deviceState[config] = observedStateHash(observed)
 			sections := parseUciShow(observed, config)
 			commands = append(commands, filterUCICommandsByObservedState(groups[config], sections)...)
 		}
 		filtered[index].Commands = commands
+		observedState[result.DeviceID] = deviceState
 	}
-	return filtered, nil
+	return filtered, observedState, nil
 }
 
 func rolloutPersistenceContext(r *http.Request) (context.Context, context.CancelFunc) {
@@ -859,14 +1328,22 @@ func sequentialFleetRolloutPhases(results []services.RenderResult) [][]int {
 		if leftGateway != rightGateway {
 			return !leftGateway
 		}
-		if left.LastIP != right.LastIP {
-			return left.LastIP < right.LastIP
-		}
 		return left.DeviceID < right.DeviceID
 	})
 	phases := make([][]int, 0, len(results))
 	for _, idx := range indices {
 		phases = append(phases, []int{idx})
+	}
+	return phases
+}
+
+func orderedFleetRolloutPhases(deviceCount int) [][]int {
+	if deviceCount == 0 {
+		return nil
+	}
+	phases := make([][]int, deviceCount)
+	for index := range phases {
+		phases[index] = []int{index}
 	}
 	return phases
 }

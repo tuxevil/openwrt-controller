@@ -140,7 +140,7 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      20 * time.Minute,
 		IdleTimeout:       120 * time.Second,
 	}
 
@@ -151,7 +151,7 @@ func main() {
 			Handler:           handler,
 			ReadHeaderTimeout: 10 * time.Second,
 			ReadTimeout:       30 * time.Second,
-			WriteTimeout:      30 * time.Second,
+			WriteTimeout:      20 * time.Minute,
 			IdleTimeout:       120 * time.Second,
 			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12},
 		}

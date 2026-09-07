@@ -1,11 +1,13 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strconv"
 	"time"
@@ -17,20 +19,53 @@ import (
 	"golang.org/x/sync/semaphore"
 )
 
+const backupCommandTimeout = 2 * time.Minute
+
+func backupSSHAddress(ip string) string {
+	return net.JoinHostPort(ip, "22")
+}
+
+// CreateBackup creates a backup for a device resolved within a tenant schema.
 func CreateBackup(ctx context.Context, schema, deviceID string) error {
-	// Obtenemos la topología/IP más reciente
+	return createBackup(ctx, schema, "", deviceID)
+}
+
+// CreateBackupForSite creates a backup only after resolving the device inside
+// the supplied tenant site.
+func CreateBackupForSite(ctx context.Context, schema, siteID, deviceID string) error {
+	return createBackup(ctx, schema, siteID, deviceID)
+}
+
+func createBackup(ctx context.Context, schema, siteID, deviceID string) error {
+	backupCtx, backupCancel := context.WithTimeout(ctx, backupCommandTimeout)
+	defer backupCancel()
+	sqlSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return err
+	}
+	// Resolve the most recent topology/IP within the authorized scope.
 	var ip string
-	err := database.DB.QueryRow(fmt.Sprintf(`SELECT COALESCE(last_ip, '') FROM %s.devices WHERE id = $1`, schema), deviceID).Scan(&ip)
+	query := fmt.Sprintf(`SELECT COALESCE(last_ip, '') FROM %s.devices WHERE id = $1`, sqlSchema)
+	args := []any{deviceID}
+	if siteID != "" {
+		query = fmt.Sprintf(`SELECT COALESCE(last_ip, '') FROM %s.devices WHERE id = $1 AND site_id = $2`, sqlSchema)
+		args = append(args, siteID)
+	}
+	err = database.DB.QueryRowContext(backupCtx, query, args...).Scan(&ip)
 	if err != nil || ip == "" {
 		return fmt.Errorf("device IP not found")
 	}
 
-	// SSH soporta binario nativo — no necesitamos base64.
-	// /sbin/sysupgrade --create-backup - escribe tar.gz a stdout.
+	// SSH transports binary data natively, so base64 is unnecessary.
+	// /sbin/sysupgrade --create-backup - writes the tar.gz to stdout.
 	cmd := "/sbin/sysupgrade --create-backup -"
 
-	// Obtenemos la llave asimétrica para auth
-	signer, err := orchestrator.GetKeyStore().Get()
+	// Load the asymmetric authentication key.
+	keyStore := orchestrator.GetKeyStore()
+	if keyStore == nil {
+		return fmt.Errorf("controller SSH key not configured")
+	}
+	signer, err := keyStore.Get()
 	if err != nil {
 		return err
 	}
@@ -44,7 +79,10 @@ func CreateBackup(ctx context.Context, schema, deviceID string) error {
 		Timeout:         10 * time.Second,
 	}
 
-	client, err := ssh.Dial("tcp", ip+":22", config)
+	if err := backupCtx.Err(); err != nil {
+		return err
+	}
+	client, err := ssh.Dial("tcp", backupSSHAddress(ip), config)
 	if err != nil {
 		return fmt.Errorf("ssh dial fail: %w", err)
 	}
@@ -56,22 +94,37 @@ func CreateBackup(ctx context.Context, schema, deviceID string) error {
 	}
 	defer session.Close()
 
-	// session.Output() devuelve bytes crudos — el tar.gz de sysupgrade.
-	// SSH maneja binarios nativamente, no necesitamos base64.
-	rawBytes, err := session.Output(cmd)
-	if err != nil {
-		return fmt.Errorf("backup command fail: %w", err)
+	// SSH transports binary data natively, so base64 is unnecessary. Use
+	// Start/Wait instead of Output so a cancelled rollout can close the remote command.
+	var raw bytes.Buffer
+	session.Stdout = &raw
+	if err := session.Start(cmd); err != nil {
+		return fmt.Errorf("backup command start fail: %w", err)
 	}
+	wait := make(chan error, 1)
+	go func() { wait <- session.Wait() }()
+	select {
+	case err := <-wait:
+		if err != nil {
+			return fmt.Errorf("backup command fail: %w", err)
+		}
+	case <-backupCtx.Done():
+		_ = session.Close()
+		_ = client.Close()
+		<-wait
+		return backupCtx.Err()
+	}
+	rawBytes := raw.Bytes()
 
 	// Calculate checksum
 	hasher := sha256.New()
 	hasher.Write(rawBytes)
 	checksum := hex.EncodeToString(hasher.Sum(nil))
 
-	_, err = database.DB.Exec(fmt.Sprintf(`
+	_, err = database.DB.ExecContext(backupCtx, fmt.Sprintf(`
 		INSERT INTO %s.backups (device_id, checksum, content)
 		VALUES ($1, $2, $3)
-	`, schema), deviceID, checksum, rawBytes)
+	`, sqlSchema), deviceID, checksum, rawBytes)
 
 	log.Printf("[VAULT] Backup completed for %s. Checksum: %s", deviceID, checksum[:8])
 	return err

@@ -1,13 +1,16 @@
 package handlers
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -19,85 +22,171 @@ import (
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// runSSHCommand opens a short-lived SSH session to the device and runs cmd,
-// returning combined stdout+stderr output.
-
-// getDeviceIPAndSchema looks up a device in the public and all tenant schemas
-// to find its target IP and which schema it belongs to, preferring the schema
-// with the most recent last_seen_at timestamp.
-func getDeviceIPAndSchema(deviceID string) (string, string, error) {
-	type devMatch struct {
-		ip         string
-		schema     string
-		lastSeenAt time.Time
-	}
-	var matches []devMatch
-
-	// 1. Check public schema
-	var publicIP sql.NullString
-	var publicLastSeen sql.NullTime
-	err := database.DB.QueryRow("SELECT last_ip, last_seen_at FROM public.devices WHERE id = $1", deviceID).Scan(&publicIP, &publicLastSeen)
-	if err == nil && publicIP.Valid && publicIP.String != "" {
-		lastSeen := time.Time{}
-		if publicLastSeen.Valid {
-			lastSeen = publicLastSeen.Time
-		}
-		matches = append(matches, devMatch{
-			ip:         publicIP.String,
-			schema:     "public",
-			lastSeenAt: lastSeen,
-		})
-	}
-
-	// 2. Query all active tenant schemas
-	rows, err := database.DB.Query("SELECT schema_alias FROM public.tenants WHERE is_active = true")
+func getDeviceIPForSite(ctx context.Context, schema, siteID, deviceID string) (string, error) {
+	sqlSchema, err := database.SafeSQLSchemaIdent(schema)
 	if err != nil {
-		return "", "", err
+		return "", err
 	}
-	defer rows.Close()
+	var ip sql.NullString
+	err = database.DB.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT last_ip FROM %s.devices WHERE id = $1 AND site_id = $2", sqlSchema,
+	), deviceID, siteID).Scan(&ip)
+	if err != nil {
+		return "", fmt.Errorf("device not found in site: %w", err)
+	}
+	if !ip.Valid || ip.String == "" {
+		return "", fmt.Errorf("device IP not found")
+	}
+	return ip.String, nil
+}
 
-	for rows.Next() {
-		var alias string
-		if err := rows.Scan(&alias); err != nil {
-			continue
-		}
-		schema, err := database.SafeTenantSchema(alias)
+func getDeviceIPForTenant(ctx context.Context, schema, deviceID string) (string, error) {
+	sqlSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return "", err
+	}
+	var ip sql.NullString
+	err = database.DB.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT last_ip FROM %s.devices WHERE id = $1", sqlSchema,
+	), deviceID).Scan(&ip)
+	if err != nil {
+		return "", fmt.Errorf("device not found in tenant: %w", err)
+	}
+	if !ip.Valid || ip.String == "" {
+		return "", fmt.Errorf("device IP not found")
+	}
+	return ip.String, nil
+}
+
+func runSSHCommandForSite(ctx context.Context, schema, siteID, deviceID, cmd string) (string, error) {
+	targetIP, err := getDeviceIPForSite(ctx, schema, siteID, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return runSSHTransport(ctx, targetIP, cmd, nil, 30*time.Second)
+}
+
+func runSSHScriptForSite(ctx context.Context, schema, siteID, deviceID, script string) (string, error) {
+	targetIP, err := getDeviceIPForSite(ctx, schema, siteID, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return runSSHTransport(ctx, targetIP, "sh -s", strings.NewReader(script), 60*time.Second)
+}
+
+func runSSHCommandForRequest(r *http.Request, deviceID, cmd string) (string, error) {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		return "", err
+	}
+	targetIP, err := getDeviceIPForTenant(r.Context(), schema, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return runSSHTransport(r.Context(), targetIP, cmd, nil, 30*time.Second)
+}
+
+func runSSHScriptForRequest(r *http.Request, deviceID, script string) (string, error) {
+	schema, err := getTenantSchema(r)
+	if err != nil {
+		return "", err
+	}
+	targetIP, err := getDeviceIPForTenant(r.Context(), schema, deviceID)
+	if err != nil {
+		return "", err
+	}
+	return runSSHTransport(r.Context(), targetIP, "sh -s", strings.NewReader(script), 60*time.Second)
+}
+
+type sshExitStatusError struct {
+	status int
+	err    error
+}
+
+func (e *sshExitStatusError) Error() string { return e.err.Error() }
+func (e *sshExitStatusError) Unwrap() error { return e.err }
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(data)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func runSSHTransport(ctx context.Context, targetIP, command string, stdin io.Reader, timeout time.Duration) (string, error) {
+	signer, err := getSSHSigner()
+	if err != nil {
+		return "", err
+	}
+	commandCtx, commandCancel := context.WithTimeout(ctx, timeout)
+	defer commandCancel()
+
+	target := net.JoinHostPort(targetIP, "22")
+	cfg := &ssh.ClientConfig{
+		User:            "root",
+		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
+		HostKeyCallback: orchestrator.TofuHostKeyCallback,
+		Timeout:         timeout,
+	}
+	netConn, err := (&net.Dialer{}).DialContext(commandCtx, "tcp", target)
+	if err != nil {
+		return "", fmt.Errorf("SSH dial: %w", err)
+	}
+	if deadline, ok := commandCtx.Deadline(); ok {
+		_ = netConn.SetDeadline(deadline)
+	} else {
+		_ = netConn.SetDeadline(time.Now().Add(timeout))
+	}
+	conn, channels, requests, err := ssh.NewClientConn(netConn, target, cfg)
+	if err != nil {
+		_ = netConn.Close()
+		return "", fmt.Errorf("SSH handshake: %w", err)
+	}
+	_ = netConn.SetDeadline(time.Time{})
+	client := ssh.NewClient(conn, channels, requests)
+	defer client.Close()
+
+	sess, err := client.NewSession()
+	if err != nil {
+		return "", fmt.Errorf("SSH session: %w", err)
+	}
+	defer sess.Close()
+	if stdin != nil {
+		sess.Stdin = stdin
+	}
+	var output synchronizedBuffer
+	sess.Stdout = &output
+	sess.Stderr = &output
+	if err := sess.Start(command); err != nil {
+		return output.String(), fmt.Errorf("SSH command start: %w", err)
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- sess.Wait() }()
+	select {
+	case err := <-wait:
 		if err != nil {
-			continue
-		}
-		sqlSchema, err := database.SafeSQLSchemaIdent(schema)
-		if err != nil {
-			continue
-		}
-		var tenantIP sql.NullString
-		var tenantLastSeen sql.NullTime
-		err = database.DB.QueryRow(fmt.Sprintf("SELECT last_ip, last_seen_at FROM %s.devices WHERE id = $1", sqlSchema), deviceID).Scan(&tenantIP, &tenantLastSeen)
-		if err == nil && tenantIP.Valid && tenantIP.String != "" {
-			lastSeen := time.Time{}
-			if tenantLastSeen.Valid {
-				lastSeen = tenantLastSeen.Time
+			if exitErr, ok := err.(*ssh.ExitError); ok {
+				return output.String(), &sshExitStatusError{status: exitErr.ExitStatus(), err: err}
 			}
-			matches = append(matches, devMatch{
-				ip:         tenantIP.String,
-				schema:     schema,
-				lastSeenAt: lastSeen,
-			})
+			return output.String(), fmt.Errorf("remote command failed: %w", err)
 		}
+		return output.String(), nil
+	case <-commandCtx.Done():
+		_ = sess.Close()
+		_ = client.Close()
+		<-wait
+		return output.String(), commandCtx.Err()
 	}
-
-	if len(matches) == 0 {
-		return "", "", fmt.Errorf("device not found in any tenant")
-	}
-
-	// Find the match with the latest lastSeenAt
-	bestMatch := matches[0]
-	for _, m := range matches {
-		if m.lastSeenAt.After(bestMatch.lastSeenAt) {
-			bestMatch = m
-		}
-	}
-
-	return bestMatch.ip, bestMatch.schema, nil
 }
 
 func getSSHSigner() (ssh.Signer, error) {
@@ -110,79 +199,6 @@ func getSSHSigner() (ssh.Signer, error) {
 		return PrivateKey, nil
 	}
 	return nil, fmt.Errorf("controller SSH key not configured")
-}
-
-func runSSHCommand(deviceID string, cmd string) (string, error) {
-	signer, err := getSSHSigner()
-	if err != nil {
-		return "", err
-	}
-
-	targetIP, _, err := getDeviceIPAndSchema(deviceID)
-	if err != nil || targetIP == "" {
-		return "", fmt.Errorf("device IP not found: %w", err)
-	}
-
-	cfg := &ssh.ClientConfig{
-		User:            "root",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: orchestrator.TofuHostKeyCallback,
-		Timeout:         30 * time.Second,
-	}
-	conn, err := ssh.Dial("tcp", targetIP+":22", cfg)
-	if err != nil {
-		return "", fmt.Errorf("SSH dial: %w", err)
-	}
-	defer conn.Close()
-
-	sess, err := conn.NewSession()
-	if err != nil {
-		return "", fmt.Errorf("SSH session: %w", err)
-	}
-	defer sess.Close()
-
-	out, err := sess.CombinedOutput(cmd)
-	if err != nil {
-		return string(out), fmt.Errorf("remote command failed: %w", err)
-	}
-	return string(out), nil
-}
-
-func runSSHScript(deviceID string, script string) (string, error) {
-	signer, err := getSSHSigner()
-	if err != nil {
-		return "", err
-	}
-
-	targetIP, _, err := getDeviceIPAndSchema(deviceID)
-	if err != nil || targetIP == "" {
-		return "", fmt.Errorf("device IP not found: %w", err)
-	}
-
-	cfg := &ssh.ClientConfig{
-		User:            "root",
-		Auth:            []ssh.AuthMethod{ssh.PublicKeys(signer)},
-		HostKeyCallback: orchestrator.TofuHostKeyCallback,
-		Timeout:         60 * time.Second,
-	}
-	conn, err := ssh.Dial("tcp", targetIP+":22", cfg)
-	if err != nil {
-		return "", fmt.Errorf("SSH dial: %w", err)
-	}
-	defer conn.Close()
-
-	sess, err := conn.NewSession()
-	if err != nil {
-		return "", fmt.Errorf("SSH session: %w", err)
-	}
-	defer sess.Close()
-
-	sess.Stdin = strings.NewReader(script)
-	out, err := sess.CombinedOutput("sh -s")
-	if err != nil {
-		return string(out), fmt.Errorf("script execution failed: %w", err)
-	}
-	return string(out), nil
 }
 
 func readBody(w http.ResponseWriter, r *http.Request, target interface{}) bool {
@@ -205,7 +221,7 @@ func readBody(w http.ResponseWriter, r *http.Request, target interface{}) bool {
 func GetEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	raw, err := runSSHCommand(deviceID, "uci export network 2>/dev/null")
+	raw, err := runSSHCommandForRequest(r, deviceID, "uci export network 2>/dev/null")
 	if err != nil {
 		// Return a graceful stub so the UI can still render
 		w.Header().Set("Content-Type", "application/json")
@@ -306,10 +322,11 @@ func PutEdgeNetworkHandler(w http.ResponseWriter, r *http.Request) {
 
 // ─── GET /api/devices/{id}/edge-dhcp ─────────────────────────────────────────
 
+// GetEdgeDHCPHandler reads the device DHCP configuration over SSH.
 func GetEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	dhcpRaw, dhcpErr := runSSHCommand(deviceID, "uci export dhcp 2>/dev/null")
+	dhcpRaw, dhcpErr := runSSHCommandForRequest(r, deviceID, "uci export dhcp 2>/dev/null")
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
@@ -325,6 +342,7 @@ func GetEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 
 // ─── PUT /api/devices/{id}/edge-dhcp ─────────────────────────────────────────
 
+// PutEdgeDHCPHandler validates and queues a device DHCP configuration change.
 func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 	username := GetUsernameFromReq(r)
@@ -400,10 +418,11 @@ func PutEdgeDHCPHandler(w http.ResponseWriter, r *http.Request) {
 
 // ─── GET /api/devices/{id}/edge-firewall ─────────────────────────────────────
 
+// GetEdgeFirewallHandler reads the device firewall configuration over SSH.
 func GetEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	raw, err := runSSHCommand(deviceID, "uci export firewall 2>/dev/null")
+	raw, err := runSSHCommandForRequest(r, deviceID, "uci export firewall 2>/dev/null")
 
 	w.Header().Set("Content-Type", "application/json")
 	resp := map[string]interface{}{
@@ -419,6 +438,7 @@ func GetEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 
 // ─── PUT /api/devices/{id}/edge-firewall ─────────────────────────────────────
 
+// PutEdgeFirewallHandler validates and queues a device firewall change.
 func PutEdgeFirewallHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 	username := GetUsernameFromReq(r)

@@ -3,6 +3,7 @@ package middleware
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -10,6 +11,7 @@ import (
 
 	jwt "github.com/golang-jwt/jwt/v5"
 
+	"openwrt-controller/internal/authtickets"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/secrets"
 )
@@ -24,50 +26,97 @@ func tenantHeaderAllowed(claims jwt.MapClaims) bool {
 	return strings.EqualFold(role, "SUPERADMIN")
 }
 
-// WithAuth wraps a handler requiring a valid JWT Bearer token
+// WithAuth wraps a handler requiring a valid JWT bearer token or a
+// device-scoped ticket for the SSH WebSocket endpoint.
 func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var tokenStr string
+		var (
+			claims            jwt.MapClaims
+			ticketAuth        bool
+			ticketTenantAlias string
+		)
 
-		// 1. Try Authorization header (preferred path).
-		authHeader := r.Header.Get("Authorization")
-		if strings.HasPrefix(authHeader, "Bearer ") {
-			tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
-		} else if os.Getenv("WS_ALLOW_QUERY_TOKEN") == "true" {
-			// 2. Query parameter fallback for WebSockets. Disabled by
-			//    default to avoid leaking JWTs into access logs / Referer
-			//    headers. Opt in only when running behind a trusted proxy
-			//    that strips the query string from logs.
-			tokenStr = r.URL.Query().Get("token")
-		}
-
-		if tokenStr == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"UNAUTHORIZED: missing bearer token"}`))
-			return
-		}
-
-		token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
-			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, jwt.ErrSignatureInvalid
+		ticketID := strings.TrimSpace(r.URL.Query().Get("ticket"))
+		isSSHWebSocket := strings.EqualFold(r.Header.Get("Upgrade"), "websocket") && strings.HasSuffix(r.URL.Path, "/ssh")
+		if ticketID != "" || isSSHWebSocket {
+			// Device SSH handshakes must use a single-use, device-scoped ticket.
+			// A bearer token cannot bypass the ticket requirement, and a ticket
+			// cannot be replayed as a normal API credential.
+			if !isSSHWebSocket || ticketID == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"UNAUTHORIZED: WebSocket ticket required"}`))
+				return
 			}
-			return secrets.JWTSecret(), nil
-		})
+			store := authtickets.GetStore()
+			if store == nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"WebSocket ticket store not initialised"}`))
+				return
+			}
+			ticket, err := store.ConsumeForDevice(ticketID, r.PathValue("device_id"))
+			if err != nil {
+				status := http.StatusUnauthorized
+				if errors.Is(err, authtickets.ErrTicketScope) {
+					status = http.StatusForbidden
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(status)
+				_, _ = w.Write([]byte(`{"error":"UNAUTHORIZED: invalid or expired WebSocket ticket"}`))
+				return
+			}
+			claims = jwt.MapClaims{
+				"sub":          ticket.Username,
+				"role":         ticket.Role,
+				"schema_alias": ticket.TenantSchema,
+			}
+			ticketAuth = true
+			ticketTenantAlias = ticket.TenantSchema
+		} else {
+			var tokenStr string
 
-		if err != nil || !token.Valid {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"UNAUTHORIZED: invalid token"}`))
-			return
-		}
+			// 1. Try Authorization header (preferred path).
+			authHeader := r.Header.Get("Authorization")
+			if strings.HasPrefix(authHeader, "Bearer ") {
+				tokenStr = strings.TrimPrefix(authHeader, "Bearer ")
+			} else if os.Getenv("WS_ALLOW_QUERY_TOKEN") == "true" {
+				// 2. Query parameter fallback for WebSockets. Disabled by
+				//    default to avoid leaking JWTs into access logs / Referer
+				//    headers. Opt in only when running behind a trusted proxy
+				//    that strips the query string from logs.
+				tokenStr = r.URL.Query().Get("token")
+			}
 
-		claims, ok := token.Claims.(jwt.MapClaims)
-		if !ok {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"UNAUTHORIZED: invalid claims"}`))
-			return
+			if tokenStr == "" {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"UNAUTHORIZED: missing bearer token"}`))
+				return
+			}
+
+			token, err := jwt.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+				if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
+					return nil, jwt.ErrSignatureInvalid
+				}
+				return secrets.JWTSecret(), nil
+			})
+
+			if err != nil || !token.Valid {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"UNAUTHORIZED: invalid token"}`))
+				return
+			}
+
+			var ok bool
+			claims, ok = token.Claims.(jwt.MapClaims)
+			if !ok {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"UNAUTHORIZED: invalid claims"}`))
+				return
+			}
 		}
 
 		ctx := context.WithValue(r.Context(), claimsKey, claims)
@@ -76,7 +125,18 @@ func WithAuth(next http.HandlerFunc) http.HandlerFunc {
 		// Only SUPERADMIN may assume a tenant through the header. Tenant-scoped
 		// users are bound to the schema in their signed claims.
 		tenantSchema := strings.TrimSpace(r.Header.Get("X-Tenant-Schema"))
-		if tenantSchema != "" && !tenantHeaderAllowed(claims) {
+		if ticketAuth {
+			if tenantSchema != "" {
+				candidate, candidateErr := database.SafeTenantSchema(tenantSchema)
+				if candidateErr != nil || !strings.EqualFold(candidate, "tenant_"+ticketTenantAlias) {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					_, _ = w.Write([]byte(`{"error":"FORBIDDEN: ticket tenant mismatch"}`))
+					return
+				}
+			}
+			tenantSchema = ticketTenantAlias
+		} else if tenantSchema != "" && !tenantHeaderAllowed(claims) {
 			sa, _ := claims["schema_alias"].(string)
 			if !strings.EqualFold(tenantSchema, sa) {
 				w.Header().Set("Content-Type", "application/json")

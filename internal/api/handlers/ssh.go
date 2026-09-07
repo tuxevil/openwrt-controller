@@ -3,6 +3,7 @@ package handlers
 import (
 	"database/sql"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -12,7 +13,6 @@ import (
 	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/ssh"
 
-	"openwrt-controller/internal/authtickets"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/orchestrator"
 )
@@ -90,6 +90,8 @@ func RefreshSSHKeys() {
 	})
 }
 
+// DeviceSSHHandler upgrades an authenticated, device-scoped request to an SSH
+// terminal WebSocket.
 func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("device_id")
 	if deviceID == "" {
@@ -97,42 +99,9 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ── Authentication: ticket first, then legacy JWT query string ──
-	// The ticket path is the new flow:
-	//   1. Dashboard POSTs /api/ws-ticket with the JWT in the
-	//      Authorization header.
-	//   2. Dashboard opens this WS with ?ticket=<id>.
-	//   3. We redeem the ticket here (single-use, 30s TTL) and
-	//      never see the JWT in this request.
-	// The legacy JWT query string is kept for backwards compatibility
-	// behind the WS_ALLOW_QUERY_TOKEN env flag.
-	username := "system"
-	ticketID := r.URL.Query().Get("ticket")
-	if ticketID != "" {
-		store := authtickets.GetStore()
-		if store == nil {
-			http.Error(w, "ws ticket store not initialised", http.StatusServiceUnavailable)
-			return
-		}
-		t, err := store.Consume(ticketID)
-		if err != nil {
-			log.Printf("[ssh] ticket reject: %v (from %s)", err, r.RemoteAddr)
-			http.Error(w, "invalid or expired ticket", http.StatusUnauthorized)
-			return
-		}
-		username = t.Username
-	} else if os.Getenv("WS_ALLOW_QUERY_TOKEN") == "true" {
-		// Legacy path: ?token=<jwt>. Off by default.
-		raw := r.URL.Query().Get("token")
-		if raw == "" {
-			http.Error(w, "ticket required (legacy JWT in query string disabled)", http.StatusUnauthorized)
-			return
-		}
-		username = GetUsernameFromReq(r)
-	} else {
-		http.Error(w, "ticket required", http.StatusUnauthorized)
-		return
-	}
+	// WithAuth authenticates either the regular JWT or a device-scoped,
+	// single-use WebSocket ticket before this handler runs.
+	username := GetUsernameFromReq(r)
 
 	var targetIP sql.NullString
 	err := database.Tx(r.Context()).QueryRow("SELECT last_ip FROM devices WHERE id = $1", deviceID).Scan(&targetIP)
@@ -140,7 +109,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Device IP not found", http.StatusNotFound)
 		return
 	}
-	targetAddr := targetIP.String + ":22"
+	targetAddr := net.JoinHostPort(targetIP.String, "22")
 
 	ws, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -163,7 +132,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 		HostKeyCallback: orchestrator.TofuHostKeyCallback,
 	}
 
-	// d) Abre una conexión SSH hacia la IP del router
+	// d) Open an SSH connection to the router IP.
 	sshConn, err := ssh.Dial("tcp", targetAddr, config)
 	if err != nil {
 		ws.WriteMessage(websocket.TextMessage, []byte("\r\n[!] SSH Connection Failed\r\n"))
@@ -178,7 +147,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer session.Close()
 
-	// e) Crea una PTY (Pseudo-Terminal)
+	// e) Create a PTY (pseudo-terminal).
 	modes := ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 115200,
@@ -209,7 +178,7 @@ func DeviceSSHHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// f) Inicia un pipe bidireccional
+	// f) Start bidirectional pipes.
 	// The previous version appended every WS read into a single []byte
 	// shared across three goroutines without synchronisation; that raced
 	// under -race. The fixed version accumulates into a *sync.Mutex-guarded

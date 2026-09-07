@@ -126,7 +126,7 @@ func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan jso
 		    last_rollout_status = 'QUEUED',
 		    last_rollout_at = CURRENT_TIMESTAMP,
 		    updated_at = CURRENT_TIMESTAMP
-		WHERE id = $2 AND (
+		WHERE id = $2 AND COALESCE(last_rollout_status, '') <> 'RUNNING' AND pending_operation IS NULL AND (
 		    ($4::bigint > 0 AND desired_generation = $4::bigint AND (
 		        (pending_operation IS NULL AND COALESCE(last_operation->>'id', '') <> $3)
 		        OR (pending_operation->>'operation_id' = $3 AND pending_operation = $1::jsonb)

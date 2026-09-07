@@ -1,6 +1,6 @@
 <script setup>
 // SiteSettingsHeader — the top bar with the "SAVE TEMPLATE" and
-// "APPLY REVISION TO SITE" buttons, plus the dirty-status badge
+// preview/apply draft control, plus the dirty-status badge
 // and the fleet-size counter. Extracted from the 1445-line
 // mega-component so each concern can be edited and tested in
 // isolation.
@@ -8,9 +8,10 @@ defineProps({
   dirty: { type: Boolean, default: false },
   saving: { type: Boolean, default: false },
   applying: { type: Boolean, default: false },
+  draftReady: { type: Boolean, default: false },
   deviceCount: { type: Number, default: 0 },
 })
-const emit = defineEmits(['save', 'apply'])
+const emit = defineEmits(['save', 'preview', 'apply'])
 </script>
 
 <template>
@@ -43,14 +44,14 @@ const emit = defineEmits(['save', 'apply'])
 
       <button
         id="apply-revision-btn"
-        @click="emit('apply')"
+        @click="emit(draftReady ? 'apply' : 'preview')"
         :disabled="applying || saving"
         class="px-5 py-2 font-bold text-sm tracking-[0.15em] uppercase border rounded transition-all duration-200"
         :class="applying
           ? 'border-gray-600 text-gray-500 cursor-not-allowed'
           : 'border-[#00ffff] text-[#00ffff] hover:bg-[#00ffff]/10 hover:shadow-[0_0_20px_rgba(0,255,255,0.3)] active:scale-95'"
       >
-        {{ applying ? 'APPLYING...' : 'APPLY REVISION TO SITE' }}
+        {{ applying ? (draftReady ? 'APPLYING...' : 'PREVIEWING...') : (draftReady ? 'APPLY IMMUTABLE DRAFT' : 'PREVIEW REVISION') }}
       </button>
     </div>
   </header>

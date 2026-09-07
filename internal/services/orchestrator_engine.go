@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -498,7 +499,29 @@ func GetSiteDevicesWithRoles(ctx context.Context, siteID string) ([]DeviceRoleIn
 	return devs, nil
 }
 
-func UpdateDeviceRole(deviceID, role string) error {
-	_, err := database.DB.Exec(`UPDATE devices SET device_role = $1 WHERE id = $2`, role, deviceID)
-	return err
+// ErrDeviceRoleUpdateConflict reports that a device is currently owned by a
+// running rollout and its role cannot be changed safely.
+var ErrDeviceRoleUpdateConflict = errors.New("device role cannot change during a rollout")
+
+// UpdateDeviceRoleForTenant changes a device role only when no rollout is
+// currently updating that device.
+func UpdateDeviceRoleForTenant(ctx context.Context, schema, deviceID, role string) error {
+	sqlSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return err
+	}
+	result, err := database.DB.ExecContext(ctx, fmt.Sprintf(
+		"UPDATE %s.devices SET device_role = $1 WHERE id = $2 AND COALESCE(last_rollout_status, '') <> 'RUNNING'", sqlSchema,
+	), role, deviceID)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrDeviceRoleUpdateConflict
+	}
+	return nil
 }

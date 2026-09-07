@@ -1,6 +1,13 @@
 package services
 
-import "testing"
+import (
+	"regexp"
+	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+
+	"openwrt-controller/internal/database"
+)
 
 func TestResolveResourcesUsesReportedCapabilities(t *testing.T) {
 	radioSection, radioDevice, sqmInterface := resolveResources(DeviceCapabilities{
@@ -105,5 +112,27 @@ func TestRenderGatewayUsesNamedSQMSectionWhenEnabled(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("renderer did not target the reported SQM section")
+	}
+}
+
+func TestUpdateDeviceRoleForTenantRejectsRunningRollout(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previousDB := database.DB
+	database.DB = db
+	defer func() { database.DB = previousDB }()
+
+	mock.ExpectExec(regexp.QuoteMeta(`UPDATE "tenant_demo".devices SET device_role = $1 WHERE id = $2 AND COALESCE(last_rollout_status, '') <> 'RUNNING'`)).
+		WithArgs("AP", "device-1").
+		WillReturnResult(sqlmock.NewResult(0, 0))
+
+	if err := UpdateDeviceRoleForTenant(t.Context(), "tenant_demo", "device-1", "AP"); err != ErrDeviceRoleUpdateConflict {
+		t.Fatalf("role update error = %v, want ErrDeviceRoleUpdateConflict", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }

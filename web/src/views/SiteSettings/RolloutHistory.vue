@@ -7,6 +7,7 @@ const runs = ref([])
 const selected = ref(null)
 const loading = ref(false)
 const error = ref('')
+const emit = defineEmits(['resume'])
 
 async function loadHistory() {
   loading.value = true
@@ -61,14 +62,19 @@ onMounted(loadHistory)
 
     <div v-else class="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)] gap-4">
       <div class="space-y-2">
-        <button v-for="run in runs" :key="run.id" @click="selectRun(run)" class="w-full text-left border bg-black/40 p-3 transition hover:border-cyan-400/60" :class="selected?.id === run.id ? 'border-cyan-400' : 'border-gray-800'">
-          <div class="flex items-center justify-between gap-3">
-            <span class="text-xs text-white">GEN {{ run.generation }}</span>
-            <span class="text-[10px] border px-2 py-1" :class="statusClass(run.status)">{{ run.status }}</span>
-          </div>
-          <div class="text-[10px] text-gray-600 mt-2 truncate">{{ run.plan_hash }}</div>
-          <div class="text-[10px] text-gray-500 mt-1">{{ run.requested_by }} · {{ new Date(run.created_at).toLocaleString() }}</div>
-        </button>
+        <div v-for="run in runs" :key="run.id" class="border bg-black/40 p-3 transition hover:border-cyan-400/60" :class="selected?.id === run.id ? 'border-cyan-400' : 'border-gray-800'">
+          <button @click="selectRun(run)" class="w-full text-left">
+            <div class="flex items-center justify-between gap-3">
+              <span class="text-xs text-white">GEN {{ run.generation }}</span>
+              <span class="text-[10px] border px-2 py-1" :class="statusClass(run.status)">{{ run.status }}</span>
+            </div>
+            <div class="text-[10px] text-gray-600 mt-2 truncate">{{ run.plan_hash }}</div>
+            <div class="text-[10px] text-gray-500 mt-1">{{ run.requested_by }} · {{ new Date(run.created_at).toLocaleString() }}</div>
+          </button>
+          <button v-if="run.status === 'DRAFT'" @click.stop="emit('resume', run)" class="mt-3 text-[10px] border border-cyan-500/40 text-cyan-300 px-2 py-1 hover:bg-cyan-500/10">
+            RESUME DRAFT
+          </button>
+        </div>
       </div>
 
       <div v-if="selected" class="border border-gray-800 bg-black/30 p-4">

@@ -12,6 +12,7 @@ import (
 	jwt "github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 
+	"openwrt-controller/internal/api/middleware"
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/secrets"
 )
@@ -148,7 +149,14 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 // JWTSecret exposes the secret for use in middleware
 func JWTSecret() []byte { return jwtSecret }
 
+// GetUsernameFromReq returns the authenticated subject, falling back to the
+// legacy token parser for handlers invoked without auth middleware.
 func GetUsernameFromReq(r *http.Request) string {
+	if claims, ok := middleware.GetClaims(r); ok {
+		if sub, ok := claims["sub"].(string); ok && sub != "" {
+			return sub
+		}
+	}
 	tokenStr := r.URL.Query().Get("token")
 	if tokenStr == "" {
 		ah := r.Header.Get("Authorization")

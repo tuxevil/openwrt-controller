@@ -6,6 +6,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+
+	"openwrt-controller/internal/authtickets"
+	"openwrt-controller/internal/database"
 )
 
 // TestClaimsContext verifies the claimsKey mechanism round-trips through
@@ -70,5 +76,91 @@ func TestMissingTokenReturns401(t *testing.T) {
 	body := rec.Body.String()
 	if !strings.Contains(body, "missing bearer token") {
 		t.Errorf("body %q should mention 'missing bearer token'", body)
+	}
+}
+
+func TestWithAuthAcceptsDeviceScopedWebSocketTicket(t *testing.T) {
+	store := authtickets.LoadStore(time.Minute)
+	ticketID, _, err := store.Issue("alice", "ADMIN", "device-1", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previousDB := database.DB
+	database.DB = db
+	defer func() { database.DB = previousDB }()
+
+	mock.ExpectBegin()
+	mock.ExpectQuery("SELECT COUNT\\(\\*\\) FROM tenants WHERE schema_alias = \\$1 AND is_active = true").
+		WithArgs("demo").
+		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(1))
+	mock.ExpectQuery("SELECT set_config\\('search_path', \\$1, true\\)").
+		WithArgs("tenant_demo, public").
+		WillReturnRows(sqlmock.NewRows([]string{"set_config"}).AddRow("tenant_demo, public"))
+	mock.ExpectCommit()
+
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/devices/device-1/ssh?ticket="+ticketID, nil)
+	r.Header.Set("Upgrade", "websocket")
+	r.Header.Set("Authorization", "Bearer this-must-not-bypass-ticket-auth")
+	r.SetPathValue("device_id", "device-1")
+	WithAuth(func(w http.ResponseWriter, req *http.Request) {
+		claims, ok := GetClaims(req)
+		if !ok || claims["sub"] != "alice" || claims["role"] != "ADMIN" {
+			t.Errorf("ticket claims = %#v, want alice/ADMIN", claims)
+		}
+		if got := GetTenantSchema(req); got != "tenant_demo" {
+			t.Errorf("ticket tenant schema = %q, want tenant_demo", got)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", rec.Code)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWithAuthRequiresTicketForDeviceSSHWebSocket(t *testing.T) {
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/devices/device-1/ssh", nil)
+	r.Header.Set("Upgrade", "websocket")
+	r.Header.Set("Authorization", "Bearer this-must-not-bypass-ticket-auth")
+	r.SetPathValue("device_id", "device-1")
+	WithAuth(func(w http.ResponseWriter, req *http.Request) {
+		t.Error("next handler should not be called without a WebSocket ticket")
+	}).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want 401", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "WebSocket ticket required") {
+		t.Fatalf("body %q should require a WebSocket ticket", rec.Body.String())
+	}
+}
+
+func TestWithAuthRejectsWebSocketTicketForAnotherDevice(t *testing.T) {
+	authtickets.LoadStore(time.Minute)
+	ticketID, _, err := authtickets.GetStore().Issue("alice", "ADMIN", "device-1", "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/devices/device-2/ssh?ticket="+ticketID, nil)
+	r.Header.Set("Upgrade", "websocket")
+	r.SetPathValue("device_id", "device-2")
+	WithAuth(func(w http.ResponseWriter, req *http.Request) {
+		t.Error("next handler should not be called for a wrong-device ticket")
+	}).ServeHTTP(rec, r)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }

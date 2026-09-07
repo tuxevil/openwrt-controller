@@ -110,6 +110,17 @@ func TestBuildBatchScriptRollsBackAndRestartsService(t *testing.T) {
 	}
 }
 
+func TestBuildBatchScriptSerializesControllerMutations(t *testing.T) {
+	script := BuildBatchScript("wireless", []UciCommand{
+		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
+	})
+	lock := strings.Index(script, `mkdir "$uci_lock_dir"`)
+	mutation := strings.Index(script, "# Phase 2: Apply UCI mutations")
+	if lock == -1 || mutation == -1 || lock > mutation {
+		t.Fatalf("UCI lock must be acquired before mutations:\n%s", script)
+	}
+}
+
 func TestBuildBatchScriptRollbackRestoresRawConfigFile(t *testing.T) {
 	script := BuildBatchScript("wireless", []UciCommand{
 		{Action: "set", Config: "wireless", Section: "wifi0", Option: "ssid", Value: "TestNet"},
