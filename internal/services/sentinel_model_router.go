@@ -90,13 +90,18 @@ func resolveSentinelModelRouteWithEnv(class SentinelReasoningClass, settings dat
 	if err != nil {
 		return SentinelModelRoute{}, err
 	}
-	baseURL := strings.TrimRight(strings.TrimSpace(getenv(prefix+"_BASE_URL")), "/")
+
+	baseURLOverride := strings.TrimRight(strings.TrimSpace(getenv(prefix+"_BASE_URL")), "/")
+	baseURL := baseURLOverride
 	if baseURL == "" {
 		baseURL = strings.TrimRight(strings.TrimSpace(settings.AIEngineBaseURL), "/")
 	}
 	model := strings.TrimSpace(getenv(prefix + "_MODEL"))
 	apiKey := strings.TrimSpace(getenv(prefix + "_API_KEY"))
-	if apiKey == "" {
+	// The platform key belongs to the platform endpoint. Never forward it to a
+	// per-class endpoint override: local routes can be keyless, while remote
+	// overrides must provide their own credential explicitly.
+	if apiKey == "" && baseURLOverride == "" {
 		apiKey = openAIKey(settings.AIEngineAPIKey)
 	}
 
