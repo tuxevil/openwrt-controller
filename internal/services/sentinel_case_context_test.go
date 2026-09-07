@@ -47,7 +47,7 @@ func TestSentinelContextToolPlanIsDomainBounded(t *testing.T) {
 					t.Fatalf("tool plan = %v, want %v", got, tt.want)
 				}
 			}
-		}
+		})
 	}
 }
 
