@@ -30,8 +30,8 @@ func main() {
 	banner := `
   ██████╗ ███╗   ███╗███████╗ ██████╗  █████╗
  ██╔═══██╗████╗ ████║██╔════╝██╔════╝ ██╔══██╗
- ██║   ██╗██╔████╔██║█████╗  ██║  ███╗███████║
- ██║   ██╗██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██║
+ ██║   ██║██╔████╔██║█████╗  ██║  ███╗███████║
+ ██║   ██║██║╚██╔╝██║██╔══╝  ██║   ██║██╔══██║
  ╚██████╔╝██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║
   ╚═════╝ ╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝
   --- CENTRAL CONTROLLER ONLINE ---
@@ -111,6 +111,7 @@ func main() {
 
 	sentinelStopCh := make(chan struct{})
 	services.StartSentinelCaseContextRecovery(sentinelStopCh)
+	services.StartSentinelOptionalModelTaskWorker(sentinelStopCh)
 	defer close(sentinelStopCh)
 
 	// Build the route mux and wrap it with the metrics middleware.
