@@ -2,20 +2,8 @@ from pathlib import Path
 
 store = Path("internal/services/sentinel_store.go")
 text = store.read_text()
-old = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
-            WHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
-            AND NOT EXISTS (
-                SELECT 1 FROM %s.sentinel_learned_memories m
-                WHERE m.source_case_id = c.id
-                AND m.validation_state IN ('CANDIDATE','VALIDATED')
-                AND m.expires_at > CURRENT_TIMESTAMP
-            )
-            AND NOT EXISTS (
-                SELECT 1 FROM %s.sentinel_skills s
-                WHERE s.source_case_id = c.id
-                AND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
-            )`, schema, schema, schema), cutoff)
-'''
+start_marker = '\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c\n'
+end_marker = '`, schema, schema, schema), cutoff)'
 new = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
             WHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
             AND NOT EXISTS (
@@ -32,12 +20,17 @@ new = '''\t\tresult, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM
                 SELECT 1 FROM %s.sentinel_skills s
                 WHERE s.source_case_id = c.id
                 AND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
-            )`, schema, schema, schema), cutoff)
-'''
-if old in text:
-    store.write_text(text.replace(old, new, 1))
-elif new not in text:
-    raise SystemExit("current Sentinel retention block not found")
+            )`, schema, schema, schema), cutoff)'''
+
+if new not in text:
+    start = text.find(start_marker)
+    if start < 0:
+        raise SystemExit("Sentinel retention start marker not found")
+    end = text.find(end_marker, start)
+    if end < 0:
+        raise SystemExit("Sentinel retention end marker not found")
+    end += len(end_marker)
+    store.write_text(text[:start] + new + text[end:])
 
 env_file = Path(".env.example")
 env = env_file.read_text()
