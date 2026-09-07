@@ -20,10 +20,10 @@ import (
 type SentinelContextTrustClass string
 
 const (
-	SentinelContextAuthoritativeState SentinelContextTrustClass = "authoritative_state"
-	SentinelContextMeasurement        SentinelContextTrustClass = "measurement"
-	SentinelContextOperatorAssertion  SentinelContextTrustClass = "operator_assertion"
-	SentinelContextLearnedKnowledge   SentinelContextTrustClass = "learned_knowledge"
+	SentinelContextAuthoritativeState   SentinelContextTrustClass = "authoritative_state"
+	SentinelContextMeasurement          SentinelContextTrustClass = "measurement"
+	SentinelContextOperatorAssertion    SentinelContextTrustClass = "operator_assertion"
+	SentinelContextLearnedKnowledge     SentinelContextTrustClass = "learned_knowledge"
 	SentinelContextUntrustedObservation SentinelContextTrustClass = "untrusted_observation"
 
 	sentinelCaseEvidenceLedgerVersion = 1
@@ -159,7 +159,7 @@ func PersistSentinelCaseEvidence(schema, caseID, runID, origin string, evidence 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	var current []byte
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; caseID is parameterized.
@@ -528,7 +528,7 @@ func trimCurrentSentinelQuery(history []SentinelStoredMessage, query string) []S
 	return history
 }
 
-func executeSentinelCaseRun(schema, runID string) (SentinelInvestigationResult, *SentinelProposal, string, error) {
+func executeSentinelCaseRun(ctx context.Context, schema, runID string) (SentinelInvestigationResult, *SentinelProposal, string, error) {
 	safeSchema, err := sentinelSchema(schema)
 	if err != nil {
 		return SentinelInvestigationResult{}, nil, "", err
@@ -568,7 +568,7 @@ func executeSentinelCaseRun(schema, runID string) (SentinelInvestigationResult, 
 		return SentinelInvestigationResult{}, nil, caseID, err
 	}
 	history = trimCurrentSentinelQuery(history, query)
-	result, err := runSentinelInvestigationForCase(schema, caseID, history, query, siteID)
+	result, err := runSentinelInvestigationForCase(ctx, schema, caseID, history, query, siteID)
 	if err != nil {
 		return result, nil, caseID, err
 	}
@@ -607,8 +607,8 @@ func executeSentinelCaseRun(schema, runID string) (SentinelInvestigationResult, 
 	return result, proposal, caseID, nil
 }
 
-func RunSentinelCaseMessage(schema, runID string) {
-	_, _, _, err := executeSentinelCaseRun(schema, runID)
+func RunSentinelCaseMessage(ctx context.Context, schema, runID string) {
+	_, _, _, err := executeSentinelCaseRun(ctx, schema, runID)
 	if err == sql.ErrNoRows {
 		return
 	}
@@ -622,12 +622,12 @@ func RunSentinelCaseMessage(schema, runID string) {
 	}
 }
 
-func ProcessSentinelCaseMessageForSite(schema, conversationID, query, siteID, requestedCaseID, createdBy string) (SentinelInvestigationResult, *SentinelProposal, string, error) {
+func ProcessSentinelCaseMessageForSite(ctx context.Context, schema, conversationID, query, siteID, requestedCaseID, createdBy string) (SentinelInvestigationResult, *SentinelProposal, string, error) {
 	run, err := QueueSentinelCaseMessageForSite(schema, conversationID, query, siteID, requestedCaseID, createdBy)
 	if err != nil {
 		return SentinelInvestigationResult{}, nil, "", err
 	}
-	return executeSentinelCaseRun(schema, run.ID)
+	return executeSentinelCaseRun(ctx, schema, run.ID)
 }
 
 func InvestigateSentinelCaseContext(schema, caseID string) {
@@ -647,7 +647,7 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 		return
 	}
 	query := "Investigate the current Sentinel Case using its scoped evidence and current OMEGA observations. Determine the current status, likely cause, and next safe step."
-	result, err := runSentinelInvestigationForCase(schema, caseID, nil, query, item.SiteID)
+	result, err := runSentinelInvestigationForCase(context.Background(), schema, caseID, nil, query, item.SiteID)
 	if err != nil {
 		// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
 		_, _ = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", safeSchema), "Investigation failed: "+err.Error(), caseID)

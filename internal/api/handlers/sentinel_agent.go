@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -165,11 +166,11 @@ func PostSentinelMessageHandler(w http.ResponseWriter, r *http.Request) {
 			writeSentinelError(w, http.StatusBadRequest, "QUEUE_FAILED", err.Error())
 			return
 		}
-		go services.RunSentinelCaseMessage(schema, run.ID)
+		go services.RunSentinelCaseMessage(context.WithoutCancel(r.Context()), schema, run.ID)
 		writeSentinelJSON(w, http.StatusAccepted, run)
 		return
 	}
-	result, proposal, caseID, err := services.ProcessSentinelCaseMessageForSite(schema, conversationID, req.Query, req.SiteID, req.CaseID, GetUsernameFromReq(r))
+	result, proposal, caseID, err := services.ProcessSentinelCaseMessageForSite(r.Context(), schema, conversationID, req.Query, req.SiteID, req.CaseID, GetUsernameFromReq(r))
 	if errors.Is(err, sql.ErrNoRows) {
 		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel conversation or Case not found")
 		return
