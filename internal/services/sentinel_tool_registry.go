@@ -22,11 +22,11 @@ type SentinelToolResultTrustClass string
 
 const (
 	SentinelToolSideEffectNone SentinelToolSideEffectClass = "none"
-	SentinelToolRiskLow       SentinelToolRiskClass       = "low"
-	SentinelToolScopeTenant   SentinelToolScope           = "tenant"
-	SentinelToolScopeSite     SentinelToolScope           = "site"
-	SentinelToolCostLow       SentinelToolCostHint        = "low"
-	SentinelToolCostMedium    SentinelToolCostHint        = "medium"
+	SentinelToolRiskLow        SentinelToolRiskClass       = "low"
+	SentinelToolScopeTenant    SentinelToolScope           = "tenant"
+	SentinelToolScopeSite      SentinelToolScope           = "site"
+	SentinelToolCostLow        SentinelToolCostHint        = "low"
+	SentinelToolCostMedium     SentinelToolCostHint        = "medium"
 
 	// Phase 1 deliberately treats every tool result as evidence rather than
 	// executable instructions or trusted policy. More granular provenance can
@@ -484,7 +484,7 @@ func (b *SentinelToolBudget) Reserve(name string) error {
 
 func (r *SentinelToolRegistry) PromptCatalog() string {
 	descriptors := r.Descriptors()
-	var lines []string
+	lines := make([]string, 0, len(descriptors))
 	for _, descriptor := range descriptors {
 		argNames := make([]string, 0, len(descriptor.InputSchema.Properties))
 		for name := range descriptor.InputSchema.Properties {
@@ -518,6 +518,7 @@ func sentinelSearchLogsTool(ctx context.Context, invocation sentinelToolInvocati
 	deviceID, _ := args["device_id"].(string)
 	siteID, _ := args["site_id"].(string)
 	severity, _ := args["severity"].(string)
+	// #nosec G201 -- schema is controller-owned and was validated by SafeSchemaIdent in Execute.
 	query := fmt.Sprintf(`SELECT l.log_timestamp, l.severity, l.message, l.device_id,
 	    COALESCE(NULLIF(d.name, ''), NULLIF(d.state_json->'board'->>'hostname', ''), NULLIF(d.model, ''), l.device_id) FROM %s.system_logs l
 	    LEFT JOIN %s.devices d ON d.id = l.device_id WHERE 1=1`, schema, schema)
@@ -565,6 +566,7 @@ func sentinelGetDeviceStatusTool(ctx context.Context, invocation sentinelToolInv
 	args, schema, limit := invocation.Args, invocation.Schema, invocation.Limit
 	deviceID, _ := args["device_id"].(string)
 	siteID, _ := args["site_id"].(string)
+	// #nosec G201 -- schema is controller-owned and was validated by SafeSchemaIdent in Execute.
 	query := fmt.Sprintf(`SELECT id, name, model, status, last_seen_at, last_ip,
         state_json, capabilities, desired_generation, observed_generation,
         last_successful_generation FROM %s.devices`, schema)
@@ -622,6 +624,7 @@ func sentinelGetIncidentsTool(ctx context.Context, invocation sentinelToolInvoca
 	args, schema, limit := invocation.Args, invocation.Schema, invocation.Limit
 	deviceID, _ := args["device_id"].(string)
 	siteID, _ := args["site_id"].(string)
+	// #nosec G201 -- schema is controller-owned and was validated by SafeSchemaIdent in Execute.
 	query := fmt.Sprintf(`SELECT i.id, i.site_id, i.device_id, i.incident_type, i.severity, i.status, i.created_at, i.resolved_at,
 		COALESCE(NULLIF(d.name, ''), NULLIF(d.state_json->'board'->>'hostname', ''), NULLIF(d.model, ''), i.device_id)
 		FROM %s.incidents i LEFT JOIN %s.devices d ON d.id = i.device_id`, schema, schema)
@@ -664,6 +667,7 @@ func sentinelGetIncidentsTool(ctx context.Context, invocation sentinelToolInvoca
 func sentinelGetTopologyTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
 	siteID, _ := invocation.Args["site_id"].(string)
 	var metadata []byte
+	// #nosec G201 -- invocation.Schema is a SafeSchemaIdent result from Execute.
 	err := database.DB.QueryRowContext(ctx, fmt.Sprintf("SELECT COALESCE(topology_metadata, '{}'::jsonb) FROM %s.site_configs WHERE site_id = $1", invocation.Schema), siteID).Scan(&metadata)
 	if err != nil {
 		return nil, err
@@ -675,6 +679,7 @@ func sentinelGetNotesTool(ctx context.Context, invocation sentinelToolInvocation
 	args, schema, limit := invocation.Args, invocation.Schema, invocation.Limit
 	siteID, _ := args["site_id"].(string)
 	deviceID, _ := args["device_id"].(string)
+	// #nosec G201 -- schema is controller-owned and was validated by SafeSchemaIdent in Execute.
 	query := fmt.Sprintf("SELECT id, site_id, device_id, title, content, created_by, updated_at FROM %s.sentinel_notes WHERE 1=1", schema)
 	params := []interface{}{}
 	if siteID != "" {
@@ -708,6 +713,7 @@ func sentinelGetRecentChangesTool(ctx context.Context, invocation sentinelToolIn
 	args, schema, limit := invocation.Args, invocation.Schema, invocation.Limit
 	deviceID, _ := args["device_id"].(string)
 	siteID, _ := args["site_id"].(string)
+	// #nosec G201 -- schema is controller-owned and was validated by SafeSchemaIdent in Execute.
 	query := fmt.Sprintf(`SELECT id, name, last_rollout_status, last_rollout_at,
         desired_generation, observed_generation, last_successful_generation FROM %s.devices`, schema)
 	params := []interface{}{}
@@ -824,10 +830,6 @@ func sentinelStringValue(values map[string]interface{}, key string) string {
 	return strings.TrimSpace(value)
 }
 
-func getSentinelSiteClients(schema, siteID string, limit int) (map[string]interface{}, error) {
-	return getSentinelSiteClientsContext(context.Background(), schema, siteID, limit)
-}
-
 // getSentinelSiteClientsContext derives a bounded, site-scoped client summary
 // from the same telemetry snapshots used by the dashboard client view.
 func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, limit int) (map[string]interface{}, error) {
@@ -837,6 +839,7 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 	if limit < 1000 {
 		limit = 1000
 	}
+	// #nosec G201 -- schema is controller-owned and was validated by SafeSchemaIdent in Execute.
 	rows, err := database.DB.QueryContext(ctx, fmt.Sprintf(`SELECT id, state_json FROM %s.devices
 		WHERE site_id = $1 AND state_json IS NOT NULL ORDER BY last_seen_at DESC LIMIT $2`, schema), siteID, limit)
 	if err != nil {
