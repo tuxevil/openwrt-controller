@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"openwrt-controller/internal/database"
@@ -15,10 +16,15 @@ type sentinelRowScanner interface {
 	Scan(dest ...any) error
 }
 
+var sentinelLearningSchemaReady sync.Map
+
 func ensureSentinelLearningTables(schema string) error {
 	safeSchema, err := sentinelSchema(schema)
 	if err != nil {
 		return err
+	}
+	if _, ok := sentinelLearningSchemaReady.Load(safeSchema); ok {
+		return nil
 	}
 	// Learning state is deliberately separate from sentinel_cases (episodic
 	// memory) and from all authoritative OMEGA/controller state. None of these
@@ -92,6 +98,9 @@ func ensureSentinelLearningTables(schema string) error {
 		safeSchema, safeSchema, safeSchema, safeSchema, safeSchema, safeSchema,
 		safeSchema, safeSchema, safeSchema, safeSchema, safeSchema, safeSchema,
 		safeSchema, safeSchema, safeSchema, safeSchema))
+	if err == nil {
+		sentinelLearningSchemaReady.Store(safeSchema, true)
+	}
 	return err
 }
 
@@ -447,16 +456,21 @@ func sentinelSkillPromotionStats(schema, skillID string) (SentinelSkillPromotion
 		return SentinelSkillPromotionStats{}, err
 	}
 	var stats SentinelSkillPromotionStats
-	// Only matched evaluations count toward promotion. A skill that did not
-	// apply to a Case neither helps nor hurts its score.
+	// Promotion is based on distinct Cases, not raw evaluation rows. Re-running
+	// one noisy Case therefore cannot inflate replay/shadow thresholds.
 	// #nosec G201 -- safeSchema is validated; skillID is parameterized.
-	err = database.DB.QueryRow(fmt.Sprintf(`SELECT
+	err = database.DB.QueryRow(fmt.Sprintf(`WITH latest_per_case AS (
+		SELECT DISTINCT ON (mode, case_id) mode, case_id, matched, score, unsafe
+		FROM %s.sentinel_skill_evaluations
+		WHERE skill_id = $1::uuid
+		ORDER BY mode, case_id, created_at DESC
+	) SELECT
 		COUNT(*) FILTER (WHERE mode = 'REPLAY' AND matched),
 		COALESCE(AVG(score) FILTER (WHERE mode = 'REPLAY' AND matched), 0),
 		COUNT(*) FILTER (WHERE mode = 'SHADOW' AND matched),
 		COALESCE(AVG(score) FILTER (WHERE mode = 'SHADOW' AND matched), 0),
 		COUNT(*) FILTER (WHERE unsafe)
-		FROM %s.sentinel_skill_evaluations WHERE skill_id = $1::uuid`, safeSchema), skillID).
+		FROM latest_per_case`, safeSchema), skillID).
 		Scan(&stats.ReplayCount, &stats.ReplaySuccessRate, &stats.ShadowCount, &stats.ShadowSuccessRate, &stats.UnsafeCount)
 	return stats, err
 }

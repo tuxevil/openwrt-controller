@@ -227,6 +227,9 @@ func SweepSentinelHistory(ctx context.Context, days int) (int64, error) {
 		if err != nil {
 			continue
 		}
+		if err := ensureSentinelLearningTables(schema); err != nil {
+			return total, err
+		}
 		result, err := database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_messages m USING %s.sentinel_conversations c
             WHERE m.conversation_id = c.id AND c.updated_at < $1`, schema, schema), cutoff)
 		if err != nil {
@@ -247,8 +250,19 @@ func SweepSentinelHistory(ctx context.Context, days int) (int64, error) {
 		}
 		count, _ = result.RowsAffected()
 		total += count
-		result, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases
-            WHERE resolved_at IS NOT NULL AND resolved_at < $1`, schema), cutoff)
+		result, err = database.DB.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s.sentinel_cases c
+  WHERE c.resolved_at IS NOT NULL AND c.resolved_at < $1
+  AND NOT EXISTS (
+      SELECT 1 FROM %s.sentinel_learned_memories m
+      WHERE m.source_case_id = c.id
+      AND m.validation_state IN ('CANDIDATE','VALIDATED')
+      AND m.expires_at > CURRENT_TIMESTAMP
+  )
+  AND NOT EXISTS (
+      SELECT 1 FROM %s.sentinel_skills s
+      WHERE s.source_case_id = c.id
+      AND s.state IN ('DRAFT','VALIDATED','SHADOW','TRUSTED')
+  )`, schema, schema, schema), cutoff)
 		if err != nil {
 			return total, err
 		}
