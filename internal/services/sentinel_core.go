@@ -60,7 +60,7 @@ func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 					}
 				}
 				if targetMAC != "" {
-					caseID, caseErr := OpenSentinelCase(schema, "brute_force", siteID, deviceID, "HIGH",
+					caseID, caseErr := OpenSentinelCasePreservingEvidence(schema, "brute_force", siteID, deviceID, "HIGH",
 						"Local brute force detected", fmt.Sprintf("Failed authentication from %s resolved to %s", targetIP, targetMAC), map[string]string{
 							"source_ip":  targetIP,
 							"source_mac": targetMAC,
@@ -94,7 +94,7 @@ func AnalyzeLogs(schema, deviceID string, logs []database.LogEntry) {
 		return
 	}
 
-	caseID, caseErr := OpenSentinelCase(schema, "log_anomaly", siteID, deviceID, "MEDIUM",
+	caseID, caseErr := OpenSentinelCasePreservingEvidence(schema, "log_anomaly", siteID, deviceID, "MEDIUM",
 		"Reactive log anomaly", "A Sentinel log trigger matched on the device. Current state must be re-read from OMEGA during investigation.", map[string]interface{}{
 			"matched_log_samples": matched,
 			"sample_count":        len(matched),
