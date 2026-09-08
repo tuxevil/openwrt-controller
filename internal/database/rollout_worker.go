@@ -103,7 +103,7 @@ func UpdateRolloutWorkerCursor(ctx context.Context, schema string, lease Rollout
 		return err
 	}
 	result, err := DB.ExecContext(ctx, fmt.Sprintf(`
-		UPDATE %s.rollout_runs AS candidate
+		UPDATE %s.rollout_runs AS rollout
 		   SET worker_cursor = GREATEST(worker_cursor, $1), updated_at = CURRENT_TIMESTAMP
 		 WHERE id = $2 AND site_id = $3 AND status = 'RUNNING'
 		   AND worker_token::text = $4 AND worker_lease_until >= CURRENT_TIMESTAMP
@@ -164,7 +164,7 @@ func ClaimQueuedRollout(ctx context.Context, schema string, leaseDuration time.D
 		       worker_lease_until = CURRENT_TIMESTAMP + ($1::double precision * INTERVAL '1 second'),
 		       updated_at = CURRENT_TIMESTAMP
 		 WHERE id = (
-			SELECT id FROM %s.rollout_runs
+			SELECT candidate.id FROM %s.rollout_runs AS candidate
 				 WHERE (status = 'QUEUED'
 			    OR (status = 'RUNNING' AND worker_lease_until < CURRENT_TIMESTAMP))
 			   AND NOT EXISTS (
