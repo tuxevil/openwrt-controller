@@ -1486,7 +1486,7 @@ func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	rows, err := database.Tx(r.Context()).QueryContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, plan, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE site_id = $1 ORDER BY created_at DESC LIMIT $2", r.PathValue("site_id"), limit)
+	rows, err := database.Tx(r.Context()).QueryContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, plan, results, worker_cursor, worker_lease_until, created_at, updated_at FROM "+schema+".rollout_runs WHERE site_id = $1 ORDER BY created_at DESC LIMIT $2", r.PathValue("site_id"), limit)
 	if err != nil {
 		http.Error(w, `{"error":"could not load rollout history"}`, http.StatusInternalServerError)
 		return
@@ -1495,9 +1495,13 @@ func GetRolloutHistoryHandler(w http.ResponseWriter, r *http.Request) {
 	rollouts := make([]rolloutRecord, 0)
 	for rows.Next() {
 		var rollout rolloutRecord
-		if err := rows.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Plan, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
+		var leaseUntil sql.NullTime
+		if err := rows.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Plan, &rollout.Results, &rollout.WorkerCursor, &leaseUntil, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
 			http.Error(w, `{"error":"could not read rollout history"}`, http.StatusInternalServerError)
 			return
+		}
+		if leaseUntil.Valid {
+			rollout.WorkerLeaseUntil = &leaseUntil.Time
 		}
 		if rollout.Status == "DRAFT" {
 			rollout.Preview = rolloutDevicePreviewsFromRecord(rollout)
@@ -1518,11 +1522,15 @@ func GetRolloutHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
 		return
 	}
-	row := database.Tx(r.Context()).QueryRowContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, plan, results, created_at, updated_at FROM "+schema+".rollout_runs WHERE id = $1 AND site_id = $2", r.PathValue("rollout_id"), r.PathValue("site_id"))
+	row := database.Tx(r.Context()).QueryRowContext(r.Context(), "SELECT id, site_id, generation, status, plan_hash, requested_by, target_device_ids, plan, results, worker_cursor, worker_lease_until, created_at, updated_at FROM "+schema+".rollout_runs WHERE id = $1 AND site_id = $2", r.PathValue("rollout_id"), r.PathValue("site_id"))
 	var rollout rolloutRecord
-	if err := row.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Plan, &rollout.Results, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
+	var leaseUntil sql.NullTime
+	if err := row.Scan(&rollout.ID, &rollout.SiteID, &rollout.Generation, &rollout.Status, &rollout.PlanHash, &rollout.RequestedBy, &rollout.TargetDeviceIDs, &rollout.Plan, &rollout.Results, &rollout.WorkerCursor, &leaseUntil, &rollout.CreatedAt, &rollout.UpdatedAt); err != nil {
 		http.Error(w, `{"error":"rollout not found"}`, http.StatusNotFound)
 		return
+	}
+	if leaseUntil.Valid {
+		rollout.WorkerLeaseUntil = &leaseUntil.Time
 	}
 	if rollout.Status == "DRAFT" {
 		rollout.Preview = rolloutDevicePreviewsFromRecord(rollout)
@@ -1532,18 +1540,20 @@ func GetRolloutHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 type rolloutRecord struct {
-	ID              string                 `json:"id"`
-	SiteID          string                 `json:"site_id"`
-	Generation      int64                  `json:"generation"`
-	Status          string                 `json:"status"`
-	PlanHash        string                 `json:"plan_hash"`
-	RequestedBy     string                 `json:"requested_by"`
-	TargetDeviceIDs json.RawMessage        `json:"target_device_ids"`
-	Plan            json.RawMessage        `json:"plan"`
-	Results         json.RawMessage        `json:"results"`
-	Preview         []rolloutDevicePreview `json:"preview,omitempty"`
-	CreatedAt       time.Time              `json:"created_at"`
-	UpdatedAt       time.Time              `json:"updated_at"`
+	ID               string                 `json:"id"`
+	SiteID           string                 `json:"site_id"`
+	Generation       int64                  `json:"generation"`
+	Status           string                 `json:"status"`
+	PlanHash         string                 `json:"plan_hash"`
+	RequestedBy      string                 `json:"requested_by"`
+	TargetDeviceIDs  json.RawMessage        `json:"target_device_ids"`
+	Plan             json.RawMessage        `json:"plan"`
+	Results          json.RawMessage        `json:"results"`
+	WorkerCursor     int                    `json:"worker_cursor"`
+	WorkerLeaseUntil *time.Time             `json:"worker_lease_until,omitempty"`
+	Preview          []rolloutDevicePreview `json:"preview,omitempty"`
+	CreatedAt        time.Time              `json:"created_at"`
+	UpdatedAt        time.Time              `json:"updated_at"`
 }
 
 func markRolloutPersistenceFailure(r *http.Request, siteID, rolloutID, claimToken string, results []fleetSyncResult, cause error) error {
