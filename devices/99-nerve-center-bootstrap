@@ -35,6 +35,7 @@ AGENT_URL="$BASE_URL/agent/latest/raw"
 AGENT_DEST="/usr/sbin/nerve-agent.sh"
 AGENT_CONFIG_FILE="/etc/nerve/agent.conf"
 AGENT_UPDATE_PUBLIC_KEY_FILE="/etc/nerve/agent-update-public-key"
+AGENT_VERSION_NUMBER_FILE="/etc/nerve/agent-version-number"
 ENROLLMENT_TOKEN_FILE="/etc/nerve/enrollment-token"
 ENROLLMENT_NONCE_FILE="/etc/nerve/enrollment-nonce"
 
@@ -203,8 +204,10 @@ if ! controller_curl -m 15 -fsS \
   exit 1
 fi
 LATEST_HASH=$(jsonfilter -i "$AGENT_METADATA_FILE" -e '@.version_hash' 2>/dev/null || true)
+LATEST_VERSION_NUMBER=$(jsonfilter -i "$AGENT_METADATA_FILE" -e '@.version_number' 2>/dev/null || true)
 LATEST_SIGNATURE=$(jsonfilter -i "$AGENT_METADATA_FILE" -e '@.signature' 2>/dev/null || true)
 LATEST_SIGNATURE_ALGORITHM=$(jsonfilter -i "$AGENT_METADATA_FILE" -e '@.signature_algorithm' 2>/dev/null || true)
+case "$LATEST_VERSION_NUMBER" in ''|*[!0-9]*) LATEST_VERSION_NUMBER=0 ;; esac
 if [ -z "$LATEST_HASH" ] || [ -z "$LATEST_SIGNATURE" ] || [ "$LATEST_SIGNATURE_ALGORITHM" != "Ed25519" ]; then
   echo "[!] Agent metadata is unsigned or malformed. Bootstrap deferred."
   rm -f "$AGENT_METADATA_FILE"
@@ -242,6 +245,7 @@ if ! mv "${AGENT_DEST}.tmp" "$AGENT_DEST"; then
   rm -f "${AGENT_DEST}.tmp"
   exit 1
 fi
+printf '%s\n' "$LATEST_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE"
 echo "[+] Signed agent verified and installed → $AGENT_DEST"
 
 # 6. Runtime credentials stay outside the signed artifact. The enrollment

@@ -22,6 +22,9 @@ ENROLLMENT_TOKEN_FILE="${ENROLLMENT_TOKEN_FILE:-/etc/nerve/enrollment-token}"
 ENROLLMENT_NONCE_FILE="${ENROLLMENT_NONCE_FILE:-/etc/nerve/enrollment-nonce}"
 AGENT_UPDATE_PUBLIC_KEY_FILE="${AGENT_UPDATE_PUBLIC_KEY_FILE:-/etc/nerve/agent-update-public-key}"
 AGENT_UPDATE_PUBLIC_KEY="$(cat "$AGENT_UPDATE_PUBLIC_KEY_FILE" 2>/dev/null || true)"
+AGENT_VERSION_NUMBER_FILE="${AGENT_VERSION_NUMBER_FILE:-/etc/nerve/agent-version-number}"
+AGENT_VERSION_NUMBER="$(cat "$AGENT_VERSION_NUMBER_FILE" 2>/dev/null || printf '0')"
+case "$AGENT_VERSION_NUMBER" in ''|*[!0-9]*) AGENT_VERSION_NUMBER=0 ;; esac
 NERVE_TRANSACTION_ROOT="${NERVE_TRANSACTION_ROOT:-/etc/nerve/transactions}"
 NERVE_CONFIG_ROOT="${NERVE_CONFIG_ROOT:-/etc/config}"
 NERVE_WIFI_HASH_FILE="${NERVE_WIFI_HASH_FILE:-$NERVE_TRANSACTION_ROOT/wifi_config.hash}"
@@ -1930,27 +1933,6 @@ bootstrap_agent() {
     logger -t agent "Device enrolled and token provisioned"
 }
 
-# Instalar dependencias si faltan (opcional). Never install packages while a
-# persistent transaction requires recovery; that state is telemetry-only.
-if [ "$TRANSACTION_RECOVERY_BLOCKED" -eq 0 ] && ! command -v tcpdump >/dev/null 2>&1; then
-    logger -t agent "Installing missing tcpdump..."
-    if command -v apk >/dev/null 2>&1; then
-        apk update
-        apk add tcpdump iperf3 sqm-scripts kmod-sched-cake tailscale
-        apk search -e libndpi | grep -q libndpi && apk add libndpi || true
-        if apk info -e wpad-basic-wolfssl >/dev/null 2>&1 || apk info -e wpad-basic-mbedtls >/dev/null 2>&1; then
-            apk del wpad-basic-wolfssl wpad-basic-mbedtls 2>/dev/null || true
-            apk add wpad-mesh-wolfssl || true
-        fi
-    elif command -v opkg >/dev/null 2>&1; then
-        opkg update
-        if opkg list-installed | grep -q "wpad-basic"; then opkg remove wpad-basic-wolfssl wpad-basic-mbedtls; opkg install wpad-mesh-wolfssl; fi
-        opkg install tcpdump iperf3 sqm-scripts kmod-sched-cake tailscale
-        opkg list libndpi | grep -q libndpi && opkg install libndpi || true
-    fi
-fi
-# apk update && apk add iwinfo curl
-
 if ! command -v curl >/dev/null 2>&1 || ! command -v jsonfilter >/dev/null 2>&1; then
     logger -t agent "Bootstrap prerequisites are unavailable"
     exit 1
@@ -1971,9 +1953,17 @@ while true; do
     
     if [ -n "$LATEST_JSON" ]; then
         LATEST_HASH=$(echo "$LATEST_JSON" | jsonfilter -e '@.version_hash' 2>/dev/null)
+        LATEST_VERSION_NUMBER=$(echo "$LATEST_JSON" | jsonfilter -e '@.version_number' 2>/dev/null)
         if [ -n "$LATEST_HASH" ] && [ "$LATEST_HASH" != "$AGENT_VERSION" ]; then
             LATEST_SIGNATURE=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature' 2>/dev/null)
             LATEST_SIGNATURE_ALGORITHM=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature_algorithm' 2>/dev/null)
+            case "$LATEST_VERSION_NUMBER" in
+                ''|*[!0-9]*) logger -t agent "Signed update version is missing or malformed; refusing update"; continue ;;
+            esac
+            if [ "$LATEST_VERSION_NUMBER" -le "${AGENT_VERSION_NUMBER:-0}" ]; then
+                logger -t agent "Signed update is not newer than the installed version; refusing downgrade"
+                continue
+            fi
             logger -t agent "New agent version found: $LATEST_HASH. Downloading..."
             if controller_curl -m 10 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
                 TMP_HASH=$(sha256sum "$0.tmp" | awk '{print $1}')
@@ -1987,7 +1977,8 @@ while true; do
                 fi
                 if [ "$TMP_HASH" = "$LATEST_HASH" ] && [ "$SIGNATURE_OK" = "1" ]; then
                     logger -t agent "Agent downloaded securely. Updating and restarting."
-                    if chmod +x "$0.tmp" && cp "$0" "$0.old" && mv "$0.tmp" "$0"; then
+                    if chmod +x "$0.tmp" && cp "$0" "$0.old" && mv "$0.tmp" "$0" && printf '%s\n' "$LATEST_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE"; then
+                        AGENT_VERSION_NUMBER="$LATEST_VERSION_NUMBER"
                         logger -t agent "Agent updated. Reloading in-process to preserve procd respawn budget."
                         # Use exec to re-exec the new script in the same PID.
                         # procd never sees a process exit, so the crash counter is preserved

@@ -18,6 +18,7 @@ import (
 type AgentVersion struct {
 	ID                 string    `json:"id"`
 	VersionHash        string    `json:"version_hash"`
+	VersionNumber      int64     `json:"version_number"`
 	ScriptContent      string    `json:"script_content"`
 	IsActive           bool      `json:"is_active"`
 	CreatedAt          time.Time `json:"created_at"`
@@ -107,11 +108,11 @@ func GetLatestAgentHandler(w http.ResponseWriter, r *http.Request) {
 
 	var version AgentVersion
 	err = database.DB.QueryRow(fmt.Sprintf(`
-		SELECT id, version_hash, script_content, is_active, created_at
+		SELECT id, version_hash, version_number, script_content, is_active, created_at
 		FROM %s.agent_versions 
 		WHERE is_active = true AND site_id = $1
-		ORDER BY created_at DESC LIMIT 1
-	`, tenantSchema), siteID).Scan(&version.ID, &version.VersionHash, &version.ScriptContent, &version.IsActive, &version.CreatedAt)
+		ORDER BY version_number DESC, created_at DESC LIMIT 1
+	`, tenantSchema), siteID).Scan(&version.ID, &version.VersionHash, &version.VersionNumber, &version.ScriptContent, &version.IsActive, &version.CreatedAt)
 
 	if err != nil {
 		// No active version for this site — agent should do nothing
@@ -244,11 +245,16 @@ func DeployAgentHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
+		var versionNumber int64
+		if err = tx.QueryRow("SELECT COALESCE(MAX(version_number), 0) + 1 FROM "+schema+".agent_versions WHERE site_id = $1", req.SiteID).Scan(&versionNumber); err != nil {
+			http.Error(w, "Database error", http.StatusInternalServerError)
+			return
+		}
 		// Insert new version scoped to this site
 		_, err = tx.Exec(`
-			INSERT INTO `+schema+`.agent_versions (version_hash, script_content, is_active, site_id) 
-			VALUES ($1, $2, true, $3)
-		`, hashStr, req.ScriptContent, req.SiteID)
+			INSERT INTO `+schema+`.agent_versions (version_hash, version_number, script_content, is_active, site_id)
+			VALUES ($1, $2, $3, true, $4)
+		`, hashStr, versionNumber, req.ScriptContent, req.SiteID)
 		if err != nil {
 			http.Error(w, "Database error", http.StatusInternalServerError)
 			return

@@ -26,6 +26,8 @@ grep -q 'TELEMETRY_HEADERS="-H X-Device-Token:' "$AGENT"
 grep -q 'CONFIG_HEADERS="-H X-Device-Token:' "$AGENT"
 grep -q 'CONFIG_HTTP_CODE=' "$AGENT"
 grep -q 'AGENT_UPDATE_PUBLIC_KEY_FILE=' "$AGENT"
+grep -q 'AGENT_VERSION_NUMBER_FILE=' "$AGENT"
+grep -q 'not newer than the installed version' "$AGENT"
 grep -q 'signature_algorithm' "$AGENT"
 grep -q 'openssl pkeyutl -verify' "$AGENT"
 grep -q 'CONTROLLER_URL=' "$AGENT"
@@ -54,6 +56,10 @@ fi
 grep -q 'join_csv()' "$AGENT"
 grep -q 'decode_base64()' "$AGENT"
 grep -q 'decode_base64()' "$SCRIPT_DIR/99-nerve-center-bootstrap"
+if grep -Eq '^[[:space:]]*(apk|opkg)[[:space:]]+(update|install|add|del|remove)' "$AGENT"; then
+    echo "agent must not mutate the package database at runtime" >&2
+    exit 1
+fi
 grep -q '^CONTROLLER_URL="https://' "$SCRIPT_DIR/99-nerve-center-bootstrap"
 grep -q '^REQUIRE_TLS="true"$' "$SCRIPT_DIR/99-nerve-center-bootstrap"
 grep -q '^ROOT_PASSWORD=""' "$SCRIPT_DIR/99-nerve-center-bootstrap"

@@ -333,6 +333,7 @@ func createTenantTables(schema string) error {
 	CREATE TABLE IF NOT EXISTS agent_versions (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		version_hash VARCHAR(64) UNIQUE NOT NULL,
+		version_number BIGINT NOT NULL DEFAULT 0,
 		script_content TEXT NOT NULL,
 		is_active BOOLEAN DEFAULT false,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -702,6 +703,7 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.rollout_runs ADD COLUMN IF NOT EXISTS worker_token UUID", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.rollout_runs ADD COLUMN IF NOT EXISTS worker_lease_until TIMESTAMP WITH TIME ZONE", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.rollout_runs ADD COLUMN IF NOT EXISTS worker_cursor INT NOT NULL DEFAULT 0", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.agent_versions ADD COLUMN IF NOT EXISTS version_number BIGINT NOT NULL DEFAULT 0", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted BOOLEAN NOT NULL DEFAULT false", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted_label VARCHAR(255) DEFAULT ''", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted_reason TEXT DEFAULT ''", quotedSchema),
