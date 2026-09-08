@@ -499,6 +499,16 @@ func TestSyncFleetRequiresAnImmutableDraft(t *testing.T) {
 	}
 }
 
+func TestPreviewSyncRejectsUnsafeNamespaceBeforeDatabaseAccess(t *testing.T) {
+	request := httptest.NewRequest("POST", "/api/sites/site-1/orchestrator/preview?namespace=network", nil)
+	request.SetPathValue("site_id", "site-1")
+	recorder := httptest.NewRecorder()
+	PreviewSyncHandler(recorder, request)
+	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "not supported") {
+		t.Fatalf("status=%d body=%q, want early unsupported namespace rejection", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestMarkRolloutDevicesRunningDoesNotUseRolloutSequence(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

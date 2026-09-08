@@ -882,6 +882,13 @@ func PutDeviceRoleHandler(w http.ResponseWriter, r *http.Request) {
 func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	username := GetUsernameFromReq(r)
+	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
+	if namespace != "" {
+		if _, err := requestedChangeSetNamespaces(namespace); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
+	}
 
 	sc, err := services.GetSiteConfig(r.Context(), siteID)
 	if err != nil {
@@ -897,13 +904,6 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetDeviceID := r.URL.Query().Get("target_device_id")
-	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
-	if namespace != "" {
-		if _, err := requestedChangeSetNamespaces(namespace); err != nil {
-			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
-			return
-		}
-	}
 	devs, err = selectRolloutDevices(devs, targetDeviceID)
 	if err != nil {
 		http.Error(w, `{"error":"target device not found in site"}`, http.StatusBadRequest)
