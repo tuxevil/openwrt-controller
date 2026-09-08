@@ -85,6 +85,10 @@ func (w Worker) reconcile(ctx context.Context, leaseDuration time.Duration, logg
 			logger.Warn("rollout worker could not claim rollout", "schema", schema, "err", boundedDiagnostic(err.Error()))
 			continue
 		}
+		if err := database.InsertAuditLogContext(ctx, "rollout-worker", "ROLLOUT_WORKER_CLAIM", "ROLLOUT", lease.RolloutID,
+			"claimed durable rollout for reconciliation", ""); err != nil {
+			logger.Warn("rollout worker could not audit claim", "rollout_id", lease.RolloutID, "err", boundedDiagnostic(err.Error()))
+		}
 		go w.reconcileLease(ctx, schema, lease, leaseDuration, logger)
 	}
 }
@@ -109,7 +113,7 @@ func (w Worker) reconcileLease(ctx context.Context, schema string, lease databas
 			}
 			lease.Cursor = progress.TerminalCount
 		}
-		if lease.Cursor > 0 && progress.FailureCount == 0 {
+		if canAdvancePhase(lease, progress) {
 			if err := w.queueNextPhase(ctx, schema, lease, progress); err != nil {
 				logger.Warn("rollout worker could not queue next phase", "rollout_id", lease.RolloutID, "err", boundedDiagnostic(err.Error()))
 				return
@@ -128,6 +132,10 @@ func (w Worker) reconcileLease(ctx context.Context, schema string, lease databas
 			}
 		}
 	}
+}
+
+func canAdvancePhase(lease database.RolloutLease, progress database.RolloutProgress) bool {
+	return lease.Cursor > 0 && progress.FailureCount == 0
 }
 
 func boundedDiagnostic(value string) string {
