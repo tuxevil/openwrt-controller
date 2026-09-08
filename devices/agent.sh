@@ -115,6 +115,13 @@ transaction_valid_config() {
     return 1
 }
 
+change_set_valid_config() {
+    case "$1" in
+        system|dhcp|firewall|dropbear|sqm) return 0 ;;
+    esac
+    return 1
+}
+
 transaction_identity_matches() {
     local transaction_path="$1"
     local transaction_config="$2"
@@ -497,6 +504,69 @@ transaction_publish_change_set_status() {
     change_set_status_write "$transaction_id" "$change_set_device_id" "$change_set_plan_hash" "$change_set_generation" "$transaction_state" "$change_set_failure"
 }
 
+change_set_transaction_begin() {
+    local transaction_id="$1"
+    local namespaces="$2"
+    local transaction_path namespace transaction_tmp
+    transaction_valid_id "$transaction_id" || return 1
+    mkdir -p "$NERVE_TRANSACTION_ROOT" || return 1
+    transaction_path=$(transaction_dir "$transaction_id")
+    mkdir -p "$transaction_path" || return 1
+    chmod 700 "$transaction_path" 2>/dev/null || return 1
+    transaction_write_atomic "$transaction_path/change_set_namespaces" "$namespaces" || return 1
+    transaction_write_atomic "$transaction_path/config" changeset || return 1
+    while IFS= read -r namespace; do
+        [ -n "$namespace" ] || continue
+        change_set_valid_config "$namespace" || return 1
+        if [ -f "$NERVE_CONFIG_ROOT/$namespace" ]; then
+            transaction_tmp="$transaction_path/backup_${namespace}.$$"
+            cp "$NERVE_CONFIG_ROOT/$namespace" "$transaction_tmp" || return 1
+            chmod 600 "$transaction_tmp" 2>/dev/null || return 1
+            mv "$transaction_tmp" "$transaction_path/backup_$namespace" || return 1
+            transaction_write_atomic "$transaction_path/backup_exists_$namespace" 1 || return 1
+        else
+            transaction_write_atomic "$transaction_path/backup_exists_$namespace" 0 || return 1
+        fi
+    done <<EOF
+$namespaces
+EOF
+    transaction_write_atomic "$transaction_path/state" APPLYING || return 1
+    transaction_write_atomic "$NERVE_TRANSACTION_ROOT/active" "$transaction_id" || return 1
+}
+
+change_set_recover_snapshots() {
+    local transaction_path="$1"
+    local transaction_id="${transaction_path##*/}"
+    local namespaces namespace transaction_tmp
+    namespaces=$(cat "$transaction_path/change_set_namespaces" 2>/dev/null || true)
+    [ -n "$namespaces" ] || return 1
+    transaction_write_atomic "$transaction_path/state" ROLLING_BACK || return 1
+    while IFS= read -r namespace; do
+        [ -n "$namespace" ] || continue
+        change_set_valid_config "$namespace" || return 1
+        if [ "$(cat "$transaction_path/backup_exists_$namespace" 2>/dev/null || true)" = 1 ]; then
+            transaction_tmp="$NERVE_CONFIG_ROOT/$namespace.$$"
+            cp "$transaction_path/backup_$namespace" "$transaction_tmp" || return 1
+            mv "$transaction_tmp" "$NERVE_CONFIG_ROOT/$namespace" || return 1
+        else
+            rm -f "$NERVE_CONFIG_ROOT/$namespace" || return 1
+        fi
+        if command -v uci >/dev/null 2>&1; then
+            uci revert "$namespace" 2>/dev/null || return 1
+            uci commit "$namespace" || return 1
+        fi
+        transaction_restart_config "$namespace" || return 1
+    done <<EOF
+$namespaces
+EOF
+    transaction_write_atomic "$transaction_path/state" RESTORED || return 1
+    if [ "$(cat "$NERVE_TRANSACTION_ROOT/active" 2>/dev/null || true)" = "$transaction_id" ]; then
+        rm -f "$NERVE_TRANSACTION_ROOT/active" || return 1
+    fi
+    rm -f "$transaction_path"/backup_* "$transaction_path/change_set_namespaces" || return 1
+    transaction_write_atomic "$NERVE_TRANSACTION_ROOT/last" "$transaction_id" || return 1
+}
+
 change_set_reject() {
     local rejection_reason="$1"
     change_set_status_write "$change_set_id" "$change_set_device_id" "$change_set_plan_hash" "$change_set_generation" REJECTED "$rejection_reason" || true
@@ -511,6 +581,27 @@ change_set_content_plan_hash() {
         "$change_set_commands" "$change_set_observed_hash" "$change_set_health_checks" | sha256sum | awk '{print $1}'
 }
 
+change_set_content_plan_hash_multi() {
+    local change_set_operations="$1"
+    local change_set_health_checks="$2"
+    local change_set_policy="$3"
+    printf '{"operations":%s,"health_checks":%s,"confirmation_policy":"%s"}' \
+        "$change_set_operations" "$change_set_health_checks" "$change_set_policy" | sha256sum | awk '{print $1}'
+}
+
+change_set_transaction_identity_matches_multi() {
+    local transaction_path="$1"
+    local expected_id="$2" expected_device="$3" expected_hash="$4" expected_generation="$5"
+    local expected_operations="$6" expected_health_checks="$7" expected_policy="$8"
+    [ "$(cat "$transaction_path/change_set_plan_hash" 2>/dev/null || true)" = "$expected_hash" ] || return 1
+    [ "$(cat "$transaction_path/change_set_generation" 2>/dev/null || true)" = "$expected_generation" ] || return 1
+    [ "$(cat "$transaction_path/change_set_id" 2>/dev/null || true)" = "$expected_id" ] || return 1
+    [ "$(cat "$transaction_path/change_set_device_id" 2>/dev/null || true)" = "$expected_device" ] || return 1
+    [ "$(cat "$transaction_path/change_set_operations" 2>/dev/null || true)" = "$expected_operations" ] || return 1
+    [ "$(cat "$transaction_path/change_set_health_checks" 2>/dev/null || true)" = "$expected_health_checks" ] || return 1
+    [ "$(cat "$transaction_path/change_set_confirmation_policy" 2>/dev/null || true)" = "$expected_policy" ] || return 1
+}
+
 transaction_recover_one() {
     local transaction_id="$1"
     local transaction_path transaction_state transaction_config transaction_tmp manifest_file
@@ -522,7 +613,7 @@ transaction_recover_one() {
 
     transaction_path=$(transaction_dir "$transaction_id")
     transaction_is_change_set=0
-    [ -f "$transaction_path/change_set_device_id" ] && transaction_is_change_set=1
+    [ -f "$transaction_path/change_set_device_id" ] || [ -f "$transaction_path/change_set_namespaces" ] && transaction_is_change_set=1
     if [ "$transaction_is_change_set" -eq 1 ]; then
         for manifest_file in change_set_id change_set_plan_hash change_set_generation change_set_operation_id change_set_commands change_set_observed_state_hash change_set_health_checks change_set_confirmation_policy; do
             if [ ! -s "$transaction_path/$manifest_file" ]; then
@@ -568,6 +659,17 @@ transaction_recover_one() {
             return 1
             ;;
     esac
+
+    if [ "$transaction_is_change_set" -eq 1 ] && [ -f "$transaction_path/change_set_namespaces" ]; then
+        if change_set_recover_snapshots "$transaction_path"; then
+            if [ "$transaction_is_change_set" -eq 1 ]; then
+                transaction_publish_change_set_status "$transaction_id" || return 1
+            fi
+            return 0
+        fi
+        transaction_mark_change_set_recovery_required "$transaction_path" "transaction recovery failed" || true
+        return 1
+    fi
 
     transaction_config=$(cat "$transaction_path/config" 2>/dev/null || true)
     if ! transaction_valid_config "$transaction_config"; then
@@ -1313,7 +1415,7 @@ apply_pending_operation() {
     return 0
 }
 
-apply_pending_change_set() {
+apply_pending_change_set_single() {
     local change_set_json="$1"
     local change_set_id change_set_device_id change_set_plan_hash change_set_generation
     local change_set_policy operation_count operation_json operation_commands operation_health_checks operation_health_checks_hash operation_id
@@ -1492,6 +1594,130 @@ apply_pending_change_set() {
     [ -n "$failure_detail" ] || failure_detail="changeset execution failed"
     change_set_status_write "$change_set_id" "$change_set_device_id" "$change_set_plan_hash" "$change_set_generation" "$failure_state" "$failure_detail" || true
     return 1
+}
+
+apply_pending_change_set() {
+    local change_set_json="$1"
+    local operation_count operation_config
+    operation_count=$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
+    operation_config=$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations[0].config' 2>/dev/null)
+    if [ "$operation_count" -eq 1 ] && [ "$operation_config" = system ]; then
+        apply_pending_change_set_single "$change_set_json"
+        return $?
+    fi
+    apply_pending_change_set_multi "$change_set_json"
+}
+
+apply_pending_change_set_multi() {
+    local change_set_json="$1" change_set_id change_set_device_id change_set_plan_hash
+    local change_set_generation change_set_policy operation_count operation_index
+    local operation_id operation_config operation_commands operation_observed operation_json
+    local operation_health_checks operation_state_hash namespace namespaces=""
+    local operation_action command_config section option value observed_state_hash
+    local transaction_path transaction_state failure_detail health_checks health_target_count
+    local order namespace_seen
+
+    change_set_id=$(printf '%s' "$change_set_json" | jsonfilter -e '@.change_set_id' 2>/dev/null)
+    change_set_device_id=$(printf '%s' "$change_set_json" | jsonfilter -e '@.device_id' 2>/dev/null)
+    change_set_plan_hash=$(printf '%s' "$change_set_json" | jsonfilter -e '@.plan_hash' 2>/dev/null)
+    change_set_generation=$(printf '%s' "$change_set_json" | jsonfilter -e '@.generation' 2>/dev/null)
+    change_set_policy=$(printf '%s' "$change_set_json" | jsonfilter -e '@.confirmation_policy' 2>/dev/null)
+    operation_count=$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations[@]' 2>/dev/null | wc -l 2>/dev/null || echo 0)
+    health_checks=$(printf '%s' "$change_set_json" | jsonfilter -e '@.health_checks' 2>/dev/null)
+    case "$health_checks" in ''|null) health_checks="[]" ;; \[*\]) ;; *) change_set_reject "invalid changeset health check list"; return 1 ;; esac
+    transaction_valid_id "$change_set_id" || return 1
+    change_set_valid_device_id "$change_set_device_id" || return 1
+    transaction_valid_plan_hash "$change_set_plan_hash" || return 1
+    transaction_valid_generation "$change_set_generation" || return 1
+    [ "$change_set_generation" -gt 0 ] 2>/dev/null || return 1
+    [ "$change_set_policy" = local_auto ] || { change_set_reject "unsupported changeset confirmation policy"; return 1; }
+    [ "$operation_count" -gt 0 ] || { change_set_reject "changeset must contain an operation"; return 1; }
+    [ "$(printf '%s' "$change_set_device_id" | tr '[:lower:]' '[:upper:]')" = "$(printf '%s' "$DEVICE_ID" | tr '[:lower:]' '[:upper:]')" ] || { change_set_reject "changeset device identity mismatch"; return 1; }
+
+    # Validate every operation and every observed-state precondition before UCI is touched.
+    for operation_index in $(seq 0 $((operation_count - 1))); do
+        operation_id=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].operation_id" 2>/dev/null)
+        operation_config=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].config" 2>/dev/null)
+        operation_commands=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].commands" 2>/dev/null)
+        operation_observed=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].observed_state_hash" 2>/dev/null)
+        operation_health_checks=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].health_checks" 2>/dev/null)
+        case "$operation_health_checks" in ''|null) operation_health_checks="[]" ;; \[*\]) ;; *) change_set_reject "invalid operation health check list"; return 1 ;; esac
+        transaction_valid_id "$operation_id" || { change_set_reject "invalid changeset operation identity"; return 1; }
+        change_set_valid_config "$operation_config" || { change_set_reject "unsupported changeset namespace"; return 1; }
+        case "$operation_commands" in \[*\]) ;; *) change_set_reject "invalid changeset command list"; return 1 ;; esac
+        transaction_valid_plan_hash "$operation_observed" || { change_set_reject "invalid observed state hash"; return 1; }
+        operation_json=$(printf '{"operation_id":"%s","plan_hash":"%s","generation":%s,"config":"%s","commands":%s,"health_checks":%s,"auto_confirm":true,"observed_state_hash":"%s"}' "$operation_id" "$change_set_plan_hash" "$change_set_generation" "$operation_config" "$operation_commands" "$operation_health_checks" "$operation_observed")
+        operation_validate_payload "$operation_json" || { change_set_reject "invalid changeset command or health check"; return 1; }
+        observed_state_hash=$(uci show "$operation_config" 2>&1 | sha256sum | awk '{print $1}')
+        [ "$observed_state_hash" = "$operation_observed" ] || { change_set_reject "observed state precondition failed"; return 1; }
+        case " $namespaces " in *" $operation_config "*) ;; *) namespaces=$(printf '%s\n%s' "$namespaces" "$operation_config") ;; esac
+    done
+
+    # Namespace order is explicit and stable, independent of delivery order.
+    namespaces=$(printf '%s' "$namespaces" | awk 'NF' | sort -u)
+    transaction_path=$(transaction_dir "$change_set_id")
+    transaction_state=$(cat "$transaction_path/state" 2>/dev/null || true)
+    if [ "$transaction_state" = COMMITTED ] || [ "$transaction_state" = RESTORED ]; then
+        change_set_transaction_identity_matches_multi "$transaction_path" "$change_set_id" "$change_set_device_id" "$change_set_plan_hash" "$change_set_generation" \
+            "$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations')" "$health_checks" "$change_set_policy" || return 1
+        return 0
+    fi
+    [ "$transaction_state" != RECOVERY_REQUIRED ] || return 1
+    if ! change_set_generation_allowed "$change_set_id" "$change_set_generation"; then
+        change_set_reject "changeset generation is stale or device requires recovery"; return 1
+    fi
+    if ! change_set_transaction_begin "$change_set_id" "$namespaces"; then
+        change_set_reject "changeset journal snapshot failed"; return 1
+    fi
+    transaction_path=$(transaction_dir "$change_set_id")
+    operation_id=$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations[0].operation_id' 2>/dev/null)
+    operation_commands=$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations[0].commands' 2>/dev/null)
+    operation_observed=$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations[0].observed_state_hash' 2>/dev/null)
+    transaction_write_atomic "$transaction_path/change_set_id" "$change_set_id" || return 1
+    transaction_write_atomic "$transaction_path/change_set_device_id" "$change_set_device_id" || return 1
+    transaction_write_atomic "$transaction_path/change_set_plan_hash" "$change_set_plan_hash" || return 1
+    transaction_write_atomic "$transaction_path/change_set_generation" "$change_set_generation" || return 1
+    transaction_write_atomic "$transaction_path/change_set_operation_id" "$operation_id" || return 1
+    transaction_write_atomic "$transaction_path/change_set_commands" "$operation_commands" || return 1
+    transaction_write_atomic "$transaction_path/change_set_observed_state_hash" "$operation_observed" || return 1
+    transaction_write_atomic "$transaction_path/change_set_operations" "$(printf '%s' "$change_set_json" | jsonfilter -e '@.operations')" || return 1
+    transaction_write_atomic "$transaction_path/change_set_health_checks" "$health_checks" || return 1
+    transaction_write_atomic "$transaction_path/change_set_confirmation_policy" "$change_set_policy" || return 1
+    change_set_status_write "$change_set_id" "$change_set_device_id" "$change_set_plan_hash" "$change_set_generation" PREPARED || return 1
+    change_set_status_write "$change_set_id" "$change_set_device_id" "$change_set_plan_hash" "$change_set_generation" APPLYING || return 1
+
+    for order in system dhcp firewall dropbear sqm; do
+        operation_index=0
+        while [ "$operation_index" -lt "$operation_count" ]; do
+            operation_config=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].config" 2>/dev/null)
+            if [ "$operation_config" = "$order" ]; then
+                operation_commands=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].commands" 2>/dev/null)
+                operation_id=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].operation_id" 2>/dev/null)
+                command_count=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].commands[@]" 2>/dev/null | wc -l 2>/dev/null || echo 0)
+                command_index=0
+                while [ "$command_index" -lt "$command_count" ]; do
+                    operation_action=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].commands[$command_index].action" 2>/dev/null)
+                    section=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].commands[$command_index].section" 2>/dev/null)
+                    option=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].commands[$command_index].option" 2>/dev/null)
+                    value=$(printf '%s' "$change_set_json" | jsonfilter -e "@.operations[$operation_index].commands[$command_index].value" 2>/dev/null)
+                    operation_apply_command "$operation_action" "$operation_config" "$section" "$option" "$value" || { failure_detail="changeset mutation failed"; break 3; }
+                    command_index=$((command_index + 1))
+                done
+                uci commit "$operation_config" || { failure_detail="changeset commit failed"; break 3; }
+            fi
+            operation_index=$((operation_index + 1))
+        done
+    done
+    [ -z "${failure_detail:-}" ] || { transaction_recover_pending || true; return 1; }
+    for namespace in $namespaces; do
+        transaction_restart_config "$namespace" || { transaction_recover_pending || true; return 1; }
+        uci show "$namespace" >/dev/null 2>&1 || { transaction_recover_pending || true; return 1; }
+    done
+    operation_health_check "$(printf '{"health_checks":%s}' "$health_checks")" system || { transaction_recover_pending || true; return 1; }
+    transaction_write_atomic "$transaction_path/state" COMMITTED || return 1
+    rm -f "$NERVE_TRANSACTION_ROOT/active"
+    transaction_write_atomic "$NERVE_TRANSACTION_ROOT/last" "$change_set_id" || return 1
+    change_set_status_write "$change_set_id" "$change_set_device_id" "$change_set_plan_hash" "$change_set_generation" COMMITTED || return 1
 }
 
 # logd is a local dependency, not part of the telemetry heartbeat. On some
@@ -1678,7 +1904,7 @@ bootstrap_agent() {
 
     enrollment_arch=$(uname -m 2>/dev/null | sed 's/[^A-Za-z0-9._-]/_/g')
     enrollment_kernel=$(uname -r 2>/dev/null | sed 's/[^A-Za-z0-9._-]/_/g')
-    enrollment_payload=$(printf '{"device_id":"%s","nonce":"%s","capabilities":{"device_change_set":{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]},"architecture":"%s","kernel":"%s"}}' \
+    enrollment_payload=$(printf '{"device_id":"%s","nonce":"%s","capabilities":{"device_change_set":{"version":1,"namespaces":["system","dhcp","firewall","dropbear","sqm"],"max_operations":8,"confirmation_policies":["local_auto"]},"architecture":"%s","kernel":"%s"}}' \
         "$DEVICE_ID" "$enrollment_nonce" "$enrollment_arch" "$enrollment_kernel")
     enrollment_response_file="/tmp/nerve-enrollment-response.$$"
     enrollment_http_code=$(controller_curl -m 10 -sS -X POST \
@@ -2035,7 +2261,7 @@ while true; do
     "timestamp": $(date +%s),
     "board": $BOARD,
     "system": $SYS_INFO,
-    "capabilities": {"device_change_set":{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]},"openwrt_release":"$CAP_RELEASE","architecture":"$CAP_ARCH","kernel":"$CAP_KERNEL","ram_mb":${CAP_RAM_MB:-0},"flash_mb":${CAP_FLASH_MB:-0},"interfaces":[${CAP_INTERFACES}],"radios":[${CAP_RADIOS}],"wifi_device_sections":[${CAP_WIFI_DEVICES}],"wifi_iface_sections":[${CAP_WIFI_IFACES}],"logical_networks":{${CAP_LOGICAL_NETWORKS}},"sqm_candidates":[${CAP_SQM_CANDIDATES}],"switch_stack":"$CAP_SWITCH","firewall":"$CAP_FIREWALL","packages":[${CAP_PACKAGES}]},
+    "capabilities": {"device_change_set":{"version":2,"namespaces":["system","dhcp","firewall","dropbear","sqm"],"max_operations":8,"confirmation_policies":["local_auto"]},"openwrt_release":"$CAP_RELEASE","architecture":"$CAP_ARCH","kernel":"$CAP_KERNEL","ram_mb":${CAP_RAM_MB:-0},"flash_mb":${CAP_FLASH_MB:-0},"interfaces":[${CAP_INTERFACES}],"radios":[${CAP_RADIOS}],"wifi_device_sections":[${CAP_WIFI_DEVICES}],"wifi_iface_sections":[${CAP_WIFI_IFACES}],"logical_networks":{${CAP_LOGICAL_NETWORKS}},"sqm_candidates":[${CAP_SQM_CANDIDATES}],"switch_stack":"$CAP_SWITCH","firewall":"$CAP_FIREWALL","packages":[${CAP_PACKAGES}]},
     "wireless_stations": $WIFI_DATA,
     "top_talkers": $TOP_TALKERS,
     "iface_stats": $IFACE_STATS,

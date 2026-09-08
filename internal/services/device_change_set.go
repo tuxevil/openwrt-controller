@@ -15,9 +15,7 @@ import (
 const ConfirmationLocalAuto = "local_auto"
 
 // DeviceChangeSet is the typed, device-delivered unit for a coordinated
-// configuration change. The first version intentionally carries one safe
-// namespace; later versions can add ordered operations without changing the
-// delivery envelope.
+// configuration change. Operations are ordered and share one device generation.
 type DeviceChangeSet struct {
 	ChangeSetID        string                  `json:"change_set_id"`
 	DeviceID           string                  `json:"device_id"`
@@ -94,8 +92,8 @@ func newDeviceChangeSetWithIDs(operationID, changeSetID, deviceID, config string
 	return changeSet, nil
 }
 
-// ValidateDeviceChangeSet accepts only the safe single-namespace contract
-// delivered in this slice. Multi-namespace execution is a later contract.
+// ValidateDeviceChangeSet accepts the safe multi-namespace contract. Network
+// and wireless remain outside this mutation path until controller confirmation.
 func ValidateDeviceChangeSet(changeSet DeviceChangeSet) error {
 	if !validDeviceChangeSetID(changeSet.ChangeSetID) || !validDeviceOperationPlanHash(changeSet.PlanHash) {
 		return fmt.Errorf("invalid device change set identity")
@@ -109,26 +107,41 @@ func ValidateDeviceChangeSet(changeSet DeviceChangeSet) error {
 	if changeSet.ConfirmationPolicy != ConfirmationLocalAuto {
 		return fmt.Errorf("unsupported device change set confirmation policy")
 	}
-	if len(changeSet.Operations) != 1 {
-		return fmt.Errorf("device change set must contain exactly one operation")
+	if len(changeSet.Operations) == 0 || len(changeSet.Operations) > 8 {
+		return fmt.Errorf("device change set must contain between one and eight operations")
 	}
 	if _, err := ValidateHealthTargets(changeSet.HealthChecks); err != nil {
 		return err
 	}
-	operation := changeSet.Operations[0]
-	if !validDeviceOperationID(operation.OperationID) || operation.Config != "system" {
-		return fmt.Errorf("unsupported device change set namespace")
-	}
-	if !validDeviceOperationPlanHash(operation.ObservedStateHash) {
-		return fmt.Errorf("invalid observed state hash")
-	}
-	if err := ValidateDeviceOperation(operation.Config, operation.Commands, changeSet.HealthChecks); err != nil {
-		return err
+	seenConfigs := make(map[string]bool, len(changeSet.Operations))
+	for _, operation := range changeSet.Operations {
+		if !validDeviceOperationID(operation.OperationID) || !deviceChangeSetConfigAllowed(operation.Config) {
+			return fmt.Errorf("unsupported device change set namespace")
+		}
+		if seenConfigs[operation.Config] {
+			return fmt.Errorf("device change set contains duplicate namespace %s", operation.Config)
+		}
+		seenConfigs[operation.Config] = true
+		if !validDeviceOperationPlanHash(operation.ObservedStateHash) {
+			return fmt.Errorf("invalid observed state hash")
+		}
+		if err := ValidateDeviceOperation(operation.Config, operation.Commands, changeSet.HealthChecks); err != nil {
+			return err
+		}
 	}
 	if deviceChangeSetPlanHash(changeSet) != changeSet.PlanHash {
 		return fmt.Errorf("device change set plan hash does not match content")
 	}
 	return nil
+}
+
+func deviceChangeSetConfigAllowed(config string) bool {
+	switch config {
+	case "system", "dhcp", "firewall", "dropbear", "sqm":
+		return true
+	default:
+		return false
+	}
 }
 
 func deviceChangeSetPlanHash(changeSet DeviceChangeSet) string {

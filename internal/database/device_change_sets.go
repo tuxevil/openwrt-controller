@@ -74,7 +74,16 @@ var (
 	deviceChangeSetHealthPattern  = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}$`)
 )
 
-const deviceChangeSetCapabilityContract = `{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]}`
+const deviceChangeSetCapabilityContract = `{"version":2,"namespaces":["system","dhcp","firewall","dropbear","sqm"],"max_operations":8,"confirmation_policies":["local_auto"]}`
+
+func deviceChangeSetConfigAllowed(config string) bool {
+	switch config {
+	case "system", "dhcp", "firewall", "dropbear", "sqm":
+		return true
+	default:
+		return false
+	}
+}
 
 func parseDeviceChangeSet(raw json.RawMessage, status bool) (deviceChangeSetIdentity, error) {
 	var envelope deviceChangeSetEnvelope
@@ -103,20 +112,25 @@ func parseDeviceChangeSet(raw json.RawMessage, status bool) (deviceChangeSetIden
 	if envelope.Generation != nil && *envelope.Generation == 0 {
 		return deviceChangeSetIdentity{}, fmt.Errorf("invalid device change set generation")
 	}
-	if envelope.ConfirmationPolicy != "local_auto" || len(envelope.Operations) != 1 {
+	if envelope.ConfirmationPolicy != "local_auto" || len(envelope.Operations) == 0 || len(envelope.Operations) > 8 {
 		return deviceChangeSetIdentity{}, fmt.Errorf("unsupported device change set")
 	}
-	operation := envelope.Operations[0]
-	if !validDeviceOperationID(operation.OperationID) || operation.Config != "system" ||
-		!validDeviceOperationPlanHash(operation.ObservedStateHash) || len(operation.Commands) == 0 {
-		return deviceChangeSetIdentity{}, fmt.Errorf("unsupported device change set operation")
+	seenConfigs := make(map[string]bool, len(envelope.Operations))
+	for _, operation := range envelope.Operations {
+		if !validDeviceOperationID(operation.OperationID) || !deviceChangeSetConfigAllowed(operation.Config) ||
+			seenConfigs[operation.Config] || !validDeviceOperationPlanHash(operation.ObservedStateHash) || len(operation.Commands) == 0 {
+			return deviceChangeSetIdentity{}, fmt.Errorf("unsupported device change set operation")
+		}
+		seenConfigs[operation.Config] = true
 	}
 	if !validDeviceChangeSetHealthChecks(envelope.HealthChecks) {
 		return deviceChangeSetIdentity{}, fmt.Errorf("invalid device change set health checks")
 	}
-	for _, command := range operation.Commands {
-		if !validDeviceChangeSetCommand(command) {
-			return deviceChangeSetIdentity{}, fmt.Errorf("invalid device change set command")
+	for _, operation := range envelope.Operations {
+		for _, command := range operation.Commands {
+			if !validDeviceChangeSetCommand(command) {
+				return deviceChangeSetIdentity{}, fmt.Errorf("invalid device change set command")
+			}
 		}
 	}
 	if deviceChangeSetPlanHash(envelope) != envelope.PlanHash {
@@ -141,7 +155,7 @@ func validDeviceChangeSetHealthChecks(targets []string) bool {
 }
 
 func validDeviceChangeSetCommand(command deviceChangeSetCommand) bool {
-	if command.Config != "system" {
+	if !deviceChangeSetConfigAllowed(command.Config) {
 		return false
 	}
 	switch command.Action {
@@ -283,6 +297,7 @@ func queueDeviceChangeSet(ctx context.Context, schema, ownerSiteID, ownerRole, d
 		   %s
 		   AND COALESCE(device.capabilities->'device_change_set' = '%s'::jsonb, false)
 		   AND COALESCE(device.capabilities->'device_change_set' @> '%s'::jsonb, false)
+		   AND COALESCE(device.capabilities->'device_change_set' @> '{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]}'::jsonb, false) IS NOT NULL
 		   AND device.pending_operation IS NULL
 		   AND device.pending_change_set IS NULL
 		   AND COALESCE(device.last_operation->>'state', '') <> 'RECOVERY_REQUIRED'

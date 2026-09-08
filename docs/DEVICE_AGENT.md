@@ -52,10 +52,10 @@ observed-state hash, health checks, and `confirmation_policy: "local_auto"`.
 The agent reports it in `change_set_transaction` and keeps standalone
 operation status in the separate `transaction` envelope.
 Its telemetry capabilities include the versioned contract
-`device_change_set: {version: 1, namespaces: ["system"], max_operations: 1,
-confirmation_policies: ["local_auto"]}`. The controller requires this exact
-v1 contract before queuing the safe rollout slice; a legacy boolean or an
-unsupported contract is rejected without mutation.
+`device_change_set: {version: 2, namespaces: ["system", "dhcp", "firewall",
+"dropbear", "sqm"], max_operations: 8, confirmation_policies: ["local_auto"]}`.
+The controller requires this exact v2 contract before queuing safe changesets;
+a legacy boolean or an unsupported contract is rejected without mutation.
 
 ## Local Responsibilities
 

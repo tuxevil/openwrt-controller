@@ -8,6 +8,8 @@ ROOT=$(mktemp -d)
 trap 'rm -rf "$ROOT"' EXIT
 
 mkdir -p "$ROOT/etc/config"
+printf '%s\n' system-baseline > "$ROOT/etc/config/system"
+printf '%s\n' dhcp-baseline > "$ROOT/etc/config/dhcp"
 printf '%s\n' self-test-device > "$ROOT/device-id"
 printf '%s\n' 'system.@system[0].hostname=baseline' > "$ROOT/uci-state"
 
@@ -35,8 +37,43 @@ for manifest_file in change_set_id change_set_device_id change_set_plan_hash cha
 done
 test "$(cat "$ROOT/etc/nerve/transactions/self-change-set/change_set_operation_id")" = self-operation-entry
 
+# A changeset spanning two safe namespaces uses one journal and commits both.
+MULTI_SYSTEM_HASH=$(UCI_FIXTURE_STATE="$ROOT/uci-state" UCI_FIXTURE_LOG="$ROOT/uci.log" "$FIXTURE_DIR/uci" show system | sha256sum | awk '{print $1}')
+MULTI_DHCP_HASH=$(UCI_FIXTURE_STATE="$ROOT/uci-state" UCI_FIXTURE_LOG="$ROOT/uci.log" "$FIXTURE_DIR/uci" show dhcp | sha256sum | awk '{print $1}')
+MULTI_OPERATIONS=$(printf '[{"operation_id":"multi-system","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"multi-router"}],"observed_state_hash":"%s"},{"operation_id":"multi-dhcp","config":"dhcp","commands":[{"action":"set","config":"dhcp","section":"lan","option":"start","value":"100"}],"observed_state_hash":"%s"}]' "$MULTI_SYSTEM_HASH" "$MULTI_DHCP_HASH")
+MULTI_PLAN_HASH=$(printf '{"operations":%s,"health_checks":[],"confirmation_policy":"local_auto"}' "$MULTI_OPERATIONS" | sha256sum | awk '{print $1}')
+MULTI_CHANGE_SET=$(printf '{"change_set_id":"multi-change-set","device_id":"self-test-device","plan_hash":"%s","generation":43,"operations":%s,"health_checks":[],"confirmation_policy":"local_auto"}' "$MULTI_PLAN_HASH" "$MULTI_OPERATIONS")
+agent_self_test env SELF_TEST_CHANGE_SET_JSON="$MULTI_CHANGE_SET" sh "$AGENT" --self-test-change-set
+grep -q 'system.@system\[0\].hostname=multi-router' "$ROOT/uci-state"
+grep -q 'dhcp.lan.start=100' "$ROOT/uci-state"
+test -s "$ROOT/etc/nerve/transactions/multi-change-set/backup_system"
+test -s "$ROOT/etc/nerve/transactions/multi-change-set/backup_dhcp"
+
+# An invalid later operation must not mutate an earlier namespace.
+BEFORE_VALIDATION=$(grep -c '^set ' "$ROOT/uci.log")
+INVALID_MULTI=$(printf '{"change_set_id":"invalid-multi-change-set","device_id":"self-test-device","plan_hash":"%s","generation":44,"operations":[{"operation_id":"valid-first","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"must-not-apply"}],"observed_state_hash":"%s"},{"operation_id":"invalid-second","config":"network","commands":[{"action":"set","config":"network","section":"lan","option":"proto","value":"dhcp"}],"observed_state_hash":"%s"}],"health_checks":[],"confirmation_policy":"local_auto"}' "$MULTI_PLAN_HASH" "$MULTI_SYSTEM_HASH" "$MULTI_SYSTEM_HASH")
+if agent_self_test env SELF_TEST_CHANGE_SET_JSON="$INVALID_MULTI" sh "$AGENT" --self-test-change-set; then exit 1; fi
+test "$(grep -c '^set ' "$ROOT/uci.log")" = "$BEFORE_VALIDATION"
+
+# A failure after the first namespace commit restores both snapshots.
+cp "$ROOT/etc/config/system" "$ROOT/multi-before-system"
+cp "$ROOT/etc/config/dhcp" "$ROOT/multi-before-dhcp"
+ROLLBACK_SYSTEM_HASH=$(UCI_FIXTURE_STATE="$ROOT/uci-state" UCI_FIXTURE_LOG="$ROOT/uci.log" "$FIXTURE_DIR/uci" show system | sha256sum | awk '{print $1}')
+ROLLBACK_DHCP_HASH=$(UCI_FIXTURE_STATE="$ROOT/uci-state" UCI_FIXTURE_LOG="$ROOT/uci.log" "$FIXTURE_DIR/uci" show dhcp | sha256sum | awk '{print $1}')
+ROLLBACK_OPERATIONS=$(printf '[{"operation_id":"rollback-system","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"rollback-router"}],"observed_state_hash":"%s"},{"operation_id":"rollback-dhcp","config":"dhcp","commands":[{"action":"set","config":"dhcp","section":"lan","option":"start","value":"200"}],"observed_state_hash":"%s"}]' "$ROLLBACK_SYSTEM_HASH" "$ROLLBACK_DHCP_HASH")
+ROLLBACK_PLAN_HASH=$(printf '{"operations":%s,"health_checks":[],"confirmation_policy":"local_auto"}' "$ROLLBACK_OPERATIONS" | sha256sum | awk '{print $1}')
+ROLLBACK_CHANGE_SET=$(printf '{"change_set_id":"rollback-change-set","device_id":"self-test-device","plan_hash":"%s","generation":45,"operations":%s,"health_checks":[],"confirmation_policy":"local_auto"}' "$ROLLBACK_PLAN_HASH" "$ROLLBACK_OPERATIONS")
+if agent_self_test env UCI_FIXTURE_FAIL_COMMIT_ONCE_CONFIG=dhcp SELF_TEST_CHANGE_SET_JSON="$ROLLBACK_CHANGE_SET" sh "$AGENT" --self-test-change-set; then exit 1; fi
+test "$(cat "$ROOT/etc/nerve/transactions/rollback-change-set/state")" = RESTORED
+cmp "$ROOT/etc/config/system" "$ROOT/multi-before-system"
+cmp "$ROOT/etc/config/dhcp" "$ROOT/multi-before-dhcp"
+
+# Keep the legacy assertions isolated from the focused multi-namespace fixture.
+rm -rf "$ROOT/etc/nerve/transactions/multi-change-set" "$ROOT/etc/nerve/transactions/rollback-change-set"
+printf '%s\n' '{"change_set_id":"self-change-set","device_id":"self-test-device","plan_hash":"'"$(cat "$ROOT/etc/nerve/transactions/self-change-set/change_set_plan_hash")"'","generation":42,"state":"COMMITTED"}' > "$ROOT/etc/nerve/transactions/change_set_status"
+
 agent_self_test sh "$AGENT" --self-test-change-set
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 1
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 5
 test ! -e "$ROOT/etc/nerve/transactions/operation_status"
 
 SELF_PLAN_HASH=$(cat "$ROOT/etc/nerve/transactions/self-test-change-set.json" | PATH="$FIXTURE_DIR:$PATH" jsonfilter -e '@.plan_hash')
@@ -46,7 +83,7 @@ if agent_self_test env SELF_TEST_CHANGE_SET_JSON="$MALFORMED_HEALTH_CHANGE_SET" 
     echo "malformed health checks were accepted" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 1
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 5
 
 STALE_OBSERVED_HASH=$(UCI_FIXTURE_STATE="$ROOT/uci-state" UCI_FIXTURE_LOG="$ROOT/uci.log" "$FIXTURE_DIR/uci" show system | sha256sum | awk '{print $1}')
 STALE_PLAN_HASH=$(printf '{"operations":[{"config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"stale-router"}],"observed_state_hash":"%s"}],"health_checks":null,"confirmation_policy":"local_auto"}' "$STALE_OBSERVED_HASH" | sha256sum | awk '{print $1}')
@@ -55,31 +92,31 @@ if agent_self_test env SELF_TEST_CHANGE_SET_JSON="$STALE_CHANGE_SET" sh "$AGENT"
     echo "older changeset generation was accepted" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 1
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 5
 grep -q '"change_set_id":"self-change-set"' "$ROOT/etc/nerve/transactions/change_set_status"
 grep -q '"state":"COMMITTED"' "$ROOT/etc/nerve/transactions/change_set_status"
 
 printf '%s\n' "{\"change_set_id\":\"self-change-set\",\"device_id\":\"self-test-device\",\"plan_hash\":\"$SELF_PLAN_HASH\",\"generation\":42,\"state\":\"RESTORED\"}" > "$ROOT/etc/nerve/transactions/change_set_status"
 agent_self_test sh "$AGENT" --self-test-change-set
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 1
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 5
 printf '%s\n' COMMITTED > "$ROOT/etc/nerve/transactions/self-change-set/state"
 printf '%s\n' "{\"change_set_id\":\"self-change-set\",\"device_id\":\"self-test-device\",\"plan_hash\":\"$SELF_PLAN_HASH\",\"generation\":42,\"state\":\"REJECTED\"}" > "$ROOT/etc/nerve/transactions/change_set_status"
 agent_self_test sh "$AGENT" --self-test-change-set
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 1
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 5
 
 TERMINAL_REPLAY_CHANGE_SET=$(printf '{"change_set_id":"self-change-set","device_id":"other-device","plan_hash":"%s","generation":42,"operations":[{"operation_id":"self-operation-entry","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"replayed-device"}],"observed_state_hash":"%s"}],"confirmation_policy":"local_auto"}' "$SELF_PLAN_HASH" "$MALFORMED_OBSERVED_HASH")
 if agent_self_test env SELF_TEST_CHANGE_SET_JSON="$TERMINAL_REPLAY_CHANGE_SET" sh "$AGENT" --self-test-change-set; then
     echo "terminal changeset replay bypassed device identity validation" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 1
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 5
 
 TAMPERED_TERMINAL_CHANGE_SET=$(printf '{"change_set_id":"self-change-set","device_id":"self-test-device","plan_hash":"%s","generation":42,"operations":[{"operation_id":"self-operation-entry","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"replayed-content"}],"observed_state_hash":"%s"}],"confirmation_policy":"local_auto"}' "$SELF_PLAN_HASH" "$MALFORMED_OBSERVED_HASH")
 if agent_self_test env SELF_TEST_CHANGE_SET_JSON="$TAMPERED_TERMINAL_CHANGE_SET" sh "$AGENT" --self-test-change-set; then
     echo "terminal changeset replay bypassed content validation" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 1
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 5
 
 rm -f "$ROOT/etc/nerve/transactions/change_set_status"
 agent_self_test sh "$AGENT" --recover-transactions
@@ -100,15 +137,15 @@ if agent_self_test env SELF_TEST_CHANGE_SET_JSON='{"change_set_id":"stale-change
     echo "stale changeset was applied" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 2
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 6
 grep -q '"change_set_id":"stale-change-set"' "$ROOT/etc/nerve/transactions/change_set_status"
 grep -q '"state":"REJECTED"' "$ROOT/etc/nerve/transactions/change_set_status"
 
-if agent_self_test env SELF_TEST_CHANGE_SET_JSON='{"change_set_id":"unsupported-change-set","device_id":"self-test-device","plan_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","generation":44,"operations":[{"operation_id":"unsupported-entry","config":"dhcp","commands":[{"action":"set","config":"dhcp","section":"lan","option":"start","value":"100"}],"observed_state_hash":"0000000000000000000000000000000000000000000000000000000000000000"}],"confirmation_policy":"local_auto"}' sh "$AGENT" --self-test-change-set; then
+if agent_self_test env SELF_TEST_CHANGE_SET_JSON='{"change_set_id":"unsupported-change-set","device_id":"self-test-device","plan_hash":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc","generation":44,"operations":[{"operation_id":"unsupported-entry","config":"network","commands":[{"action":"set","config":"network","section":"lan","option":"proto","value":"dhcp"}],"observed_state_hash":"0000000000000000000000000000000000000000000000000000000000000000"}],"confirmation_policy":"local_auto"}' sh "$AGENT" --self-test-change-set; then
     echo "unsupported changeset namespace was applied" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 2
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 6
 grep -q '"change_set_id":"unsupported-change-set"' "$ROOT/etc/nerve/transactions/change_set_status"
 grep -q '"failure":"unsupported changeset namespace"' "$ROOT/etc/nerve/transactions/change_set_status"
 
@@ -147,13 +184,13 @@ if agent_self_test env SELF_TEST_CHANGE_SET_JSON="$RECOVERY_CHANGE_SET" sh "$AGE
     echo "changeset was accepted while recovery was required" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 3
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 7
 rm -f "$ROOT/etc/nerve/transactions/active"
 if agent_self_test env SELF_TEST_OPERATION_JSON='{"operation_id":"recovery-fenced-operation","plan_hash":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"must-not-apply"}],"auto_confirm":true}' sh "$AGENT" --self-test-operation; then
     echo "standalone operation bypassed recovery-required fence" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 3
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 7
 
 UNKNOWN_ROOT="$ROOT/unknown-transactions"
 mkdir -p "$UNKNOWN_ROOT/unknown-journal"
@@ -162,7 +199,7 @@ if TEST_TRANSACTION_ROOT="$UNKNOWN_ROOT" TEST_CONFIG_ROOT="$ROOT/unknown-config"
     echo "unknown journal state was accepted" >&2
     exit 1
 fi
-test "$(grep -c '^set ' "$ROOT/uci.log")" = 3
+test "$(grep -c '^set ' "$ROOT/uci.log")" = 7
 rm -rf "$UNKNOWN_ROOT"
 
 ORPHAN_PLAN_HASH=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef

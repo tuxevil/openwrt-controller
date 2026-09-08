@@ -57,6 +57,11 @@ if [ -n "${UCI_FIXTURE_STATE:-}" ]; then
             ;;
     commit)
         [ "${UCI_FIXTURE_FAIL_COMMIT:-0}" = "1" ] && exit 1
+        [ "${UCI_FIXTURE_FAIL_COMMIT_CONFIG:-}" = "${2:-}" ] && exit 1
+        if [ "${UCI_FIXTURE_FAIL_COMMIT_ONCE_CONFIG:-}" = "${2:-}" ] && [ ! -e "$UCI_FIXTURE_LOG.commit-failed" ]; then
+            : > "$UCI_FIXTURE_LOG.commit-failed"
+            exit 1
+        fi
         ;;
     revert|rename)
         ;;

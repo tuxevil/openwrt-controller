@@ -76,7 +76,7 @@ func TestDeviceChangeSetIntegrationQueuesAndPersistsTerminalStatus(t *testing.T)
 	deviceID := "device-1"
 	siteID := "00000000-0000-0000-0000-000000000001"
 	rolloutID := "00000000-0000-0000-0000-000000000002"
-	if _, err := database.DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id, device_role, capabilities) VALUES ($1, $2, 'AP', '{\"device_change_set\":{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}}')", quotedDevices), deviceID, siteID); err != nil {
+	if _, err := database.DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id, device_role, capabilities) VALUES ($1, $2, 'AP', '{\"device_change_set\":{\"version\":2,\"namespaces\":[\"system\",\"dhcp\",\"firewall\",\"dropbear\",\"sqm\"],\"max_operations\":8,\"confirmation_policies\":[\"local_auto\"]}}')", quotedDevices), deviceID, siteID); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
 	if _, err := database.DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id, status) VALUES ($1, $2, 'RUNNING')", quotedRollouts), rolloutID, siteID); err != nil {
@@ -169,9 +169,9 @@ func TestDeviceChangeSetIntegrationQueuesAndPersistsTerminalStatus(t *testing.T)
 		raw  string
 	}{
 		{name: "legacy boolean", raw: `{"device_change_set":true}`},
-		{name: "unsupported version", raw: `{"device_change_set":{"version":2,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]}}`},
-		{name: "unsupported namespace", raw: `{"device_change_set":{"version":1,"namespaces":["system","network"],"max_operations":1,"confirmation_policies":["local_auto"]}}`},
-		{name: "unsupported policy", raw: `{"device_change_set":{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["controller_confirm"]}}`},
+		{name: "unsupported version", raw: `{"device_change_set":{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]}}`},
+		{name: "unsupported namespace", raw: `{"device_change_set":{"version":2,"namespaces":["system","network"],"max_operations":8,"confirmation_policies":["local_auto"]}}`},
+		{name: "unsupported policy", raw: `{"device_change_set":{"version":2,"namespaces":["system","dhcp","firewall","dropbear","sqm"],"max_operations":8,"confirmation_policies":["controller_confirm"]}}`},
 	}
 	for index, unsupported := range unsupportedCapabilities {
 		unsupportedDeviceID := fmt.Sprintf("unsupported-%d", index)

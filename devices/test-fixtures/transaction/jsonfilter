@@ -28,6 +28,50 @@ case "$expression" in
     '@.operations[0].config') jq -r '.operations[0].config // empty' ;;
     '@.operations[0].observed_state_hash') jq -r '.operations[0].observed_state_hash // empty' ;;
     '@.operations[0].commands') jq -c '.operations[0].commands // empty' ;;
+    @.operations\[*\].operation_id)
+        index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$index].operation_id // empty"
+        ;;
+    @.operations\[*\].config)
+        index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$index].config // empty"
+        ;;
+    @.operations\[*\].commands)
+        index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        jq -c ".operations[$index].commands // empty"
+        ;;
+    @.operations\[*\].commands\[@\])
+        index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        jq -c ".operations[$index].commands[]?"
+        ;;
+    @.operations\[*\].observed_state_hash)
+        index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$index].observed_state_hash // empty"
+        ;;
+    @.operations\[*\].health_checks)
+        index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        jq -c ".operations[$index].health_checks // empty"
+        ;;
+    @.operations\[*\].commands\[*\].action)
+        operation_index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        command_index=$(printf '%s' "$expression" | sed -n 's/.*commands\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$operation_index].commands[$command_index].action // empty" ;;
+    @.operations\[*\].commands\[*\].config)
+        operation_index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        command_index=$(printf '%s' "$expression" | sed -n 's/.*commands\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$operation_index].commands[$command_index].config // empty" ;;
+    @.operations\[*\].commands\[*\].section)
+        operation_index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        command_index=$(printf '%s' "$expression" | sed -n 's/.*commands\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$operation_index].commands[$command_index].section // empty" ;;
+    @.operations\[*\].commands\[*\].option)
+        operation_index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        command_index=$(printf '%s' "$expression" | sed -n 's/.*commands\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$operation_index].commands[$command_index].option // empty" ;;
+    @.operations\[*\].commands\[*\].value)
+        operation_index=$(printf '%s' "$expression" | sed -n 's/.*operations\[\([0-9]*\)\].*/\1/p')
+        command_index=$(printf '%s' "$expression" | sed -n 's/.*commands\[\([0-9]*\)\].*/\1/p')
+        jq -r ".operations[$operation_index].commands[$command_index].value // empty" ;;
     @.commands\[*\].action)
         index=$(printf '%s' "$expression" | tr -cd '0-9')
         jq -r ".commands[$index].action // empty"

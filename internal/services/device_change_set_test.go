@@ -1,6 +1,9 @@
 package services
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNewDeviceChangeSetSeparatesAttemptAndContentIdentity(t *testing.T) {
 	commands := []UciCommand{{
@@ -120,5 +123,23 @@ func TestValidateDeviceChangeSetRejectsUnsafeOrIncompleteEnvelope(t *testing.T) 
 				t.Fatal("incomplete or unsafe changeset was accepted")
 			}
 		})
+	}
+}
+
+func TestValidateDeviceChangeSetAcceptsOrderedSafeNamespaces(t *testing.T) {
+	validHash := strings.Repeat("a", 64)
+	changeSet := DeviceChangeSet{
+		ChangeSetID:        "changeset-multi",
+		DeviceID:           "ROUTER-01",
+		Generation:         1,
+		ConfirmationPolicy: ConfirmationLocalAuto,
+		Operations: []DeviceChangeOperation{
+			{OperationID: "operation-system", Config: "system", ObservedStateHash: validHash, Commands: []UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}}},
+			{OperationID: "operation-dhcp", Config: "dhcp", ObservedStateHash: validHash, Commands: []UciCommand{{Action: "set", Config: "dhcp", Section: "lan", Option: "start", Value: "100"}}},
+		},
+	}
+	changeSet.PlanHash = deviceChangeSetPlanHash(changeSet)
+	if err := ValidateDeviceChangeSet(changeSet); err != nil {
+		t.Fatalf("multi-namespace changeset rejected: %v", err)
 	}
 }
