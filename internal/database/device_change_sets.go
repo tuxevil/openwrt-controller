@@ -500,8 +500,20 @@ func RecordDeviceChangeSetStatus(ctx context.Context, schema, deviceID string, s
 			resultStatus = "SUCCESS"
 		}
 		if _, err := Tx(ctx).ExecContext(ctx, fmt.Sprintf(`
-			UPDATE %s.rollout_runs
-			   SET status = $1,
+		UPDATE %s.rollout_runs
+		   SET status = CASE
+		           WHEN EXISTS (
+		               SELECT 1 FROM jsonb_array_elements(COALESCE(results, '[]'::jsonb)) AS pending(result)
+		               WHERE NOT (pending.result->>'device_id' = $2::text AND pending.result->>'change_set_id' = $3::text)
+		                 AND COALESCE(pending.result->>'change_set_state', '') NOT IN ('COMMITTED', 'RESTORED', 'RECOVERY_REQUIRED', 'REJECTED')
+		           ) THEN 'QUEUED'
+		           WHEN EXISTS (
+		               SELECT 1 FROM jsonb_array_elements(COALESCE(results, '[]'::jsonb)) AS failed(result)
+		               WHERE NOT (failed.result->>'device_id' = $2::text AND failed.result->>'change_set_id' = $3::text)
+		                 AND COALESCE(failed.result->>'change_set_state', '') <> 'COMMITTED'
+		           ) THEN 'failed'
+		           ELSE $1::text
+		       END,
 			       results = (
 			           SELECT COALESCE(jsonb_agg(
 			               CASE WHEN result->>'device_id' = $2 AND result->>'change_set_id' = $3

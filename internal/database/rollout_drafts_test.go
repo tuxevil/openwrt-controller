@@ -119,7 +119,7 @@ func TestClaimAndQueueDeviceChangeSetCommitsClaimAndQueueTogether(t *testing.T) 
 		WithArgs(changeSetRaw, "device-1", changeSetID, int64(0), "site-1", "rollout-1", "AP").
 		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_change_set"}).AddRow(int64(42), changeSetRaw))
 	mock.ExpectExec(`UPDATE tenant_demo\.rollout_runs\s+SET status = 'QUEUED'`).
-		WithArgs(queuedResult, "rollout-1", "site-1", "claim-token", int64(42)).
+		WithArgs(json.RawMessage(`[{"device_generation":42,"device_id":"device-1","status":"QUEUED"}]`), "rollout-1", "site-1", "claim-token").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO audit_logs")).
 		WithArgs("operator", "SITE_ORCHESTRATOR_ROLLOUT_START", "SITE", "site-1", sqlmock.AnyArg(), "127.0.0.1").

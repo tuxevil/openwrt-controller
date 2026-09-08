@@ -364,6 +364,40 @@ func TestBuildSingleDeviceChangeSetRequiresExplicitNamespace(t *testing.T) {
 	}
 }
 
+func TestBuildFleetDeviceChangeSetsUsesStablePerDeviceIdentities(t *testing.T) {
+	draft := rolloutDraft{
+		Namespace: "system",
+		Devices: []rolloutDraftDevice{
+			{DeviceID: "device-a", Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "a"}}, ObservedState: map[string]string{"system": strings.Repeat("a", 64)}},
+			{DeviceID: "device-b", Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "b"}}, ObservedState: map[string]string{"system": strings.Repeat("b", 64)}},
+		},
+	}
+
+	changeSets, err := buildFleetDeviceChangeSets("rollout-1", draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changeSets) != 2 || changeSets[0].DeviceID != "device-a" || changeSets[1].DeviceID != "device-b" {
+		t.Fatalf("changesets = %#v", changeSets)
+	}
+	if changeSets[0].ChangeSetID == changeSets[1].ChangeSetID || changeSets[0].Operations[0].OperationID == changeSets[1].Operations[0].OperationID {
+		t.Fatalf("device identities were not separated: %#v", changeSets)
+	}
+	if changeSetsAgain, err := buildFleetDeviceChangeSets("rollout-1", draft); err != nil || changeSetsAgain[0].ChangeSetID != changeSets[0].ChangeSetID || changeSetsAgain[1].ChangeSetID != changeSets[1].ChangeSetID {
+		t.Fatalf("changeset identities were not stable: %#v, %v", changeSetsAgain, err)
+	}
+}
+
+func TestBuildFleetDeviceChangeSetsRejectsDuplicateDevices(t *testing.T) {
+	draft := rolloutDraft{Namespace: "system", Devices: []rolloutDraftDevice{
+		{DeviceID: "device-a", Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "a"}}, ObservedState: map[string]string{"system": strings.Repeat("a", 64)}},
+		{DeviceID: "DEVICE-A", Commands: []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "b"}}, ObservedState: map[string]string{"system": strings.Repeat("b", 64)}},
+	}}
+	if _, err := buildFleetDeviceChangeSets("rollout-1", draft); err == nil {
+		t.Fatal("duplicate device target was accepted")
+	}
+}
+
 func TestVerifyRolloutDraftTargetsRejectsRoleChanges(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

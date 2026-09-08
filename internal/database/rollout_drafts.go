@@ -32,6 +32,12 @@ type RolloutDraftRecord struct {
 	Results         json.RawMessage
 }
 
+// DeviceChangeSetQueueItem is one device-local changeset in a fleet queue.
+type DeviceChangeSetQueueItem struct {
+	DeviceRole string
+	ChangeSet  json.RawMessage
+}
+
 // CreateRolloutDraft reserves the next site rollout sequence and stores a DRAFT
 // plan in one transaction. The sequence is independent of device generations.
 func CreateRolloutDraft(ctx context.Context, schema, siteID, requestedBy, planHash string, targetDeviceIDs, plan json.RawMessage) (RolloutDraftRecord, error) {
@@ -201,20 +207,7 @@ func ClaimRolloutDraft(ctx context.Context, schema, siteID, rolloutID string) (R
 // device changeset visible together. A failed queue, result, or audit write
 // rolls the claim back to DRAFT so no RUNNING rollout can lack work.
 func ClaimAndQueueDeviceChangeSet(ctx context.Context, schema, siteID, rolloutID, deviceRole string, changeSet, queuedResult json.RawMessage, username, remoteAddr string) (int64, error) {
-	safeSchema, err := SafeSchemaIdent(schema)
-	if err != nil {
-		return 0, err
-	}
-	tx, err := DB.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
-		return 0, err
-	}
-	record, err := claimRolloutDraftTx(ctx, tx, safeSchema, siteID, rolloutID)
+	generations, err := ClaimAndQueueDeviceChangeSets(ctx, schema, siteID, rolloutID, []DeviceChangeSetQueueItem{{DeviceRole: deviceRole, ChangeSet: changeSet}}, queuedResult, username, remoteAddr)
 	if err != nil {
 		return 0, err
 	}
@@ -222,39 +215,114 @@ func ClaimAndQueueDeviceChangeSet(ctx context.Context, schema, siteID, rolloutID
 	if err != nil {
 		return 0, err
 	}
-	transactionContext := context.WithValue(ctx, TxKey, tx)
-	deviceGeneration, err := QueueDeviceChangeSetForRollout(transactionContext, schema, siteID, deviceRole, identity.DeviceID, changeSet, rolloutID)
+	return generations[identity.DeviceID], nil
+}
+
+// ClaimAndQueueDeviceChangeSets atomically claims a rollout and queues one
+// changeset per device. Any failed device leaves the rollout and all queues
+// unchanged so the caller can retry or durably reject the draft.
+func ClaimAndQueueDeviceChangeSets(ctx context.Context, schema, siteID, rolloutID string, items []DeviceChangeSetQueueItem, queuedResults json.RawMessage, username, remoteAddr string) (map[string]int64, error) {
+	if len(items) == 0 {
+		return nil, fmt.Errorf("at least one device changeset is required")
+	}
+	safeSchema, err := SafeSchemaIdent(schema)
 	if err != nil {
-		return 0, err
+		return nil, err
+	}
+	tx, err := DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
+		return nil, err
+	}
+	record, err := claimRolloutDraftTx(ctx, tx, safeSchema, siteID, rolloutID)
+	if err != nil {
+		return nil, err
+	}
+	generations := make(map[string]int64, len(items))
+	identities := make([]deviceChangeSetIdentity, 0, len(items))
+	for _, item := range items {
+		identity, err := parseDeviceChangeSet(item.ChangeSet, false)
+		if err != nil {
+			return nil, err
+		}
+		transactionContext := context.WithValue(ctx, TxKey, tx)
+		deviceGeneration, err := QueueDeviceChangeSetForRollout(transactionContext, schema, siteID, item.DeviceRole, identity.DeviceID, item.ChangeSet, rolloutID)
+		if err != nil {
+			return nil, err
+		}
+		generations[identity.DeviceID] = deviceGeneration
+		identities = append(identities, identity)
+	}
+	queuedResults, err = addDeviceGenerations(queuedResults, generations)
+	if err != nil {
+		return nil, err
 	}
 	updateResult, err := tx.ExecContext(ctx, fmt.Sprintf(`
 		UPDATE %s.rollout_runs
 		   SET status = 'QUEUED',
-		       results = jsonb_set($1::jsonb, '{0,device_generation}', to_jsonb($5::bigint), true),
+		       results = $1::jsonb,
 		       claim_token = NULL,
 		       updated_at = CURRENT_TIMESTAMP
 		 WHERE id = $2 AND site_id = $3 AND status = 'RUNNING' AND claim_token::text = $4
-	`, safeSchema), queuedResult, rolloutID, siteID, record.ClaimToken, deviceGeneration)
+	`, safeSchema), queuedResults, rolloutID, siteID, record.ClaimToken)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
 	if affected, err := updateResult.RowsAffected(); err != nil {
-		return 0, err
+		return nil, err
 	} else if affected != 1 {
-		return 0, fmt.Errorf("%w: claim lost", ErrRolloutDraftNotAvailable)
+		return nil, fmt.Errorf("%w: claim lost", ErrRolloutDraftNotAvailable)
 	}
+	transactionContext := context.WithValue(ctx, TxKey, tx)
 	if err := InsertAuditLogContext(transactionContext, username, "SITE_ORCHESTRATOR_ROLLOUT_START", "SITE", siteID,
 		fmt.Sprintf("Claimed rollout draft %s rollout sequence %d plan_hash %s", rolloutID, record.Generation, record.PlanHash), remoteAddr); err != nil {
-		return 0, err
+		return nil, err
 	}
-	if err := InsertAuditLogContext(transactionContext, username, "SITE_ORCHESTRATOR_CHANGESET_QUEUED", "SITE", siteID,
-		fmt.Sprintf("Rollout %s queued changeset %s for device %s at generation %d", rolloutID, identity.ID, identity.DeviceID, deviceGeneration), remoteAddr); err != nil {
-		return 0, err
+	for _, identity := range identities {
+		if err := InsertAuditLogContext(transactionContext, username, "SITE_ORCHESTRATOR_CHANGESET_QUEUED", "SITE", siteID,
+			fmt.Sprintf("Rollout %s queued changeset %s for device %s at generation %d", rolloutID, identity.ID, identity.DeviceID, generations[identity.DeviceID]), remoteAddr); err != nil {
+			return nil, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return deviceGeneration, nil
+	return generations, nil
+}
+
+func addDeviceGenerations(raw json.RawMessage, generations map[string]int64) (json.RawMessage, error) {
+	var results []map[string]interface{}
+	if err := json.Unmarshal(raw, &results); err != nil {
+		return nil, fmt.Errorf("invalid queued rollout results: %w", err)
+	}
+	seen := make(map[string]bool, len(results))
+	for _, result := range results {
+		deviceID, ok := result["device_id"].(string)
+		if !ok {
+			return nil, fmt.Errorf("queued rollout result is missing device_id")
+		}
+		generation, ok := generations[deviceID]
+		if !ok {
+			return nil, fmt.Errorf("queued rollout result has unknown device %s", deviceID)
+		}
+		if seen[deviceID] {
+			return nil, fmt.Errorf("queued rollout results contain duplicate device %s", deviceID)
+		}
+		result["device_generation"] = generation
+		seen[deviceID] = true
+	}
+	if len(seen) != len(generations) {
+		return nil, fmt.Errorf("queued rollout results do not cover every changeset device")
+	}
+	updated, err := json.Marshal(results)
+	if err != nil {
+		return nil, fmt.Errorf("encode queued rollout results: %w", err)
+	}
+	return updated, nil
 }
 
 // RejectRolloutDraft durably closes a draft that cannot be executed by the

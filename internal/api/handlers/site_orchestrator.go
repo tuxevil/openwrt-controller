@@ -77,6 +77,7 @@ type fleetSyncResult struct {
 	Hostname         string `json:"hostname"`
 	Role             string `json:"role"`
 	Status           string `json:"status"`
+	ChangeSetState   string `json:"change_set_state,omitempty"`
 	Output           string `json:"output"`
 	Error            string `json:"error,omitempty"`
 	CmdCount         int    `json:"cmd_count"`
@@ -448,10 +449,13 @@ func buildSingleDeviceChangeSet(rolloutID string, draft rolloutDraft) (services.
 	if len(draft.Devices) != 1 {
 		return services.DeviceChangeSet{}, fmt.Errorf("a changeset slice requires exactly one target device")
 	}
+	return buildDeviceChangeSet(rolloutID, draft, draft.Devices[0])
+}
+
+func buildDeviceChangeSet(rolloutID string, draft rolloutDraft, device rolloutDraftDevice) (services.DeviceChangeSet, error) {
 	if draft.Namespace != "system" {
 		return services.DeviceChangeSet{}, fmt.Errorf("namespace %s is not supported by the safe changeset slice", draft.Namespace)
 	}
-	device := draft.Devices[0]
 	if len(device.Commands) == 0 {
 		return services.DeviceChangeSet{}, fmt.Errorf("device %s has no typed commands", device.DeviceID)
 	}
@@ -479,21 +483,29 @@ func buildSingleDeviceChangeSet(rolloutID string, draft rolloutDraft) (services.
 	return changeSet, nil
 }
 
-func queuedChangeSetResult(record database.RolloutDraftRecord, changeSet services.DeviceChangeSet) (fleetSyncResult, bool) {
-	var results []fleetSyncResult
-	if err := json.Unmarshal(record.Results, &results); err != nil {
-		return fleetSyncResult{}, false
+func buildFleetDeviceChangeSets(rolloutID string, draft rolloutDraft) ([]services.DeviceChangeSet, error) {
+	if len(draft.Devices) == 0 {
+		return nil, fmt.Errorf("a changeset rollout requires at least one target device")
 	}
-	for _, result := range results {
-		if strings.EqualFold(result.DeviceID, changeSet.DeviceID) &&
-			result.ChangeSetID == changeSet.ChangeSetID &&
-			result.PlanHash == changeSet.PlanHash &&
-			strings.EqualFold(result.Status, "QUEUED") &&
-			result.DeviceGeneration > 0 {
-			return result, true
+	changeSets := make([]services.DeviceChangeSet, 0, len(draft.Devices))
+	seenDevices := make(map[string]bool, len(draft.Devices))
+	for _, device := range draft.Devices {
+		deviceKey := strings.ToLower(device.DeviceID)
+		if seenDevices[deviceKey] {
+			return nil, fmt.Errorf("duplicate target device %s", device.DeviceID)
 		}
+		seenDevices[deviceKey] = true
+		changeSet, err := buildDeviceChangeSet(rolloutID, draft, device)
+		if err != nil {
+			return nil, err
+		}
+		changeSets = append(changeSets, changeSet)
 	}
-	return fleetSyncResult{}, false
+	return changeSets, nil
+}
+
+func queuedChangeSetResult(record database.RolloutDraftRecord, changeSet services.DeviceChangeSet) (fleetSyncResult, bool) {
+	return existingChangeSetResult(record, changeSet, "QUEUED")
 }
 
 func writeQueuedChangeSetResponse(w http.ResponseWriter, rolloutID string, record database.RolloutDraftRecord, changeSet services.DeviceChangeSet, result fleetSyncResult) {
@@ -508,6 +520,96 @@ func writeQueuedChangeSetResponse(w http.ResponseWriter, rolloutID string, recor
 		"plan_hash":         changeSet.PlanHash,
 		"device_generation": result.DeviceGeneration,
 	})
+}
+
+func queueFleetDeviceChangeSets(r *http.Request, schema, siteID, rolloutID, username string, record database.RolloutDraftRecord, draft rolloutDraft) (map[string]interface{}, error) {
+	changeSets, err := buildFleetDeviceChangeSets(rolloutID, draft)
+	if err != nil {
+		return nil, err
+	}
+	queuedResults := make([]fleetSyncResult, 0, len(changeSets))
+	if record.Status == "QUEUED" || record.Status == "completed" || record.Status == "failed" {
+		for _, changeSet := range changeSets {
+			requiredStatus := ""
+			if record.Status == "completed" || record.Status == "failed" {
+				requiredStatus = "TERMINAL"
+			}
+			result, ok := existingChangeSetResult(record, changeSet, requiredStatus)
+			if !ok {
+				return nil, fmt.Errorf("rollout is already queued with a different changeset for device %s", changeSet.DeviceID)
+			}
+			queuedResults = append(queuedResults, result)
+		}
+	} else {
+		items := make([]database.DeviceChangeSetQueueItem, 0, len(changeSets))
+		for index, changeSet := range changeSets {
+			changeSetRaw, err := json.Marshal(changeSet)
+			if err != nil {
+				return nil, fmt.Errorf("could not encode changeset for device %s: %w", changeSet.DeviceID, err)
+			}
+			device := draft.Devices[index]
+			items = append(items, database.DeviceChangeSetQueueItem{DeviceRole: device.Role, ChangeSet: changeSetRaw})
+			queuedResults = append(queuedResults, fleetSyncResult{
+				DeviceID:    changeSet.DeviceID,
+				Hostname:    device.Hostname,
+				Role:        device.Role,
+				Status:      "QUEUED",
+				Output:      "device agent will apply and report the durable changeset result",
+				CmdCount:    len(changeSet.Operations[0].Commands),
+				ChangeSetID: changeSet.ChangeSetID,
+				PlanHash:    changeSet.PlanHash,
+			})
+		}
+		queuedRaw, err := json.Marshal(queuedResults)
+		if err != nil {
+			return nil, fmt.Errorf("could not encode queued results: %w", err)
+		}
+		queueCtx, queueCancel := rolloutPersistenceContext(r)
+		generations, err := database.ClaimAndQueueDeviceChangeSets(queueCtx, schema, siteID, rolloutID, items, queuedRaw, username, r.RemoteAddr)
+		queueCancel()
+		if err != nil {
+			return nil, err
+		}
+		for index := range queuedResults {
+			queuedResults[index].DeviceGeneration = generations[queuedResults[index].DeviceID]
+		}
+	}
+	responseStatus := record.Status
+	if responseStatus == "DRAFT" {
+		responseStatus = "QUEUED"
+	}
+	return map[string]interface{}{
+		"status":     strings.ToLower(responseStatus),
+		"rollout_id": rolloutID,
+		"generation": record.Generation,
+		"target_device_ids": func() []string {
+			ids := make([]string, 0, len(changeSets))
+			for _, changeSet := range changeSets {
+				ids = append(ids, changeSet.DeviceID)
+			}
+			return ids
+		}(),
+		"changesets": queuedResults,
+	}, nil
+}
+
+func existingChangeSetResult(record database.RolloutDraftRecord, changeSet services.DeviceChangeSet, requiredStatus string) (fleetSyncResult, bool) {
+	var results []fleetSyncResult
+	if err := json.Unmarshal(record.Results, &results); err != nil {
+		return fleetSyncResult{}, false
+	}
+	for _, result := range results {
+		if strings.EqualFold(result.DeviceID, changeSet.DeviceID) && result.ChangeSetID == changeSet.ChangeSetID && result.PlanHash == changeSet.PlanHash && result.DeviceGeneration > 0 {
+			if requiredStatus == "QUEUED" && !strings.EqualFold(result.Status, "QUEUED") {
+				continue
+			}
+			if requiredStatus == "TERMINAL" && strings.EqualFold(result.Status, "QUEUED") {
+				continue
+			}
+			return result, true
+		}
+	}
+	return fleetSyncResult{}, false
 }
 
 func rejectUnexecutableRolloutDraft(r *http.Request, schema, siteID, rolloutID, username string, reason error) {
@@ -877,6 +979,22 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	executionCtx, executionCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 	defer executionCancel()
+	if draft.Namespace == "system" && len(draft.Devices) > 1 {
+		response, err := queueFleetDeviceChangeSets(r, schema, siteID, rolloutID, username, record, draft)
+		if err != nil {
+			if errors.Is(err, database.ErrDeviceChangeSetCapability) {
+				rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, err)
+				http.Error(w, `{"error":"one or more target devices do not support DeviceChangeSet delivery"}`, http.StatusConflict)
+			} else {
+				http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusConflict)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_ = json.NewEncoder(w).Encode(response)
+		return
+	}
 	if draft.Namespace == "system" && len(draft.Devices) == 1 {
 		changeSet, err := buildSingleDeviceChangeSet(rolloutID, draft)
 		if err != nil {
