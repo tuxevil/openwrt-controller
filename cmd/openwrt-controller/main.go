@@ -19,6 +19,7 @@ import (
 	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/metrics"
 	"openwrt-controller/internal/orchestrator"
+	"openwrt-controller/internal/rolloutworker"
 	"openwrt-controller/internal/services"
 )
 
@@ -77,6 +78,9 @@ func main() {
 	if err := database.InitPostgres(); err != nil {
 		logger.Warn("postgres init failed", "err", err)
 	}
+	workerContext, workerCancel := context.WithCancel(context.Background())
+	defer workerCancel()
+	rolloutworker.Worker{}.Start(workerContext)
 
 	// Initialize InfluxDB
 	if err := database.InitInflux(); err != nil {

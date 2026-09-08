@@ -3,6 +3,7 @@ package database
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -20,6 +21,96 @@ type RolloutLease struct {
 	SiteID    string
 	Token     string
 	Cursor    int
+}
+
+type RolloutProgress struct {
+	Status        string
+	TerminalCount int
+	ResultCount   int
+}
+
+// ActiveTenantSchemas returns validated tenant schemas for background work.
+func ActiveTenantSchemas(ctx context.Context) ([]string, error) {
+	rows, err := DB.QueryContext(ctx, "SELECT schema_alias FROM tenants WHERE is_active = true")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var schemas []string
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			return nil, err
+		}
+		schema, err := SafeTenantSchema(alias)
+		if err != nil {
+			continue
+		}
+		schemas = append(schemas, schema)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return schemas, nil
+}
+
+// GetRolloutProgress reads only durable execution results. It intentionally
+// does not load or render the original SiteConfig.
+func GetRolloutProgress(ctx context.Context, schema, rolloutID, siteID string) (RolloutProgress, error) {
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return RolloutProgress{}, err
+	}
+	var progress RolloutProgress
+	var raw []byte
+	if err := DB.QueryRowContext(ctx, fmt.Sprintf(
+		"SELECT status, results FROM %s.rollout_runs WHERE id = $1 AND site_id = $2", safeSchema,
+	), rolloutID, siteID).Scan(&progress.Status, &raw); err != nil {
+		return RolloutProgress{}, err
+	}
+	var results []struct {
+		Status         string `json:"status"`
+		ChangeSetState string `json:"change_set_state"`
+	}
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &results); err != nil {
+			return RolloutProgress{}, err
+		}
+	}
+	progress.ResultCount = len(results)
+	for _, result := range results {
+		if result.Status == "SUCCESS" || result.Status == "SKIPPED" ||
+			result.ChangeSetState == "COMMITTED" || result.ChangeSetState == "RESTORED" ||
+			result.ChangeSetState == "RECOVERY_REQUIRED" || result.ChangeSetState == "REJECTED" {
+			progress.TerminalCount++
+		}
+	}
+	return progress, nil
+}
+
+// UpdateRolloutWorkerCursor persists progress only for the current lease.
+func UpdateRolloutWorkerCursor(ctx context.Context, schema string, lease RolloutLease, cursor int) error {
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return err
+	}
+	result, err := DB.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s.rollout_runs AS candidate
+		   SET worker_cursor = GREATEST(worker_cursor, $1), updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $2 AND site_id = $3 AND status = 'RUNNING'
+		   AND worker_token::text = $4 AND worker_lease_until >= CURRENT_TIMESTAMP
+	`, safeSchema), cursor, lease.RolloutID, lease.SiteID, lease.Token)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrRolloutLeaseLost
+	}
+	return nil
 }
 
 // ClaimQueuedRollout claims one queued rollout for leaseDuration. Expired
@@ -40,13 +131,19 @@ func ClaimQueuedRollout(ctx context.Context, schema string, leaseDuration time.D
 		       updated_at = CURRENT_TIMESTAMP
 		 WHERE id = (
 			SELECT id FROM %s.rollout_runs
-			 WHERE status = 'QUEUED'
-			    OR (status = 'RUNNING' AND worker_lease_until < CURRENT_TIMESTAMP)
+			 WHERE (status = 'QUEUED'
+			    OR (status = 'RUNNING' AND worker_lease_until < CURRENT_TIMESTAMP))
+			   AND NOT EXISTS (
+					SELECT 1 FROM %s.rollout_runs active
+					 WHERE active.site_id = candidate.site_id
+					   AND active.status = 'RUNNING'
+					   AND active.worker_lease_until >= CURRENT_TIMESTAMP
+				)
 			 ORDER BY generation
 			 FOR UPDATE SKIP LOCKED LIMIT 1
 		 )
 		RETURNING id::text, site_id::text, worker_token::text, worker_cursor
-	`, safeSchema, safeSchema), leaseDuration.Seconds()).Scan(&lease.RolloutID, &lease.SiteID, &lease.Token, &lease.Cursor)
+	`, safeSchema, safeSchema, safeSchema), leaseDuration.Seconds()).Scan(&lease.RolloutID, &lease.SiteID, &lease.Token, &lease.Cursor)
 	if err == sql.ErrNoRows {
 		return RolloutLease{}, ErrRolloutLeaseUnavailable
 	}
