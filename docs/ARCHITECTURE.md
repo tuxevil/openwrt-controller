@@ -16,7 +16,7 @@
 1. The browser authenticates with JWT and selects a site or tenant context.
 2. Middleware validates the token, role and tenant schema before the handler runs.
 3. Read operations query the tenant schema or InfluxDB.
-4. Mutating operations validate identifiers, write an audit event and queue typed device operations; fleet orchestration persists an immutable rollout draft before execution. The safe single-device `system` slice derives a `DeviceChangeSet` and delivers it through config pull instead of SSH.
+4. Mutating operations validate identifiers, write an audit event and queue typed device operations; fleet orchestration persists an immutable rollout draft before execution. Safe namespace selections derive ordered `DeviceChangeSet` operations and deliver them through config pull instead of SSH.
 5. Device operations resolve the device inside the authorized tenant, verify its host key and execute a constrained script.
 
 The shipped agent reads a complete `CONTROLLER_URL` from root-owned runtime configuration. `REQUIRE_TLS=true` rejects plain HTTP before any controller request; configure a CA file or curl public-key pin when the controller uses a private PKI.

@@ -397,20 +397,50 @@ func filterRolloutResultsByNamespace(results []services.RenderResult, namespace 
 	if namespace == "" {
 		return results, nil
 	}
-	if namespace != "system" {
-		return nil, fmt.Errorf("namespace %s is not supported by the safe changeset slice", namespace)
+	namespaces, err := requestedChangeSetNamespaces(namespace)
+	if err != nil {
+		return nil, err
 	}
 	filtered := make([]services.RenderResult, len(results))
 	for index, result := range results {
-		filtered[index] = result
-		filtered[index].Commands = make([]services.UciCommand, 0, len(result.Commands))
-		for _, command := range result.Commands {
-			if command.Config == namespace {
-				filtered[index].Commands = append(filtered[index].Commands, command)
+		commands := result.Commands
+		result.Commands = make([]services.UciCommand, 0, len(result.Commands))
+		for _, command := range commands {
+			if namespaces[command.Config] {
+				result.Commands = append(result.Commands, command)
 			}
 		}
+		filtered[index] = result
 	}
 	return filtered, nil
+}
+
+func dropEmptyRolloutResults(results []services.RenderResult, observedState map[string]map[string]string) ([]services.RenderResult, map[string]map[string]string) {
+	filtered := make([]services.RenderResult, 0, len(results))
+	filteredState := make(map[string]map[string]string, len(observedState))
+	for _, result := range results {
+		if len(result.Commands) == 0 {
+			continue
+		}
+		filtered = append(filtered, result)
+		if state, ok := observedState[result.DeviceID]; ok {
+			filteredState[result.DeviceID] = state
+		}
+	}
+	return filtered, filteredState
+}
+
+func requestedChangeSetNamespaces(raw string) (map[string]bool, error) {
+	allowed := map[string]bool{"system": true, "dhcp": true, "firewall": true, "dropbear": true, "sqm": true}
+	namespaces := make(map[string]bool)
+	for _, namespace := range strings.Split(raw, ",") {
+		namespace = strings.TrimSpace(namespace)
+		if namespace == "" || !allowed[namespace] {
+			return nil, fmt.Errorf("namespace %s is not supported by the safe changeset slice", namespace)
+		}
+		namespaces[namespace] = true
+	}
+	return namespaces, nil
 }
 
 func rolloutPlanHash(draft rolloutDraft) string {
@@ -426,8 +456,10 @@ func decodeRolloutDraft(record database.RolloutDraftRecord) (rolloutDraft, error
 	if draft.SiteID != record.SiteID || rolloutPlanHash(draft) != record.PlanHash {
 		return rolloutDraft{}, fmt.Errorf("rollout draft identity does not match its stored plan")
 	}
-	if draft.Namespace != "" && draft.Namespace != "system" {
-		return rolloutDraft{}, fmt.Errorf("rollout draft namespace is unsupported")
+	if draft.Namespace != "" {
+		if _, err := requestedChangeSetNamespaces(draft.Namespace); err != nil {
+			return rolloutDraft{}, fmt.Errorf("rollout draft namespace is unsupported")
+		}
 	}
 	return draft, nil
 }
@@ -453,27 +485,37 @@ func buildSingleDeviceChangeSet(rolloutID string, draft rolloutDraft) (services.
 }
 
 func buildDeviceChangeSet(rolloutID string, draft rolloutDraft, device rolloutDraftDevice) (services.DeviceChangeSet, error) {
-	if draft.Namespace != "system" {
-		return services.DeviceChangeSet{}, fmt.Errorf("namespace %s is not supported by the safe changeset slice", draft.Namespace)
+	namespaces, err := requestedChangeSetNamespaces(draft.Namespace)
+	if err != nil {
+		return services.DeviceChangeSet{}, err
 	}
-	if len(device.Commands) == 0 {
+	if len(device.Commands) == 0 || len(namespaces) == 0 {
 		return services.DeviceChangeSet{}, fmt.Errorf("device %s has no typed commands", device.DeviceID)
 	}
+	commandsByNamespace := make(map[string][]services.UciCommand)
 	for _, command := range device.Commands {
-		if command.Config != "system" {
-			return services.DeviceChangeSet{}, fmt.Errorf("namespace %s is not supported by the safe changeset slice", command.Config)
+		if !namespaces[command.Config] {
+			return services.DeviceChangeSet{}, fmt.Errorf("namespace %s is not selected for the safe changeset", command.Config)
 		}
+		commandsByNamespace[command.Config] = append(commandsByNamespace[command.Config], command)
 	}
-	observedHash := device.ObservedState["system"]
-	if observedHash == "" {
-		return services.DeviceChangeSet{}, fmt.Errorf("missing observed system state for device %s", device.DeviceID)
+	orderedNamespaces := []string{"system", "dhcp", "firewall", "dropbear", "sqm"}
+	operations := make([]services.DeviceChangeOperation, 0, len(commandsByNamespace))
+	for _, namespace := range orderedNamespaces {
+		commands := commandsByNamespace[namespace]
+		if len(commands) == 0 {
+			continue
+		}
+		observedHash := device.ObservedState[namespace]
+		if observedHash == "" {
+			return services.DeviceChangeSet{}, fmt.Errorf("missing observed %s state for device %s", namespace, device.DeviceID)
+		}
+		operations = append(operations, services.DeviceChangeOperation{Config: namespace, Commands: commands, ObservedStateHash: observedHash})
 	}
-	changeSet, err := services.NewDeviceChangeSetForRollout(
+	changeSet, err := services.NewDeviceChangeSetForRolloutOperations(
 		rolloutID,
 		device.DeviceID,
-		"system",
-		device.Commands,
-		observedHash,
+		operations,
 		draft.HealthChecks,
 		services.ConfirmationLocalAuto,
 	)
@@ -481,6 +523,14 @@ func buildDeviceChangeSet(rolloutID string, draft rolloutDraft, device rolloutDr
 		return services.DeviceChangeSet{}, fmt.Errorf("could not build device changeset: %w", err)
 	}
 	return changeSet, nil
+}
+
+func changeSetCommandCount(changeSet services.DeviceChangeSet) int {
+	count := 0
+	for _, operation := range changeSet.Operations {
+		count += len(operation.Commands)
+	}
+	return count
 }
 
 func buildFleetDeviceChangeSets(rolloutID string, draft rolloutDraft) ([]services.DeviceChangeSet, error) {
@@ -555,7 +605,7 @@ func queueFleetDeviceChangeSets(r *http.Request, schema, siteID, rolloutID, user
 				Role:        device.Role,
 				Status:      "QUEUED",
 				Output:      "device agent will apply and report the durable changeset result",
-				CmdCount:    len(changeSet.Operations[0].Commands),
+				CmdCount:    changeSetCommandCount(changeSet),
 				ChangeSetID: changeSet.ChangeSetID,
 				PlanHash:    changeSet.PlanHash,
 			})
@@ -835,13 +885,11 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	targetDeviceID := r.URL.Query().Get("target_device_id")
 	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
-	if namespace != "" && targetDeviceID == "" {
-		http.Error(w, `{"error":"a target_device_id is required for a namespace-scoped changeset"}`, http.StatusBadRequest)
-		return
-	}
-	if namespace != "" && namespace != "system" {
-		http.Error(w, fmt.Sprintf(`{"error":%q}`, fmt.Sprintf("namespace %s is not supported by the safe changeset slice", namespace)), http.StatusBadRequest)
-		return
+	if namespace != "" {
+		if _, err := requestedChangeSetNamespaces(namespace); err != nil {
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+			return
+		}
 	}
 	devs, err = selectRolloutDevices(devs, targetDeviceID)
 	if err != nil {
@@ -876,8 +924,11 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
 	}
-	if namespace == "system" && len(results) == 1 && len(results[0].Commands) == 0 {
-		http.Error(w, `{"error":"the target device has no system changes to queue"}`, http.StatusConflict)
+	if namespace != "" {
+		results, observedState = dropEmptyRolloutResults(results, observedState)
+	}
+	if namespace != "" && len(results) == 0 {
+		http.Error(w, `{"error":"the selected device has no changes to queue"}`, http.StatusConflict)
 		return
 	}
 	if err := rejectUnsafeNetworkMutations(results); err != nil {
@@ -979,7 +1030,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	executionCtx, executionCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 	defer executionCancel()
-	if draft.Namespace == "system" && len(draft.Devices) > 1 {
+	if draft.Namespace != "" && len(draft.Devices) > 1 {
 		response, err := queueFleetDeviceChangeSets(r, schema, siteID, rolloutID, username, record, draft)
 		if err != nil {
 			if errors.Is(err, database.ErrDeviceChangeSetCapability) {
@@ -995,7 +1046,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(response)
 		return
 	}
-	if draft.Namespace == "system" && len(draft.Devices) == 1 {
+	if draft.Namespace != "" && len(draft.Devices) == 1 {
 		changeSet, err := buildSingleDeviceChangeSet(rolloutID, draft)
 		if err != nil {
 			rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, err)
@@ -1022,7 +1073,7 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 			Role:        draft.Devices[0].Role,
 			Status:      "QUEUED",
 			Output:      "device agent will apply and report the durable changeset result",
-			CmdCount:    len(changeSet.Operations[0].Commands),
+			CmdCount:    changeSetCommandCount(changeSet),
 			ChangeSetID: changeSet.ChangeSetID,
 			PlanHash:    changeSet.PlanHash,
 		}})

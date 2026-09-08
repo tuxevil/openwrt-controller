@@ -47,8 +47,9 @@ Typed operations carry `operation_id`, `plan_hash` and, for generation-bound pla
 
 The safe rollout slice carries one `DeviceChangeSet` through the same config
 pull and telemetry requests. It contains `change_set_id`, `device_id`,
-`plan_hash`, a positive device generation, one `system` operation with its
-observed-state hash, health checks, and `confirmation_policy: "local_auto"`.
+`plan_hash`, a positive device generation, ordered operations for the selected
+safe namespaces with per-namespace observed-state hashes, health checks, and
+`confirmation_policy: "local_auto"`.
 The agent reports it in `change_set_transaction` and keeps standalone
 operation status in the separate `transaction` envelope.
 Its telemetry capabilities include the versioned contract

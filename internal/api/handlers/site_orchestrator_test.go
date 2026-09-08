@@ -398,6 +398,25 @@ func TestBuildFleetDeviceChangeSetsRejectsDuplicateDevices(t *testing.T) {
 	}
 }
 
+func TestBuildDeviceChangeSetGroupsSelectedSafeNamespaces(t *testing.T) {
+	draft := rolloutDraft{Namespace: "system,dhcp", Devices: []rolloutDraftDevice{{
+		DeviceID: "device-a",
+		Commands: []services.UciCommand{
+			{Action: "set", Config: "dhcp", Section: "lan", Option: "start", Value: "100"},
+			{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"},
+		},
+		ObservedState: map[string]string{"system": strings.Repeat("a", 64), "dhcp": strings.Repeat("b", 64)},
+	}}}
+
+	changeSet, err := buildSingleDeviceChangeSet("rollout-1", draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(changeSet.Operations) != 2 || changeSet.Operations[0].Config != "system" || changeSet.Operations[1].Config != "dhcp" {
+		t.Fatalf("operations = %#v, want deterministic system then dhcp order", changeSet.Operations)
+	}
+}
+
 func TestVerifyRolloutDraftTargetsRejectsRoleChanges(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {

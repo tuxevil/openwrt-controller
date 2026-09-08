@@ -67,9 +67,36 @@ func NewDeviceChangeSetForRollout(rolloutID, deviceID, config string, commands [
 	identitySeed := strings.ToLower(rolloutID) + ":" + strings.ToLower(deviceID)
 	operationSeed := sha256.Sum256([]byte("device-operation:" + identitySeed))
 	changeSetSeed := sha256.Sum256([]byte("device-change-set:" + identitySeed))
-	operationID := "op-" + hex.EncodeToString(operationSeed[:16])
+	return newDeviceChangeSetWithIDs(
+		"op-"+hex.EncodeToString(operationSeed[:16]),
+		"cs-"+hex.EncodeToString(changeSetSeed[:16]),
+		deviceID, config, commands, observedStateHash, healthChecks, confirmationPolicy,
+	)
+}
+
+// NewDeviceChangeSetForRolloutOperations creates stable operation identities
+// for an ordered multi-namespace rollout on one device.
+func NewDeviceChangeSetForRolloutOperations(rolloutID, deviceID string, operations []DeviceChangeOperation, healthChecks []string, confirmationPolicy string) (DeviceChangeSet, error) {
+	identitySeed := strings.ToLower(rolloutID) + ":" + strings.ToLower(deviceID)
+	changeSetSeed := sha256.Sum256([]byte("device-change-set:" + identitySeed))
 	changeSetID := "cs-" + hex.EncodeToString(changeSetSeed[:16])
-	return newDeviceChangeSetWithIDs(operationID, changeSetID, deviceID, config, commands, observedStateHash, healthChecks, confirmationPolicy)
+	operations = append([]DeviceChangeOperation(nil), operations...)
+	for index := range operations {
+		operationSeed := sha256.Sum256([]byte(fmt.Sprintf("device-operation:%s:%d:%s", identitySeed, index, operations[index].Config)))
+		operations[index].OperationID = "op-" + hex.EncodeToString(operationSeed[:16])
+	}
+	changeSet := DeviceChangeSet{
+		ChangeSetID:        changeSetID,
+		DeviceID:           deviceID,
+		Operations:         append([]DeviceChangeOperation(nil), operations...),
+		HealthChecks:       append([]string(nil), healthChecks...),
+		ConfirmationPolicy: confirmationPolicy,
+	}
+	changeSet.PlanHash = deviceChangeSetPlanHash(changeSet)
+	if err := ValidateDeviceChangeSet(changeSet); err != nil {
+		return DeviceChangeSet{}, err
+	}
+	return changeSet, nil
 }
 
 func newDeviceChangeSetWithIDs(operationID, changeSetID, deviceID, config string, commands []UciCommand, observedStateHash string, healthChecks []string, confirmationPolicy string) (DeviceChangeSet, error) {
