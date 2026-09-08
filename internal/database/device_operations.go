@@ -127,7 +127,8 @@ func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan jso
 		    last_rollout_status = 'QUEUED',
 		    last_rollout_at = CURRENT_TIMESTAMP,
 		    updated_at = CURRENT_TIMESTAMP
-		WHERE device.id = $2 AND COALESCE(device.last_rollout_status, '') <> 'RUNNING' AND device.pending_operation IS NULL
+		WHERE device.id = $2 AND COALESCE(device.last_rollout_status, '') <> 'RUNNING' AND device.pending_operation IS NULL AND device.pending_change_set IS NULL
+		  AND COALESCE(device.last_operation->>'state', '') <> 'RECOVERY_REQUIRED' AND COALESCE(device.last_change_set->>'state', '') <> 'RECOVERY_REQUIRED'
 		  AND NOT EXISTS (
 		      SELECT 1
 		        FROM %s.rollout_runs AS active_rollout
@@ -164,6 +165,14 @@ func QueueDeviceOperation(ctx context.Context, schema, deviceID string, plan jso
 	}
 	if lookupErr != nil {
 		return 0, lookupErr
+	}
+	if len(last) > 0 {
+		var lastStatus struct {
+			State string `json:"state"`
+		}
+		if json.Unmarshal(last, &lastStatus) == nil && lastStatus.State == "RECOVERY_REQUIRED" {
+			return 0, fmt.Errorf("device requires recovery before accepting operations")
+		}
 	}
 	if len(pending) > 0 {
 		pendingIdentity, pendingErr := parseOperationIdentity(pending, false)
@@ -247,7 +256,8 @@ func RecordDeviceOperationStatus(ctx context.Context, schema, deviceID string, s
 	    AND (($6 <> '' AND pending_operation->>'plan_hash' = $6)
 	         OR ($6 = '' AND COALESCE(pending_operation->>'generation', '') = ''))
 	    AND ($7 = '' OR pending_operation->>'generation' = $7))`
-	lastMatch := `(last_operation->>'id' = $3
+	lastMatch := `(pending_change_set IS NULL
+	    AND last_operation->>'id' = $3
 	    AND (($6 <> '' AND last_operation->>'plan_hash' = $6)
 	         OR ($6 = '' AND COALESCE(last_operation->>'generation', '') = ''))
 	    AND ($7 = '' OR last_operation->>'generation' = $7)

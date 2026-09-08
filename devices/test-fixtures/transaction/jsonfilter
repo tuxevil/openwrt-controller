@@ -13,11 +13,21 @@ done
 
 case "$expression" in
     @.operation_id) jq -r '.operation_id // empty' ;;
+    @.change_set_id) jq -r '.change_set_id // empty' ;;
+    @.device_id) jq -r '.device_id // empty' ;;
     @.plan_hash) jq -r '.plan_hash // empty' ;;
     @.generation) jq -r '.generation // empty' ;;
+    @.state) jq -r '.state // empty' ;;
     @.config) jq -r '.config // empty' ;;
+    @.config.apply_change_set) jq -c '.config.apply_change_set // empty' ;;
+    @.confirmation_policy) jq -r '.confirmation_policy // empty' ;;
     '@.commands[@]') jq -c '.commands[]?' ;;
     '@.commands') jq -c '.commands // empty' ;;
+    '@.operations[@]') jq -c '.operations[]?' ;;
+    '@.operations[0].operation_id') jq -r '.operations[0].operation_id // empty' ;;
+    '@.operations[0].config') jq -r '.operations[0].config // empty' ;;
+    '@.operations[0].observed_state_hash') jq -r '.operations[0].observed_state_hash // empty' ;;
+    '@.operations[0].commands') jq -c '.operations[0].commands // empty' ;;
     @.commands\[*\].action)
         index=$(printf '%s' "$expression" | tr -cd '0-9')
         jq -r ".commands[$index].action // empty"
@@ -39,6 +49,7 @@ case "$expression" in
         jq -r ".commands[$index].value // empty"
         ;;
     '@.health_checks[@]') jq -r '.health_checks[]?' ;;
+    @.health_checks) jq -c '.health_checks // empty' ;;
     @.health_checks\[*\])
         index=$(printf '%s' "$expression" | tr -cd '0-9')
         jq -r ".health_checks[$index] // empty"

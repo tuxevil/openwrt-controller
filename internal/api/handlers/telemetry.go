@@ -220,16 +220,17 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if operationStatus, ok := raw["transaction"].(map[string]interface{}); ok {
-		if operationStatus["id"] != nil && operationStatus["state"] != nil {
-			if statusPayload, marshalErr := json.Marshal(operationStatus); marshalErr == nil {
-				statusContext, cancelStatusPersistence := telemetryPersistenceContext(r)
-				go func(ctx context.Context, cancel context.CancelFunc, devID, schema string, status []byte) {
-					defer cancel()
-					if err := database.RecordDeviceOperationStatus(ctx, schema, devID, status); err != nil {
-						log.Printf("Error persisting device operation status: %v", err)
-					}
-				}(statusContext, cancelStatusPersistence, canonicalDeviceID, tenantSchema, statusPayload)
+		if changeSetID, ok := operationStatus["change_set_id"].(string); ok && changeSetID != "" {
+			persistDeviceChangeSetStatus(r, tenantSchema, canonicalDeviceID, operationStatus)
+		} else if operationID, idOK := operationStatus["id"].(string); idOK && operationID != "" {
+			if state, stateOK := operationStatus["state"].(string); stateOK && state != "" {
+				persistDeviceOperationStatus(r, tenantSchema, canonicalDeviceID, operationStatus)
 			}
+		}
+	}
+	if changeSetStatus, ok := raw["change_set_transaction"].(map[string]interface{}); ok {
+		if changeSetID, idOK := changeSetStatus["change_set_id"].(string); idOK && changeSetID != "" {
+			persistDeviceChangeSetStatus(r, tenantSchema, canonicalDeviceID, changeSetStatus)
 		}
 	}
 
@@ -493,4 +494,32 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	w.Write([]byte(`{"status":"accepted"}`))
+}
+
+func persistDeviceOperationStatus(r *http.Request, schema, deviceID string, status map[string]interface{}) {
+	statusPayload, marshalErr := json.Marshal(status)
+	if marshalErr != nil {
+		return
+	}
+	statusContext, cancelStatusPersistence := telemetryPersistenceContext(r)
+	go func(ctx context.Context, cancel context.CancelFunc, devID, tenantSchema string, payload []byte) {
+		defer cancel()
+		if err := database.RecordDeviceOperationStatus(ctx, tenantSchema, devID, payload); err != nil {
+			log.Printf("Error persisting device operation status: %v", err)
+		}
+	}(statusContext, cancelStatusPersistence, deviceID, schema, statusPayload)
+}
+
+func persistDeviceChangeSetStatus(r *http.Request, schema, deviceID string, status map[string]interface{}) {
+	statusPayload, marshalErr := json.Marshal(status)
+	if marshalErr != nil {
+		return
+	}
+	statusContext, cancelStatusPersistence := telemetryPersistenceContext(r)
+	go func(ctx context.Context, cancel context.CancelFunc, devID, tenantSchema string, payload []byte) {
+		defer cancel()
+		if err := database.RecordDeviceChangeSetStatus(ctx, tenantSchema, devID, payload); err != nil {
+			log.Printf("Error persisting device changeset status: %v", err)
+		}
+	}(statusContext, cancelStatusPersistence, deviceID, schema, statusPayload)
 }

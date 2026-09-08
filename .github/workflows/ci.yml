@@ -170,6 +170,8 @@ jobs:
           devices/agent_runtime_config_test.sh
           devices/agent_signing_test.sh
           devices/agent_log_collection_test.sh
+          devices/agent_change_set_test.sh
+          devices/agent_transaction_test.sh
 
       - name: Upload dist
         uses: actions/upload-artifact@v4

@@ -75,6 +75,7 @@ fi
 mkdir -p "$NERVE_TRANSACTION_ROOT/retry-operation"
 printf '%s\n' retry-operation > "$NERVE_TRANSACTION_ROOT/active"
 printf '%s\n' wireless > "$NERVE_TRANSACTION_ROOT/retry-operation/config"
+printf '%s\n' eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee > "$NERVE_TRANSACTION_ROOT/retry-operation/plan_hash"
 printf '%s\n' 1 > "$NERVE_TRANSACTION_ROOT/retry-operation/backup_exists"
 printf '%s\n' ROLLING_BACK > "$NERVE_TRANSACTION_ROOT/retry-operation/state"
 printf '%s\n' 'wireless.baseline=1' > "$NERVE_TRANSACTION_ROOT/retry-operation/backup"
@@ -112,7 +113,9 @@ printf '%s\n' system > "$NERVE_TRANSACTION_ROOT/old-terminal/config"
 printf '%s\n' COMMITTED > "$NERVE_TRANSACTION_ROOT/old-terminal/state"
 PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --prune-transactions
 test ! -e "$NERVE_TRANSACTION_ROOT/old-terminal"
-test -e "$NERVE_TRANSACTION_ROOT/retry-operation/state"
+# Only the current terminal transaction is retained; older terminal journals
+# are safe to prune once they are no longer the reported operation.
+test ! -e "$NERVE_TRANSACTION_ROOT/retry-operation/state"
 
 if UCI_FIXTURE_STATE="$ROOT/mismatch-state" UCI_FIXTURE_LOG="$ROOT/mismatch.log" \
     PATH="$FIXTURE_DIR:$PATH" \
@@ -175,6 +178,16 @@ if SELF_TEST_OPERATION_JSON='{"operation_id":"recovery-operation","plan_hash":"f
     echo "restored operation accepted a different plan hash"
     exit 1
 fi
+
+mkdir -p "$NERVE_TRANSACTION_ROOT/hashless-restored"
+printf '%s\n' wireless > "$NERVE_TRANSACTION_ROOT/hashless-restored/config"
+printf '%s\n' RESTORED > "$NERVE_TRANSACTION_ROOT/hashless-restored/state"
+if SELF_TEST_OPERATION_JSON='{"operation_id":"hashless-restored","plan_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","config":"wireless","commands":[{"action":"set","config":"wireless","section":"wifi0","option":"ssid","value":"must-reject"}],"auto_confirm":true}' \
+    PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation; then
+    echo "hashless restored operation was accepted"
+    exit 1
+fi
+test -d "$NERVE_TRANSACTION_ROOT/hashless-restored"
 
 mkdir -p "$NERVE_TRANSACTION_ROOT/orphan-operation"
 printf '%s\n' wireless > "$NERVE_TRANSACTION_ROOT/orphan-operation/config"

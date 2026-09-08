@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"strings"
 )
 
@@ -15,14 +16,21 @@ type AuditLog struct {
 	CreatedAt    string `json:"created_at"`
 }
 
+// InsertAuditLog writes an audit event using the default database connection.
 func InsertAuditLog(username, action, resourceType, resourceID, payload, ipAddr string) error {
+	return InsertAuditLogContext(context.Background(), username, action, resourceType, resourceID, payload, ipAddr)
+}
+
+// InsertAuditLogContext writes an audit event through the caller's transaction
+// when one is present, keeping durable state and its audit record atomic.
+func InsertAuditLogContext(ctx context.Context, username, action, resourceType, resourceID, payload, ipAddr string) error {
 	// Clean payload of special control characters if necessary, but TEXT handles it.
 	// We'll trust the caller passes a sanitized string or raw dump.
 	query := `
 		INSERT INTO audit_logs (username, action, resource_type, resource_id, payload, ip_addr)
 		VALUES ($1, $2, $3, $4, $5, $6)
 	`
-	_, err := DB.Exec(query, username, action, resourceType, resourceID, payload, ipAddr)
+	_, err := Tx(ctx).ExecContext(ctx, query, username, action, resourceType, resourceID, payload, ipAddr)
 	return err
 }
 

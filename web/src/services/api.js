@@ -258,9 +258,11 @@ export default {
   putDeviceRole(deviceId, role) {
     return apiClient.put(`/devices/${deviceId}/role`, { role })
   },
-  previewSiteSync(siteId, targetDeviceId = '') {
-    const params = targetDeviceId ? { target_device_id: targetDeviceId } : undefined
-    return apiClient.post(`/sites/${siteId}/orchestrator/preview`, null, { params })
+  previewSiteSync(siteId, targetDeviceId = '', namespace = '') {
+    const params = {}
+    if (targetDeviceId) params.target_device_id = targetDeviceId
+    if (namespace) params.namespace = namespace
+    return apiClient.post(`/sites/${siteId}/orchestrator/preview`, null, { params: Object.keys(params).length ? params : undefined })
   },
   syncSiteFleet(siteId, rolloutId) {
     return apiClient.post(`/sites/${siteId}/orchestrator/sync`, { rollout_id: rolloutId })

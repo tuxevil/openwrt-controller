@@ -314,6 +314,11 @@ paths:
           name: target_device_id
           required: false
           schema: { type: string }
+        - in: query
+          name: namespace
+          required: false
+          description: Request the safe, single-device DeviceChangeSet slice.
+          schema: { type: string, enum: [system] }
       responses:
         '200':
           description: Immutable rollout draft preview
@@ -344,6 +349,11 @@ paths:
           content:
             application/json:
               schema: { $ref: '#/components/schemas/RolloutResult' }
+        '202':
+          description: Single-device changeset queued for device-initiated delivery
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/QueuedRolloutResult' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -849,6 +859,7 @@ components:
           description: Site-scoped rollout sequence; not a device operation generation.
         plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
         target_device_id: { type: string, nullable: true }
+        namespace: { type: string, enum: ['', system] }
         health_checks:
           type: array
           items: { type: string }
@@ -884,6 +895,31 @@ components:
         output: { type: string }
         error: { type: string }
         cmd_count: { type: integer, minimum: 0 }
+        change_set_id: { type: string }
+        change_set_state: { type: string }
+        plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        device_generation:
+          type: integer
+          format: int64
+          minimum: 1
+    QueuedRolloutResult:
+      type: object
+      required: [status, rollout_id, generation, target_device_id, change_set_id, plan_hash, device_generation]
+      properties:
+        status: { type: string, enum: [queued] }
+        rollout_id: { type: string, format: uuid }
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Site-scoped rollout sequence.
+        target_device_id: { type: string }
+        change_set_id: { type: string }
+        plan_hash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        device_generation:
+          type: integer
+          format: int64
+          minimum: 1
     RolloutRecord:
       type: object
       required: [id, site_id, generation, status, plan_hash, target_device_ids, plan, results]

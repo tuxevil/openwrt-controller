@@ -16,7 +16,7 @@
 1. The browser authenticates with JWT and selects a site or tenant context.
 2. Middleware validates the token, role and tenant schema before the handler runs.
 3. Read operations query the tenant schema or InfluxDB.
-4. Mutating operations validate identifiers, write an audit event and queue typed device operations; fleet orchestration persists an immutable SSH/UCI rollout draft before execution.
+4. Mutating operations validate identifiers, write an audit event and queue typed device operations; fleet orchestration persists an immutable rollout draft before execution. The safe single-device `system` slice derives a `DeviceChangeSet` and delivers it through config pull instead of SSH.
 5. Device operations resolve the device inside the authorized tenant, verify its host key and execute a constrained script.
 
 The shipped agent reads a complete `CONTROLLER_URL` from root-owned runtime configuration. `REQUIRE_TLS=true` rejects plain HTTP before any controller request; configure a CA file or curl public-key pin when the controller uses a private PKI.
@@ -28,6 +28,13 @@ Each typed device operation has three independent identities:
 - `generation` identifies the desired-state revision for that device.
 - `plan_hash` identifies the immutable command content.
 - `operation_id` identifies one application attempt.
+
+`DeviceChangeSet` adds a stable logical `change_set_id` around its ordered
+namespace entries. Its content `plan_hash` excludes the attempt and device
+generation, while the device-local generation is reserved atomically when the
+changeset is queued. Changeset progress is reported in the separate
+`change_set_transaction` telemetry envelope so it cannot hide standalone
+operation status.
 
 `QueueDeviceOperation` reserves an unbound plan's next device generation in the same database update that writes `pending_operation`. Generation-bound retries must name the current revision; stale or future revisions are rejected. Agent status echoes the generation when present, and the controller advances observed generations only for a matching `COMMITTED` status. Legacy agents may omit the generation during rollout, but their operation and plan identities must still match; such a status does not advance generation columns.
 

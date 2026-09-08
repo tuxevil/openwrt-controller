@@ -73,18 +73,22 @@ func handleRolloutDraftValidationFailure(w http.ResponseWriter, r *http.Request,
 }
 
 type fleetSyncResult struct {
-	DeviceID string `json:"device_id"`
-	Hostname string `json:"hostname"`
-	Role     string `json:"role"`
-	Status   string `json:"status"`
-	Output   string `json:"output"`
-	Error    string `json:"error,omitempty"`
-	CmdCount int    `json:"cmd_count"`
+	DeviceID         string `json:"device_id"`
+	Hostname         string `json:"hostname"`
+	Role             string `json:"role"`
+	Status           string `json:"status"`
+	Output           string `json:"output"`
+	Error            string `json:"error,omitempty"`
+	CmdCount         int    `json:"cmd_count"`
+	ChangeSetID      string `json:"change_set_id,omitempty"`
+	PlanHash         string `json:"plan_hash,omitempty"`
+	DeviceGeneration int64  `json:"device_generation,omitempty"`
 }
 
 type rolloutDraft struct {
 	SiteID         string               `json:"site_id"`
 	TargetDeviceID string               `json:"target_device_id,omitempty"`
+	Namespace      string               `json:"namespace,omitempty"`
 	HealthChecks   []string             `json:"health_checks"`
 	Devices        []rolloutDraftDevice `json:"devices"`
 }
@@ -388,6 +392,26 @@ func buildRolloutDraft(siteID, targetDeviceID string, healthChecks []string, res
 	return draft, nil
 }
 
+func filterRolloutResultsByNamespace(results []services.RenderResult, namespace string) ([]services.RenderResult, error) {
+	if namespace == "" {
+		return results, nil
+	}
+	if namespace != "system" {
+		return nil, fmt.Errorf("namespace %s is not supported by the safe changeset slice", namespace)
+	}
+	filtered := make([]services.RenderResult, len(results))
+	for index, result := range results {
+		filtered[index] = result
+		filtered[index].Commands = make([]services.UciCommand, 0, len(result.Commands))
+		for _, command := range result.Commands {
+			if command.Config == namespace {
+				filtered[index].Commands = append(filtered[index].Commands, command)
+			}
+		}
+	}
+	return filtered, nil
+}
+
 func rolloutPlanHash(draft rolloutDraft) string {
 	encoded, _ := json.Marshal(draft)
 	return fmt.Sprintf("%x", sha256.Sum256(encoded))
@@ -400,6 +424,9 @@ func decodeRolloutDraft(record database.RolloutDraftRecord) (rolloutDraft, error
 	}
 	if draft.SiteID != record.SiteID || rolloutPlanHash(draft) != record.PlanHash {
 		return rolloutDraft{}, fmt.Errorf("rollout draft identity does not match its stored plan")
+	}
+	if draft.Namespace != "" && draft.Namespace != "system" {
+		return rolloutDraft{}, fmt.Errorf("rollout draft namespace is unsupported")
 	}
 	return draft, nil
 }
@@ -415,6 +442,84 @@ func rolloutResultsFromDraft(draft rolloutDraft) []services.RenderResult {
 		})
 	}
 	return results
+}
+
+func buildSingleDeviceChangeSet(rolloutID string, draft rolloutDraft) (services.DeviceChangeSet, error) {
+	if len(draft.Devices) != 1 {
+		return services.DeviceChangeSet{}, fmt.Errorf("a changeset slice requires exactly one target device")
+	}
+	if draft.Namespace != "system" {
+		return services.DeviceChangeSet{}, fmt.Errorf("namespace %s is not supported by the safe changeset slice", draft.Namespace)
+	}
+	device := draft.Devices[0]
+	if len(device.Commands) == 0 {
+		return services.DeviceChangeSet{}, fmt.Errorf("device %s has no typed commands", device.DeviceID)
+	}
+	for _, command := range device.Commands {
+		if command.Config != "system" {
+			return services.DeviceChangeSet{}, fmt.Errorf("namespace %s is not supported by the safe changeset slice", command.Config)
+		}
+	}
+	observedHash := device.ObservedState["system"]
+	if observedHash == "" {
+		return services.DeviceChangeSet{}, fmt.Errorf("missing observed system state for device %s", device.DeviceID)
+	}
+	changeSet, err := services.NewDeviceChangeSetForRollout(
+		rolloutID,
+		device.DeviceID,
+		"system",
+		device.Commands,
+		observedHash,
+		draft.HealthChecks,
+		services.ConfirmationLocalAuto,
+	)
+	if err != nil {
+		return services.DeviceChangeSet{}, fmt.Errorf("could not build device changeset: %w", err)
+	}
+	return changeSet, nil
+}
+
+func queuedChangeSetResult(record database.RolloutDraftRecord, changeSet services.DeviceChangeSet) (fleetSyncResult, bool) {
+	var results []fleetSyncResult
+	if err := json.Unmarshal(record.Results, &results); err != nil {
+		return fleetSyncResult{}, false
+	}
+	for _, result := range results {
+		if strings.EqualFold(result.DeviceID, changeSet.DeviceID) &&
+			result.ChangeSetID == changeSet.ChangeSetID &&
+			result.PlanHash == changeSet.PlanHash &&
+			strings.EqualFold(result.Status, "QUEUED") &&
+			result.DeviceGeneration > 0 {
+			return result, true
+		}
+	}
+	return fleetSyncResult{}, false
+}
+
+func writeQueuedChangeSetResponse(w http.ResponseWriter, rolloutID string, record database.RolloutDraftRecord, changeSet services.DeviceChangeSet, result fleetSyncResult) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"status":            "queued",
+		"rollout_id":        rolloutID,
+		"generation":        record.Generation,
+		"target_device_id":  changeSet.DeviceID,
+		"change_set_id":     changeSet.ChangeSetID,
+		"plan_hash":         changeSet.PlanHash,
+		"device_generation": result.DeviceGeneration,
+	})
+}
+
+func rejectUnexecutableRolloutDraft(r *http.Request, schema, siteID, rolloutID, username string, reason error) {
+	ctx, cancel := rolloutPersistenceContext(r)
+	defer cancel()
+	if err := database.RejectRolloutDraft(ctx, schema, siteID, rolloutID, reason.Error()); err != nil {
+		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to durably reject rollout %s: %v", rolloutID, err)
+	}
+	if err := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_REJECTED", siteID,
+		fmt.Sprintf("Rejected rollout %s: %v", rolloutID, reason)); err != nil {
+		log.Printf("[SITE_ORCHESTRATOR][WARN] failed to audit rejected rollout %s: %v", rolloutID, err)
+	}
 }
 
 func verifyRolloutDraftObservedState(ctx context.Context, schema, siteID string, draft rolloutDraft) error {
@@ -447,10 +552,10 @@ func verifyRolloutDraftTargets(ctx context.Context, schema, siteID string, draft
 	}
 	for _, device := range draft.Devices {
 		var role string
-		var pendingOperation []byte
+		var pendingOperation, pendingChangeSet []byte
 		err := database.DB.QueryRowContext(ctx, fmt.Sprintf(
-			"SELECT COALESCE(device_role, 'AP'), pending_operation FROM %s.devices WHERE id = $1 AND site_id = $2", sqlSchema,
-		), device.DeviceID, siteID).Scan(&role, &pendingOperation)
+			"SELECT COALESCE(device_role, 'AP'), pending_operation, pending_change_set FROM %s.devices WHERE id = $1 AND site_id = $2 AND COALESCE(last_operation->>'state', '') <> 'RECOVERY_REQUIRED' AND COALESCE(last_change_set->>'state', '') <> 'RECOVERY_REQUIRED'", sqlSchema,
+		), device.DeviceID, siteID).Scan(&role, &pendingOperation, &pendingChangeSet)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return fmt.Errorf("%w: device %s role changed or is no longer in site", errRolloutDraftStale, device.DeviceID)
@@ -462,6 +567,9 @@ func verifyRolloutDraftTargets(ctx context.Context, schema, siteID string, draft
 		}
 		if len(pendingOperation) > 0 && string(pendingOperation) != "null" {
 			return fmt.Errorf("%w: device %s has a pending typed operation", errRolloutDraftStale, device.DeviceID)
+		}
+		if len(pendingChangeSet) > 0 && string(pendingChangeSet) != "null" {
+			return fmt.Errorf("%w: device %s has a pending changeset", errRolloutDraftStale, device.DeviceID)
 		}
 	}
 	return nil
@@ -491,10 +599,11 @@ func requestedRolloutID(r *http.Request) (string, error) {
 }
 
 func validateRolloutID(rolloutID string) (string, error) {
-	if _, err := uuid.Parse(rolloutID); err != nil {
+	parsed, err := uuid.Parse(rolloutID)
+	if err != nil {
 		return "", fmt.Errorf("invalid rollout_id")
 	}
-	return rolloutID, nil
+	return parsed.String(), nil
 }
 
 func rolloutDevicePreviews(draft rolloutDraft) []rolloutDevicePreview {
@@ -623,6 +732,15 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	targetDeviceID := r.URL.Query().Get("target_device_id")
+	namespace := strings.TrimSpace(r.URL.Query().Get("namespace"))
+	if namespace != "" && targetDeviceID == "" {
+		http.Error(w, `{"error":"a target_device_id is required for a namespace-scoped changeset"}`, http.StatusBadRequest)
+		return
+	}
+	if namespace != "" && namespace != "system" {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, fmt.Sprintf("namespace %s is not supported by the safe changeset slice", namespace)), http.StatusBadRequest)
+		return
+	}
 	devs, err = selectRolloutDevices(devs, targetDeviceID)
 	if err != nil {
 		http.Error(w, `{"error":"target device not found in site"}`, http.StatusBadRequest)
@@ -644,11 +762,20 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	results := services.RenderSiteConfig(*sc, devs)
+	results, err = filterRolloutResultsByNamespace(results, namespace)
+	if err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
 	preflightCtx, preflightCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
 	results, observedState, err := preflightRenderedResultsWithState(preflightCtx, schema, siteID, results)
 	preflightCancel()
 	if err != nil {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
+		return
+	}
+	if namespace == "system" && len(results) == 1 && len(results[0].Commands) == 0 {
+		http.Error(w, `{"error":"the target device has no system changes to queue"}`, http.StatusConflict)
 		return
 	}
 	if err := rejectUnsafeNetworkMutations(results); err != nil {
@@ -660,6 +787,7 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadGateway)
 		return
 	}
+	draft.Namespace = namespace
 	plan, err := json.Marshal(draft)
 	if err != nil {
 		http.Error(w, `{"error":"could not encode rollout draft"}`, http.StatusInternalServerError)
@@ -691,6 +819,7 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"site_id":          siteID,
 		"target_device_id": targetDeviceID,
+		"namespace":        namespace,
 		"rollout_id":       record.ID,
 		"generation":       record.Generation,
 		"plan_hash":        record.PlanHash,
@@ -717,8 +846,110 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid tenant context"}`, http.StatusInternalServerError)
 		return
 	}
+	draftCtx, draftCancel := rolloutPersistenceContext(r)
+	record, err := database.GetRolloutDraft(draftCtx, schema, siteID, rolloutID)
+	draftCancel()
+	if err != nil {
+		if errors.Is(err, database.ErrRolloutDraftNotFound) {
+			http.Error(w, `{"error":"rollout draft was not found"}`, http.StatusNotFound)
+		} else {
+			http.Error(w, `{"error":"could not load rollout draft"}`, http.StatusInternalServerError)
+		}
+		return
+	}
+	draft, err := decodeRolloutDraft(record)
+	if err != nil {
+		rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, err)
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusConflict)
+		return
+	}
+	results := rolloutResultsFromDraft(draft)
+	if len(results) == 0 {
+		reason := fmt.Errorf("rollout draft contains no devices")
+		rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, reason)
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, reason.Error()), http.StatusConflict)
+		return
+	}
+	if err := rejectUnsafeNetworkMutations(results); err != nil {
+		rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, err)
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusConflict)
+		return
+	}
+	executionCtx, executionCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
+	defer executionCancel()
+	if draft.Namespace == "system" && len(draft.Devices) == 1 {
+		changeSet, err := buildSingleDeviceChangeSet(rolloutID, draft)
+		if err != nil {
+			rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, err)
+			http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusConflict)
+			return
+		}
+		if record.Status == "QUEUED" {
+			if queuedResult, ok := queuedChangeSetResult(record, changeSet); ok {
+				writeQueuedChangeSetResponse(w, rolloutID, record, changeSet, queuedResult)
+				return
+			}
+			http.Error(w, `{"error":"rollout is already queued with a different changeset"}`, http.StatusConflict)
+			return
+		}
+		changeSetRaw, err := json.Marshal(changeSet)
+		if err != nil {
+			handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, "", username,
+				fmt.Errorf("%w: could not encode changeset: %v", errRolloutDraftTransport, err))
+			return
+		}
+		queuedResultRaw, err := json.Marshal([]fleetSyncResult{{
+			DeviceID:    changeSet.DeviceID,
+			Hostname:    draft.Devices[0].Hostname,
+			Role:        draft.Devices[0].Role,
+			Status:      "QUEUED",
+			Output:      "device agent will apply and report the durable changeset result",
+			CmdCount:    len(changeSet.Operations[0].Commands),
+			ChangeSetID: changeSet.ChangeSetID,
+			PlanHash:    changeSet.PlanHash,
+		}})
+		if err != nil {
+			handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, "", username,
+				fmt.Errorf("%w: could not encode queued result: %v", errRolloutDraftTransport, err))
+			return
+		}
+		queueCtx, queueCancel := rolloutPersistenceContext(r)
+		deviceGeneration, err := database.ClaimAndQueueDeviceChangeSet(queueCtx, schema, siteID, rolloutID, draft.Devices[0].Role, changeSetRaw, queuedResultRaw, username, r.RemoteAddr)
+		queueCancel()
+		if err != nil {
+			if errors.Is(err, database.ErrDeviceChangeSetCapability) {
+				rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, err)
+				http.Error(w, `{"error":"target device does not support DeviceChangeSet delivery"}`, http.StatusConflict)
+				return
+			}
+			if errors.Is(err, database.ErrRolloutDraftNotAvailable) {
+				if retryRecord, retryErr := database.GetRolloutDraft(r.Context(), schema, siteID, rolloutID); retryErr == nil && retryRecord.Status == "QUEUED" {
+					if queuedResult, ok := queuedChangeSetResult(retryRecord, changeSet); ok {
+						writeQueuedChangeSetResponse(w, rolloutID, retryRecord, changeSet, queuedResult)
+						return
+					}
+				}
+				http.Error(w, `{"error":"rollout draft is no longer available"}`, http.StatusConflict)
+			} else {
+				http.Error(w, `{"error":"could not queue changeset"}`, http.StatusConflict)
+			}
+			return
+		}
+		writeQueuedChangeSetResponse(w, rolloutID, record, changeSet, fleetSyncResult{DeviceGeneration: deviceGeneration})
+		return
+	}
+	if draft.Namespace != "" {
+		reason := fmt.Errorf("namespace %s is not supported by the safe changeset slice", draft.Namespace)
+		rejectUnexecutableRolloutDraft(r, schema, siteID, rolloutID, username, reason)
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, reason.Error()), http.StatusConflict)
+		return
+	}
+	if err := verifyRolloutDraftTargets(executionCtx, schema, siteID, draft); err != nil {
+		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, "", username, err)
+		return
+	}
 	claimCtx, claimCancel := rolloutPersistenceContext(r)
-	record, err := database.ClaimRolloutDraft(claimCtx, schema, siteID, rolloutID)
+	record, err = database.ClaimRolloutDraft(claimCtx, schema, siteID, rolloutID)
 	claimCancel()
 	if err != nil {
 		if errors.Is(err, database.ErrRolloutDraftNotAvailable) {
@@ -726,21 +957,6 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			http.Error(w, `{"error":"could not claim rollout draft"}`, http.StatusInternalServerError)
 		}
-		return
-	}
-	draft, err := decodeRolloutDraft(record)
-	if err != nil {
-		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
-		return
-	}
-	results := rolloutResultsFromDraft(draft)
-	if len(results) == 0 {
-		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username,
-			fmt.Errorf("%w: rollout draft contains no devices", errRolloutDraftStale))
-		return
-	}
-	if err := rejectUnsafeNetworkMutations(results); err != nil {
-		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
 		return
 	}
 	if err := auditRolloutEvent(r, username, "SITE_ORCHESTRATOR_ROLLOUT_START", siteID,
@@ -752,12 +968,6 @@ func SyncFleetHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rolloutSequence := record.Generation
-	executionCtx, executionCancel := context.WithTimeout(context.WithoutCancel(r.Context()), 15*time.Minute)
-	defer executionCancel()
-	if err := verifyRolloutDraftTargets(executionCtx, schema, siteID, draft); err != nil {
-		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
-		return
-	}
 	if err := verifyRolloutDraftObservedState(executionCtx, schema, siteID, draft); err != nil {
 		handleRolloutDraftValidationFailure(w, r, schema, siteID, rolloutID, record.ClaimToken, username, err)
 		return
@@ -1001,13 +1211,13 @@ func markRolloutDevicesRunning(r *http.Request, siteID, rolloutID, claimToken st
 		return err
 	}
 	if len(devices) == 0 {
-		if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND pending_operation IS NULL AND COALESCE(last_rollout_status, '') <> 'RUNNING'", siteID); err != nil {
+		if _, err = tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND pending_operation IS NULL AND pending_change_set IS NULL AND COALESCE(last_rollout_status, '') <> 'RUNNING' AND COALESCE(last_operation->>'state', '') <> 'RECOVERY_REQUIRED' AND COALESCE(last_change_set->>'state', '') <> 'RECOVERY_REQUIRED'", siteID); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
 	for _, device := range devices {
-		result, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND id = $2 AND pending_operation IS NULL AND COALESCE(last_rollout_status, '') <> 'RUNNING' AND COALESCE(device_role, 'AP') = $3", siteID, device.DeviceID, device.Role)
+		result, err := tx.ExecContext(ctx, "UPDATE "+schema+".devices SET last_rollout_status = 'RUNNING', last_rollout_at = CURRENT_TIMESTAMP WHERE site_id = $1 AND id = $2 AND pending_operation IS NULL AND pending_change_set IS NULL AND COALESCE(last_rollout_status, '') <> 'RUNNING' AND COALESCE(last_operation->>'state', '') <> 'RECOVERY_REQUIRED' AND COALESCE(last_change_set->>'state', '') <> 'RECOVERY_REQUIRED' AND COALESCE(device_role, 'AP') = $3", siteID, device.DeviceID, device.Role)
 		if err != nil {
 			return err
 		}

@@ -34,10 +34,14 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 	defer func() { DB = previousDB }()
 
 	schema := "tenant_migration_" + strings.ToLower(strings.ReplaceAll(fmt.Sprint(time.Now().UnixNano()), "-", ""))
-	if _, err := DB.Exec(fmt.Sprintf("CREATE SCHEMA %s", pgx.Identifier{schema}.Sanitize())); err != nil {
+	quotedSchema := pgx.Identifier{schema}.Sanitize()
+	quotedSites := pgx.Identifier{schema, "sites"}.Sanitize()
+	quotedDevices := pgx.Identifier{schema, "devices"}.Sanitize()
+	quotedRollouts := pgx.Identifier{schema, "rollout_runs"}.Sanitize()
+	if _, err := DB.Exec(fmt.Sprintf("CREATE SCHEMA %s", quotedSchema)); err != nil {
 		t.Fatalf("create temporary schema: %v", err)
 	}
-	defer DB.Exec(fmt.Sprintf("DROP SCHEMA %s CASCADE", pgx.Identifier{schema}.Sanitize()))
+	defer DB.Exec(fmt.Sprintf("DROP SCHEMA %s CASCADE", quotedSchema))
 
 	// The migration system is additive and has no destructive down migration.
 	// Starting from this legacy shape verifies backward compatibility, then the
@@ -47,13 +51,17 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 	}
 	legacySiteID := "11111111-1111-1111-1111-111111111111"
 	legacyRolloutID := "22222222-2222-2222-2222-222222222222"
-	if _, err := DB.Exec(fmt.Sprintf("INSERT INTO %s.sites (id) VALUES ($1)", pgx.Identifier{schema, "sites"}.Sanitize()), legacySiteID); err != nil {
+	legacyDeviceID := "legacy-device"
+	if _, err := DB.Exec(fmt.Sprintf("INSERT INTO %s (id) VALUES ($1)", quotedSites), legacySiteID); err != nil {
 		t.Fatalf("seed legacy site: %v", err)
 	}
+	if _, err := DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id) VALUES ($1, $2)", quotedDevices), legacyDeviceID, legacySiteID); err != nil {
+		t.Fatalf("seed legacy device: %v", err)
+	}
 	if _, err := DB.Exec(fmt.Sprintf(`
-		INSERT INTO %s.rollout_runs (id, site_id, generation, status, plan_hash, target_device_ids, results)
+		INSERT INTO %s (id, site_id, generation, status, plan_hash, target_device_ids, results)
 		VALUES ($1, $2, 4, 'completed', $3, '[]', '[]')
-	`, pgx.Identifier{schema, "rollout_runs"}.Sanitize()), legacyRolloutID, legacySiteID, strings.Repeat("a", 64)); err != nil {
+	`, quotedRollouts), legacyRolloutID, legacySiteID, strings.Repeat("a", 64)); err != nil {
 		t.Fatalf("seed legacy rollout: %v", err)
 	}
 	if err := createTenantTables(schema); err != nil {
@@ -118,9 +126,41 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 			t.Errorf("rollout_runs is missing immutable rollout column %q", column)
 		}
 	}
+	deviceRows, err := DB.Query(`
+		SELECT column_name FROM information_schema.columns
+		WHERE table_schema = $1 AND table_name = 'devices'
+	`, schema)
+	if err != nil {
+		t.Fatalf("query devices columns: %v", err)
+	}
+	defer deviceRows.Close()
+	deviceColumns := map[string]bool{}
+	for deviceRows.Next() {
+		var column string
+		if err := deviceRows.Scan(&column); err != nil {
+			t.Fatalf("scan devices column: %v", err)
+		}
+		deviceColumns[column] = true
+	}
+	if err := deviceRows.Err(); err != nil {
+		t.Fatalf("iterate devices columns: %v", err)
+	}
+	for _, column := range []string{"desired_generation", "observed_generation", "last_successful_generation", "pending_change_set", "last_change_set"} {
+		if !deviceColumns[column] {
+			t.Errorf("devices is missing changeset column %q", column)
+		}
+	}
+	var migratedDeviceSite string
+	var migratedDesiredGeneration int64
+	if err := DB.QueryRow(fmt.Sprintf("SELECT site_id, desired_generation FROM %s WHERE id = $1", quotedDevices), legacyDeviceID).Scan(&migratedDeviceSite, &migratedDesiredGeneration); err != nil {
+		t.Fatalf("read migrated device: %v", err)
+	}
+	if migratedDeviceSite != legacySiteID || migratedDesiredGeneration != 0 {
+		t.Fatalf("legacy device changed during migration: site_id=%s desired_generation=%d", migratedDeviceSite, migratedDesiredGeneration)
+	}
 	var migratedPlan []byte
 	var migratedGeneration int64
-	if err := DB.QueryRow(fmt.Sprintf("SELECT generation, plan FROM %s.rollout_runs WHERE id = $1", pgx.Identifier{schema, "rollout_runs"}.Sanitize()), legacyRolloutID).Scan(&migratedGeneration, &migratedPlan); err != nil {
+	if err := DB.QueryRow(fmt.Sprintf("SELECT generation, plan FROM %s WHERE id = $1", quotedRollouts), legacyRolloutID).Scan(&migratedGeneration, &migratedPlan); err != nil {
 		t.Fatalf("read migrated rollout: %v", err)
 	}
 	if migratedGeneration != 4 || string(migratedPlan) != "{}" {
@@ -184,6 +224,10 @@ func createLegacyTenantTables(schema string) error {
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 		);
+		CREATE TABLE %s.devices (
+			id VARCHAR(50) PRIMARY KEY,
+			site_id UUID REFERENCES %s.sites(id)
+		);
 		CREATE TABLE %s.site_configs (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			site_id UUID UNIQUE,
@@ -192,6 +236,6 @@ func createLegacyTenantTables(schema string) error {
 			global_wpa_key VARCHAR(255) DEFAULT '',
 			global_encryption VARCHAR(50) DEFAULT 'psk2',
 			lan_ipaddr VARCHAR(50) DEFAULT '192.168.1.1'
-		)`, quoted, quoted, quoted, quoted))
+		)`, quoted, quoted, quoted, quoted, quoted, quoted))
 	return err
 }

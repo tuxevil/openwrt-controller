@@ -117,25 +117,9 @@ func GetRolloutDraft(ctx context.Context, schema, siteID, rolloutID string) (Rol
 	return record, nil
 }
 
-// ClaimRolloutDraft atomically transitions the newest site DRAFT to RUNNING.
-// Claims are serialized per site; expired RUNNING drafts and older DRAFTs are
-// marked stale so a crashed or superseded plan cannot be applied later.
-func ClaimRolloutDraft(ctx context.Context, schema, siteID, rolloutID string) (RolloutDraftRecord, error) {
-	safeSchema, err := SafeSchemaIdent(schema)
-	if err != nil {
-		return RolloutDraftRecord{}, err
-	}
-	tx, err := DB.BeginTx(ctx, nil)
-	if err != nil {
-		return RolloutDraftRecord{}, err
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
-		return RolloutDraftRecord{}, err
-	}
+func claimRolloutDraftTx(ctx context.Context, tx *sql.Tx, safeSchema, siteID, rolloutID string) (RolloutDraftRecord, error) {
 	var record RolloutDraftRecord
-	err = tx.QueryRowContext(ctx, fmt.Sprintf(`
+	err := tx.QueryRowContext(ctx, fmt.Sprintf(`
 		WITH expired AS (
 			UPDATE %s.rollout_runs
 			SET status = 'STALE', claim_token = NULL, updated_at = CURRENT_TIMESTAMP
@@ -183,10 +167,121 @@ func ClaimRolloutDraft(ctx context.Context, schema, siteID, rolloutID string) (R
 	if err != nil {
 		return RolloutDraftRecord{}, err
 	}
+	return record, nil
+}
+
+// ClaimRolloutDraft atomically transitions the newest site DRAFT to RUNNING.
+// Claims are serialized per site; expired RUNNING drafts and older DRAFTs are
+// marked stale so a crashed or superseded plan cannot be applied later.
+func ClaimRolloutDraft(ctx context.Context, schema, siteID, rolloutID string) (RolloutDraftRecord, error) {
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return RolloutDraftRecord{}, err
+	}
+	tx, err := DB.BeginTx(ctx, nil)
+	if err != nil {
+		return RolloutDraftRecord{}, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
+		return RolloutDraftRecord{}, err
+	}
+	record, err := claimRolloutDraftTx(ctx, tx, safeSchema, siteID, rolloutID)
+	if err != nil {
+		return RolloutDraftRecord{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return RolloutDraftRecord{}, err
 	}
 	return record, nil
+}
+
+// ClaimAndQueueDeviceChangeSet makes the safe rollout claim and its durable
+// device changeset visible together. A failed queue, result, or audit write
+// rolls the claim back to DRAFT so no RUNNING rollout can lack work.
+func ClaimAndQueueDeviceChangeSet(ctx context.Context, schema, siteID, rolloutID, deviceRole string, changeSet, queuedResult json.RawMessage, username, remoteAddr string) (int64, error) {
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := DB.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", siteID); err != nil {
+		return 0, err
+	}
+	record, err := claimRolloutDraftTx(ctx, tx, safeSchema, siteID, rolloutID)
+	if err != nil {
+		return 0, err
+	}
+	identity, err := parseDeviceChangeSet(changeSet, false)
+	if err != nil {
+		return 0, err
+	}
+	transactionContext := context.WithValue(ctx, TxKey, tx)
+	deviceGeneration, err := QueueDeviceChangeSetForRollout(transactionContext, schema, siteID, deviceRole, identity.DeviceID, changeSet, rolloutID)
+	if err != nil {
+		return 0, err
+	}
+	updateResult, err := tx.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s.rollout_runs
+		   SET status = 'QUEUED',
+		       results = jsonb_set($1::jsonb, '{0,device_generation}', to_jsonb($5::bigint), true),
+		       claim_token = NULL,
+		       updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $2 AND site_id = $3 AND status = 'RUNNING' AND claim_token::text = $4
+	`, safeSchema), queuedResult, rolloutID, siteID, record.ClaimToken, deviceGeneration)
+	if err != nil {
+		return 0, err
+	}
+	if affected, err := updateResult.RowsAffected(); err != nil {
+		return 0, err
+	} else if affected != 1 {
+		return 0, fmt.Errorf("%w: claim lost", ErrRolloutDraftNotAvailable)
+	}
+	if err := InsertAuditLogContext(transactionContext, username, "SITE_ORCHESTRATOR_ROLLOUT_START", "SITE", siteID,
+		fmt.Sprintf("Claimed rollout draft %s rollout sequence %d plan_hash %s", rolloutID, record.Generation, record.PlanHash), remoteAddr); err != nil {
+		return 0, err
+	}
+	if err := InsertAuditLogContext(transactionContext, username, "SITE_ORCHESTRATOR_CHANGESET_QUEUED", "SITE", siteID,
+		fmt.Sprintf("Rollout %s queued changeset %s for device %s at generation %d", rolloutID, identity.ID, identity.DeviceID, deviceGeneration), remoteAddr); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return deviceGeneration, nil
+}
+
+// RejectRolloutDraft durably closes a draft that cannot be executed by the
+// currently supported transport or device capability.
+func RejectRolloutDraft(ctx context.Context, schema, siteID, rolloutID, reason string) error {
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return err
+	}
+	result, err := Tx(ctx).ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s.rollout_runs
+		   SET status = 'REJECTED',
+		       results = jsonb_build_array(jsonb_build_object('status', 'REJECTED', 'error', $3::text)),
+		       updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $1 AND site_id = $2 AND status = 'DRAFT'
+	`, safeSchema), rolloutID, siteID, reason)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return fmt.Errorf("%w: %s", ErrRolloutDraftNotAvailable, rolloutID)
+	}
+	return nil
 }
 
 // ReleaseRolloutDraft makes a claimed draft available again when a

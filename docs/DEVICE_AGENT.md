@@ -45,6 +45,15 @@ Existing devices must complete this transition before legacy provisioning is dis
 
 Typed operations carry `operation_id`, `plan_hash` and, for generation-bound plans, a positive `generation`. The agent persists the generation beside its durable transaction journal and echoes it in telemetry status. Older agents may omit the generation; the controller still requires matching operation and plan identities and leaves generation columns unchanged for that compatibility path.
 
+The safe rollout slice carries one `DeviceChangeSet` through the same config
+pull and telemetry requests. It contains `change_set_id`, `device_id`,
+`plan_hash`, a positive device generation, one `system` operation with its
+observed-state hash, health checks, and `confirmation_policy: "local_auto"`.
+The agent reports it in `change_set_transaction` and keeps standalone
+operation status in the separate `transaction` envelope.
+Its telemetry capabilities include `device_change_set: true`; the controller
+requires that capability before queuing the safe rollout slice.
+
 ## Local Responsibilities
 
 The agent runs under procd and performs bounded log collection, configuration pulls, telemetry heartbeats, optional surveys and local Threat Shield handling. It must not block its heartbeat on `logread` or an unavailable optional utility.

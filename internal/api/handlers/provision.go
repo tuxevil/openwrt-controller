@@ -89,6 +89,27 @@ func decodePendingDeviceOperation(raw json.RawMessage) (services.DeviceOperation
 	return plan, nil
 }
 
+func decodePendingDeviceChangeSet(raw json.RawMessage) (services.DeviceChangeSet, error) {
+	var changeSet services.DeviceChangeSet
+	if err := json.Unmarshal(raw, &changeSet); err != nil {
+		return services.DeviceChangeSet{}, fmt.Errorf("invalid pending changeset: %w", err)
+	}
+	if err := services.ValidateDeviceChangeSet(changeSet); err != nil {
+		return services.DeviceChangeSet{}, fmt.Errorf("invalid pending changeset: %w", err)
+	}
+	return changeSet, nil
+}
+
+func validatePendingDeviceChangeSetForDevice(changeSet services.DeviceChangeSet, deviceID string) error {
+	if !strings.EqualFold(changeSet.DeviceID, deviceID) {
+		return fmt.Errorf("pending changeset targets a different device")
+	}
+	if changeSet.Generation <= 0 {
+		return fmt.Errorf("pending changeset has no reserved generation")
+	}
+	return nil
+}
+
 // deepMerge merges src into dst. dst values have priority.
 func deepMerge(dst, src map[string]interface{}) map[string]interface{} {
 	result := make(map[string]interface{})
@@ -205,6 +226,7 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var pendingOperation interface{}
+	var pendingChangeSet interface{}
 	operationRaw, operationErr := database.GetPendingDeviceOperation(r.Context(), tenantSchema, deviceID)
 	if operationErr != nil {
 		log.Printf("[provision] pending operation lookup failed for %s: %v", deviceID, operationErr)
@@ -219,6 +241,31 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		pendingOperation = plan
+	}
+	changeSetRaw, changeSetErr := database.GetPendingDeviceChangeSet(r.Context(), tenantSchema, deviceID)
+	if changeSetErr != nil {
+		log.Printf("[provision] pending changeset lookup failed for %s: %v", deviceID, changeSetErr)
+		http.Error(w, `{"error":"could not read pending device changeset"}`, http.StatusServiceUnavailable)
+		return
+	}
+	if len(changeSetRaw) > 0 {
+		changeSet, decodeErr := decodePendingDeviceChangeSet(changeSetRaw)
+		if decodeErr != nil {
+			log.Printf("[provision] refusing invalid pending changeset for %s: %v", deviceID, decodeErr)
+			http.Error(w, `{"error":"pending device changeset is invalid"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if identityErr := validatePendingDeviceChangeSetForDevice(changeSet, deviceID); identityErr != nil {
+			log.Printf("[provision] refusing mismatched pending changeset for %s: %v", deviceID, identityErr)
+			http.Error(w, `{"error":"pending device changeset identity is invalid"}`, http.StatusServiceUnavailable)
+			return
+		}
+		pendingChangeSet = changeSet
+	}
+	if pendingOperation != nil && pendingChangeSet != nil {
+		log.Printf("[provision] refusing conflicting pending operation and changeset for %s", deviceID)
+		http.Error(w, `{"error":"conflicting pending device work"}`, http.StatusServiceUnavailable)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -405,6 +452,9 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if pendingOperation != nil {
 		configPayload["apply_operation"] = pendingOperation
+	}
+	if pendingChangeSet != nil {
+		configPayload["apply_change_set"] = pendingChangeSet
 	}
 
 	response := deviceConfigResponse(configPayload, deviceToken.String, allowLegacyProvision())

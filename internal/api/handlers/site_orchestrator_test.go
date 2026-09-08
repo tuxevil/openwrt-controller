@@ -209,6 +209,33 @@ func TestBuildRolloutDraftCapturesCommandsAndObservedState(t *testing.T) {
 	}
 }
 
+func TestFilterRolloutResultsByNamespaceKeepsOnlySystemCommands(t *testing.T) {
+	results := []services.RenderResult{{
+		DeviceID: "device-a",
+		Commands: []services.UciCommand{
+			{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "router-a"},
+			{Action: "set", Config: "dropbear", Section: "global", Option: "Port", Value: "22"},
+		},
+	}}
+
+	filtered, err := filterRolloutResultsByNamespace(results, "system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(filtered) != 1 || len(filtered[0].Commands) != 1 || filtered[0].Commands[0].Config != "system" {
+		t.Fatalf("filtered results = %#v", filtered)
+	}
+	if len(results[0].Commands) != 2 {
+		t.Fatal("namespace filtering mutated the rendered results")
+	}
+}
+
+func TestFilterRolloutResultsByNamespaceRejectsUnsupportedNamespace(t *testing.T) {
+	if _, err := filterRolloutResultsByNamespace(nil, "network"); err == nil {
+		t.Fatal("unsupported namespace was accepted")
+	}
+}
+
 func TestRolloutPlanHashStableForSameDraft(t *testing.T) {
 	first, err := buildRolloutDraft("site-1", "", nil, []services.RenderResult{{
 		DeviceID: "device-a",
@@ -288,6 +315,55 @@ func TestRolloutRecordPreviewRejectsTamperedDraft(t *testing.T) {
 	}
 }
 
+func TestBuildSingleDeviceChangeSetUsesImmutableDraftState(t *testing.T) {
+	draft := rolloutDraft{
+		Namespace:    "system",
+		HealthChecks: []string{"1.1.1.1"},
+		Devices: []rolloutDraftDevice{{
+			DeviceID:      "device-1",
+			Commands:      []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}},
+			ObservedState: map[string]string{"system": strings.Repeat("a", 64)},
+		}},
+	}
+
+	changeSet, err := buildSingleDeviceChangeSet("rollout-1", draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changeSet.DeviceID != "device-1" || changeSet.Generation != 0 || changeSet.Operations[0].Config != "system" {
+		t.Fatalf("changeset = %#v", changeSet)
+	}
+	if changeSet.Operations[0].ObservedStateHash != strings.Repeat("a", 64) || changeSet.PlanHash == "" {
+		t.Fatalf("changeset lost immutable state: %#v", changeSet)
+	}
+}
+
+func TestBuildSingleDeviceChangeSetRejectsUnsupportedNamespace(t *testing.T) {
+	draft := rolloutDraft{
+		Devices: []rolloutDraftDevice{{
+			DeviceID:      "device-1",
+			Commands:      []services.UciCommand{{Action: "set", Config: "dhcp", Section: "lan", Option: "start", Value: "100"}},
+			ObservedState: map[string]string{"dhcp": strings.Repeat("a", 64)},
+		}},
+	}
+	if _, err := buildSingleDeviceChangeSet("rollout-1", draft); err == nil {
+		t.Fatal("unsupported namespace was accepted")
+	}
+}
+
+func TestBuildSingleDeviceChangeSetRequiresExplicitNamespace(t *testing.T) {
+	draft := rolloutDraft{
+		Devices: []rolloutDraftDevice{{
+			DeviceID:      "device-1",
+			Commands:      []services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}},
+			ObservedState: map[string]string{"system": strings.Repeat("a", 64)},
+		}},
+	}
+	if _, err := buildSingleDeviceChangeSet("rollout-1", draft); err == nil {
+		t.Fatal("unscoped rollout draft entered the changeset slice")
+	}
+}
+
 func TestVerifyRolloutDraftTargetsRejectsRoleChanges(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -298,9 +374,9 @@ func TestVerifyRolloutDraftTargetsRejectsRoleChanges(t *testing.T) {
 	database.DB = db
 	defer func() { database.DB = previousDB }()
 
-	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(device_role, 'AP'), pending_operation FROM "tenant_demo".devices WHERE id = $1 AND site_id = $2`)).
+	mock.ExpectQuery(regexp.QuoteMeta(`SELECT COALESCE(device_role, 'AP'), pending_operation, pending_change_set FROM "tenant_demo".devices WHERE id = $1 AND site_id = $2 AND COALESCE(last_operation->>'state', '') <> 'RECOVERY_REQUIRED' AND COALESCE(last_change_set->>'state', '') <> 'RECOVERY_REQUIRED'`)).
 		WithArgs("device-a", "site-1").
-		WillReturnRows(sqlmock.NewRows([]string{"device_role", "pending_operation"}).AddRow("Gateway", nil))
+		WillReturnRows(sqlmock.NewRows([]string{"device_role", "pending_operation", "pending_change_set"}).AddRow("Gateway", nil, nil))
 	draft := rolloutDraft{
 		SiteID:  "site-1",
 		Devices: []rolloutDraftDevice{{DeviceID: "device-a", Role: "AP"}},
@@ -322,6 +398,10 @@ func TestRequestedRolloutIDAcceptsBodyAndQuery(t *testing.T) {
 	queryRequest := httptest.NewRequest("POST", "/?rollout_id=00000000-0000-0000-0000-000000000002", nil)
 	if got, err := requestedRolloutID(queryRequest); err != nil || got != "00000000-0000-0000-0000-000000000002" {
 		t.Fatalf("query rollout ID = %q, %v", got, err)
+	}
+	uppercaseRequest := httptest.NewRequest("POST", "/?rollout_id=00000000-0000-0000-0000-0000000000AB", nil)
+	if got, err := requestedRolloutID(uppercaseRequest); err != nil || got != "00000000-0000-0000-0000-0000000000ab" {
+		t.Fatalf("uppercase rollout ID = %q, %v", got, err)
 	}
 }
 

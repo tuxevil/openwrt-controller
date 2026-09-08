@@ -220,6 +220,8 @@ func createTenantTables(schema string) error {
 		capabilities_updated_at TIMESTAMP WITH TIME ZONE,
 		pending_operation JSONB,
 		last_operation JSONB,
+		pending_change_set JSONB,
+		last_change_set JSONB,
 		last_seen_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -690,6 +692,8 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS capabilities_updated_at TIMESTAMP WITH TIME ZONE", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS pending_operation JSONB", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_operation JSONB", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS pending_change_set JSONB", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS last_change_set JSONB", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.rollout_runs ADD COLUMN IF NOT EXISTS plan JSONB NOT NULL DEFAULT '{}'", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.rollout_runs ADD COLUMN IF NOT EXISTS claim_token UUID", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.client_hostnames ADD COLUMN IF NOT EXISTS trusted BOOLEAN NOT NULL DEFAULT false", quotedSchema),

@@ -15,6 +15,7 @@ Generation and operation status changes should also exercise the SQL seam with:
 
 ```bash
 go test ./internal/database -run 'TestQueueDeviceOperation|TestRecordDeviceOperationStatus' -count=1
+go test ./internal/database -run 'Test.*DeviceChangeSet' -count=1
 ```
 
 Agent contracts are shell checks and should run after any agent or bootstrap change:
@@ -23,6 +24,8 @@ Agent contracts are shell checks and should run after any agent or bootstrap cha
 sh -n devices/agent.sh devices/99-nerve-center-bootstrap
 devices/agent_contract_test.sh
 devices/agent_log_collection_test.sh
+devices/agent_change_set_test.sh
+devices/agent_transaction_test.sh
 ```
 
 ## Database Integration Tests
@@ -33,6 +36,10 @@ Database tests skip by default and never use the controller's configured databas
 DATABASE_URL_TEST=postgres://user:password@localhost:5432/testdb \
 OPENWRT_INTEGRATION_DB=1 \
 go test ./internal/database -run TestSiteConfigMigrationContract -count=1
+
+DATABASE_URL_TEST=postgres://user:password@localhost:5432/testdb \
+OPENWRT_INTEGRATION_DB=1 \
+go test ./internal/database -run TestDeviceChangeSetIntegrationQueuesAndPersistsTerminalStatus -count=1
 ```
 
 The migration contract creates a temporary tenant schema, simulates a legacy `site_configs` table, runs the real tenant migration and verifies the upgrade is idempotent.

@@ -2,6 +2,7 @@ package database
 
 import (
 	"encoding/json"
+	"errors"
 	"regexp"
 	"testing"
 
@@ -94,6 +95,86 @@ func TestClaimRolloutDraftUsesAnExecutionLease(t *testing.T) {
 
 	if _, err := ClaimRolloutDraft(t.Context(), "tenant_demo", "site-1", "rollout-1"); err != nil {
 		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimAndQueueDeviceChangeSetCommitsClaimAndQueueTogether(t *testing.T) {
+	mock := mockEnrollmentDB(t)
+	changeSetID := "cs-test-1"
+	changeSetRaw := json.RawMessage(`{"change_set_id":"cs-test-1","device_id":"device-1","plan_hash":"aa034f6d8e438065932060bef117be1500717ca0798047a449344dc90025b21f","operations":[{"operation_id":"operation-test-1","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"observed_state_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"confirmation_policy":"local_auto"}`)
+	queuedResult := json.RawMessage(`[{"device_id":"device-1","status":"QUEUED"}]`)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")).
+		WithArgs("site-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("WITH expired AS")).
+		WithArgs("rollout-1", "site-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "site_id", "generation", "status", "claim_token", "plan_hash", "requested_by", "target_device_ids", "plan", "results"}).
+			AddRow("rollout-1", "site-1", int64(7), "RUNNING", "claim-token", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "operator", []byte(`["device-1"]`), []byte(`{"site_id":"site-1"}`), []byte(`[]`)))
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")).
+		WithArgs(changeSetRaw, "device-1", changeSetID, int64(0), "site-1", "rollout-1", "AP").
+		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_change_set"}).AddRow(int64(42), changeSetRaw))
+	mock.ExpectExec(`UPDATE tenant_demo\.rollout_runs\s+SET status = 'QUEUED'`).
+		WithArgs(queuedResult, "rollout-1", "site-1", "claim-token", int64(42)).
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO audit_logs")).
+		WithArgs("operator", "SITE_ORCHESTRATOR_ROLLOUT_START", "SITE", "site-1", sqlmock.AnyArg(), "127.0.0.1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec(regexp.QuoteMeta("INSERT INTO audit_logs")).
+		WithArgs("operator", "SITE_ORCHESTRATOR_CHANGESET_QUEUED", "SITE", "site-1", sqlmock.AnyArg(), "127.0.0.1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectCommit()
+
+	generation, err := ClaimAndQueueDeviceChangeSet(t.Context(), "tenant_demo", "site-1", "rollout-1", "AP", changeSetRaw, queuedResult, "operator", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generation != 42 {
+		t.Fatalf("queued generation = %d, want 42", generation)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRejectRolloutDraftPersistsUnsupportedReason(t *testing.T) {
+	mock := mockEnrollmentDB(t)
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tenant_demo.rollout_runs")).
+		WithArgs("rollout-1", "site-1", "device does not support changesets").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	if err := RejectRolloutDraft(t.Context(), "tenant_demo", "site-1", "rollout-1", "device does not support changesets"); err != nil {
+		t.Fatal(err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestClaimAndQueueDeviceChangeSetRollsBackWhenQueueFails(t *testing.T) {
+	mock := mockEnrollmentDB(t)
+	changeSetRaw := json.RawMessage(`{"change_set_id":"cs-test-1","device_id":"device-1","plan_hash":"aa034f6d8e438065932060bef117be1500717ca0798047a449344dc90025b21f","operations":[{"operation_id":"operation-test-1","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"observed_state_hash":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}],"confirmation_policy":"local_auto"}`)
+	queuedResult := json.RawMessage(`[{"device_id":"device-1","status":"QUEUED"}]`)
+
+	mock.ExpectBegin()
+	mock.ExpectExec(regexp.QuoteMeta("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")).
+		WithArgs("site-1").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectQuery(regexp.QuoteMeta("WITH expired AS")).
+		WithArgs("rollout-1", "site-1").
+		WillReturnRows(sqlmock.NewRows([]string{"id", "site_id", "generation", "status", "claim_token", "plan_hash", "requested_by", "target_device_ids", "plan", "results"}).
+			AddRow("rollout-1", "site-1", int64(7), "RUNNING", "claim-token", "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "operator", []byte(`[]`), []byte(`{}`), []byte(`[]`)))
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")).
+		WithArgs(changeSetRaw, "device-1", "cs-test-1", int64(0), "site-1", "rollout-1", "AP").
+		WillReturnError(errors.New("queue failed"))
+	mock.ExpectRollback()
+
+	if _, err := ClaimAndQueueDeviceChangeSet(t.Context(), "tenant_demo", "site-1", "rollout-1", "AP", changeSetRaw, queuedResult, "operator", "127.0.0.1"); err == nil {
+		t.Fatal("queue failure was accepted")
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

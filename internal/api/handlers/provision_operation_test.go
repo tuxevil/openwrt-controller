@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"regexp"
 	"strings"
 	"testing"
@@ -162,5 +163,62 @@ func TestDecodePendingDeviceOperationPreservesHealthChecks(t *testing.T) {
 	}
 	if err := services.ValidateDeviceOperation(plan.Config, plan.Commands, plan.HealthChecks); err != nil {
 		t.Fatalf("decoded plan no longer validates: %v", err)
+	}
+}
+
+func TestDecodePendingDeviceChangeSetAcceptsSafePlan(t *testing.T) {
+	changeSet, err := services.NewDeviceChangeSet(
+		"device-1",
+		"system",
+		[]services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}},
+		strings.Repeat("a", 64),
+		nil,
+		services.ConfirmationLocalAuto,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changeSet.Generation = 42
+	raw, err := json.Marshal(changeSet)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodePendingDeviceChangeSet(raw)
+	if err != nil {
+		t.Fatalf("safe changeset was rejected: %v", err)
+	}
+	if decoded.ChangeSetID != changeSet.ChangeSetID || decoded.Operations[0].Config != "system" {
+		t.Fatalf("decoded changeset = %#v", decoded)
+	}
+	if err := validatePendingDeviceChangeSetForDevice(decoded, "device-1"); err != nil {
+		t.Fatalf("valid changeset identity was rejected: %v", err)
+	}
+}
+
+func TestValidatePendingDeviceChangeSetForDeviceRejectsUnreservedOrMismatchedPlans(t *testing.T) {
+	changeSet := services.DeviceChangeSet{DeviceID: "device-1", Generation: 0}
+	if err := validatePendingDeviceChangeSetForDevice(changeSet, "device-1"); err == nil {
+		t.Fatal("unreserved changeset was accepted for delivery")
+	}
+	changeSet.Generation = 42
+	if err := validatePendingDeviceChangeSetForDevice(changeSet, "device-2"); err == nil {
+		t.Fatal("cross-device changeset was accepted for delivery")
+	}
+}
+
+func TestDeviceConfigResponseIncludesPendingChangeSet(t *testing.T) {
+	changeSet := map[string]interface{}{
+		"change_set_id": "cs-1",
+		"device_id":     "device-1",
+		"plan_hash":     strings.Repeat("a", 64),
+		"generation":    42,
+	}
+	response := deviceConfigResponse(map[string]interface{}{"apply_change_set": changeSet}, "device-token", false)
+	config, ok := response["config"].(map[string]interface{})
+	if !ok {
+		t.Fatal("response config was not an object")
+	}
+	if got, ok := config["apply_change_set"].(map[string]interface{}); !ok || got["change_set_id"] != "cs-1" {
+		t.Fatalf("pending changeset missing from config response: %#v", config)
 	}
 }

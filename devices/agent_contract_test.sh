@@ -64,7 +64,7 @@ if [ -z "$PAYLOAD_LINE" ] || [ -z "$NEIGHBOR_DEFAULT_LINE" ] || [ "$NEIGHBOR_DEF
     exit 1
 fi
 RUNTIME_PREFLIGHT_LINE=$(awk '/Runtime configuration or device identity is missing/ {print NR; exit}' "$AGENT")
-for self_test in --self-test-signature --self-test-transaction --self-test-operation --self-test-status --self-test-runtime-config --self-test-log-collection; do
+for self_test in --self-test-signature --self-test-transaction --self-test-operation --self-test-change-set --self-test-status --self-test-change-set-transition --self-test-runtime-config --self-test-log-collection; do
     SELF_TEST_LINE=$(awk -v flag="$self_test" 'index($0, flag) {print NR; exit}' "$AGENT")
     if [ -z "$RUNTIME_PREFLIGHT_LINE" ] || [ -z "$SELF_TEST_LINE" ] || [ "$SELF_TEST_LINE" -ge "$RUNTIME_PREFLIGHT_LINE" ]; then
         echo "$self_test must dispatch before runtime preflight" >&2
@@ -102,6 +102,11 @@ grep -q 'operation_health_check' "$AGENT"
 grep -q 'operation_apply_command' "$AGENT"
 grep -q 'delete_all' "$AGENT"
 grep -q 'apply_operation' "$AGENT"
+grep -q 'apply_change_set' "$AGENT"
+grep -q 'apply_pending_change_set' "$AGENT"
+grep -q 'change_set_transaction' "$AGENT"
+grep -q 'change_set_status_write' "$AGENT"
+grep -q 'change_set_content_plan_hash' "$AGENT"
 
 # The bootstrap must download with the short-lived enrollment token, not a
 # site-wide API key or an invented device token.

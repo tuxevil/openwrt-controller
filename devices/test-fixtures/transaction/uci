@@ -55,7 +55,10 @@ if [ -n "${UCI_FIXTURE_STATE:-}" ]; then
             fi
             printf '%s=%s\n' "$path" "$value" >> "$UCI_FIXTURE_STATE"
             ;;
-    commit|revert|rename)
+    commit)
+        [ "${UCI_FIXTURE_FAIL_COMMIT:-0}" = "1" ] && exit 1
+        ;;
+    revert|rename)
         ;;
         *)
             ;;

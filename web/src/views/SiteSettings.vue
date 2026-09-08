@@ -172,6 +172,24 @@ async function applyDraft() {
     const data = syncRes.data
     pendingDraft.value = null
     rolloutRefreshKey.value++
+    if (data.status === 'queued') {
+      overlayTitle.value = `CHANGESET QUEUED — DEVICE GEN ${data.device_generation}`
+      overlayDevices.value = [{
+        device_id: data.target_device_id,
+        status: 'QUEUED',
+        change_set_id: data.change_set_id,
+        plan_hash: data.plan_hash,
+        device_generation: data.device_generation,
+      }]
+      syncSummary.value = {
+        generation: data.generation,
+        planHash: data.plan_hash,
+        deviceGeneration: data.device_generation,
+      }
+      showOverlay.value = true
+      successMsg.value = `Device changeset queued at generation ${data.device_generation}`
+      return
+    }
     overlayTitle.value = `REVISION APPLIED — ${data.successes} OK · ${data.failures} FAILED`
     overlayDevices.value = data.results || []
     syncSummary.value = { successes: data.successes, failures: data.failures }
