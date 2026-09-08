@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,60 @@ func TestClaimQueuedRolloutReturnsFencedLease(t *testing.T) {
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestActiveTenantSchemasRejectsInvalidAliases(t *testing.T) {
+	db, mock, cleanup := setupRolloutWorkerSQLMock(t)
+	defer cleanup()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT schema_alias FROM tenants WHERE is_active = true")).
+		WillReturnRows(sqlmock.NewRows([]string{"schema_alias"}).
+			AddRow("tenant_demo").AddRow("tenant-invalid!").AddRow("tenant_two"))
+
+	schemas, err := database.ActiveTenantSchemas(context.Background())
+	if err != nil {
+		t.Fatalf("ActiveTenantSchemas returned error: %v", err)
+	}
+	if got, want := strings.Join(schemas, ","), "tenant_tenant_demo,tenant_tenant_two"; got != want {
+		t.Fatalf("schemas = %q, want %q", got, want)
+	}
+	_ = db
+}
+
+func TestGetRolloutProgressCountsTerminalResults(t *testing.T) {
+	db, mock, cleanup := setupRolloutWorkerSQLMock(t)
+	defer cleanup()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status, results FROM tenant_demo.rollout_runs WHERE id = $1 AND site_id = $2")).
+		WithArgs("rollout-1", "site-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "results"}).AddRow("RUNNING", []byte(`[
+			{"status":"QUEUED"},
+			{"status":"SUCCESS"},
+			{"status":"QUEUED","change_set_state":"COMMITTED"}
+		]`)))
+
+	progress, err := database.GetRolloutProgress(context.Background(), "tenant_demo", "rollout-1", "site-1")
+	if err != nil {
+		t.Fatalf("GetRolloutProgress returned error: %v", err)
+	}
+	if progress.Status != "RUNNING" || progress.ResultCount != 3 || progress.TerminalCount != 2 {
+		t.Fatalf("progress = %#v, want running/3/2", progress)
+	}
+	_ = db
+}
+
+func TestUpdateRolloutWorkerCursorUsesLeaseFence(t *testing.T) {
+	db, mock, cleanup := setupRolloutWorkerSQLMock(t)
+	defer cleanup()
+	mock.ExpectExec(regexp.QuoteMeta("UPDATE tenant_demo.rollout_runs")).
+		WithArgs(2, "rollout-1", "site-1", "worker-token").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+
+	err := database.UpdateRolloutWorkerCursor(context.Background(), "tenant_demo", database.RolloutLease{
+		RolloutID: "rollout-1", SiteID: "site-1", Token: "worker-token",
+	}, 2)
+	if err != nil {
+		t.Fatalf("UpdateRolloutWorkerCursor returned error: %v", err)
+	}
+	_ = db
 }
 
 func TestClaimQueuedRolloutReportsUnavailableQueue(t *testing.T) {
