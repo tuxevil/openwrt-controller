@@ -121,7 +121,7 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 	if err := rolloutRows.Err(); err != nil {
 		t.Fatalf("iterate rollout_runs columns: %v", err)
 	}
-	for _, column := range []string{"plan", "claim_token"} {
+	for _, column := range []string{"plan", "claim_token", "worker_token", "worker_lease_until", "worker_cursor"} {
 		if !rolloutColumns[column] {
 			t.Errorf("rollout_runs is missing immutable rollout column %q", column)
 		}
