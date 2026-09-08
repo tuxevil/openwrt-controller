@@ -1678,7 +1678,7 @@ bootstrap_agent() {
 
     enrollment_arch=$(uname -m 2>/dev/null | sed 's/[^A-Za-z0-9._-]/_/g')
     enrollment_kernel=$(uname -r 2>/dev/null | sed 's/[^A-Za-z0-9._-]/_/g')
-    enrollment_payload=$(printf '{"device_id":"%s","nonce":"%s","capabilities":{"device_change_set":true,"architecture":"%s","kernel":"%s"}}' \
+    enrollment_payload=$(printf '{"device_id":"%s","nonce":"%s","capabilities":{"device_change_set":{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]},"architecture":"%s","kernel":"%s"}}' \
         "$DEVICE_ID" "$enrollment_nonce" "$enrollment_arch" "$enrollment_kernel")
     enrollment_response_file="/tmp/nerve-enrollment-response.$$"
     enrollment_http_code=$(controller_curl -m 10 -sS -X POST \
@@ -2035,7 +2035,7 @@ while true; do
     "timestamp": $(date +%s),
     "board": $BOARD,
     "system": $SYS_INFO,
-    "capabilities": {"device_change_set":true,"openwrt_release":"$CAP_RELEASE","architecture":"$CAP_ARCH","kernel":"$CAP_KERNEL","ram_mb":${CAP_RAM_MB:-0},"flash_mb":${CAP_FLASH_MB:-0},"interfaces":[${CAP_INTERFACES}],"radios":[${CAP_RADIOS}],"wifi_device_sections":[${CAP_WIFI_DEVICES}],"wifi_iface_sections":[${CAP_WIFI_IFACES}],"logical_networks":{${CAP_LOGICAL_NETWORKS}},"sqm_candidates":[${CAP_SQM_CANDIDATES}],"switch_stack":"$CAP_SWITCH","firewall":"$CAP_FIREWALL","packages":[${CAP_PACKAGES}]},
+    "capabilities": {"device_change_set":{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]},"openwrt_release":"$CAP_RELEASE","architecture":"$CAP_ARCH","kernel":"$CAP_KERNEL","ram_mb":${CAP_RAM_MB:-0},"flash_mb":${CAP_FLASH_MB:-0},"interfaces":[${CAP_INTERFACES}],"radios":[${CAP_RADIOS}],"wifi_device_sections":[${CAP_WIFI_DEVICES}],"wifi_iface_sections":[${CAP_WIFI_IFACES}],"logical_networks":{${CAP_LOGICAL_NETWORKS}},"sqm_candidates":[${CAP_SQM_CANDIDATES}],"switch_stack":"$CAP_SWITCH","firewall":"$CAP_FIREWALL","packages":[${CAP_PACKAGES}]},
     "wireless_stations": $WIFI_DATA,
     "top_talkers": $TOP_TALKERS,
     "iface_stats": $IFACE_STATS,

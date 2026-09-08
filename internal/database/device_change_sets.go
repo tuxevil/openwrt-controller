@@ -74,6 +74,8 @@ var (
 	deviceChangeSetHealthPattern  = regexp.MustCompile(`^[A-Za-z0-9.-]{1,253}$`)
 )
 
+const deviceChangeSetCapabilityContract = `{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]}`
+
 func parseDeviceChangeSet(raw json.RawMessage, status bool) (deviceChangeSetIdentity, error) {
 	var envelope deviceChangeSetEnvelope
 	if err := json.Unmarshal(raw, &envelope); err != nil {
@@ -279,7 +281,8 @@ func queueDeviceChangeSet(ctx context.Context, schema, ownerSiteID, ownerRole, d
 		       updated_at = CURRENT_TIMESTAMP
 		 WHERE device.id = $2
 		   %s
-		   AND COALESCE(device.capabilities->>'device_change_set', 'false') = 'true'
+		   AND COALESCE(device.capabilities->'device_change_set' = '%s'::jsonb, false)
+		   AND COALESCE(device.capabilities->'device_change_set' @> '%s'::jsonb, false)
 		   AND device.pending_operation IS NULL
 		   AND device.pending_change_set IS NULL
 		   AND COALESCE(device.last_operation->>'state', '') <> 'RECOVERY_REQUIRED'
@@ -296,7 +299,7 @@ func queueDeviceChangeSet(ctx context.Context, schema, ownerSiteID, ownerRole, d
 		   )
 		   AND ($4::bigint = 0 OR device.desired_generation = $4::bigint)
 		 RETURNING device.desired_generation, device.pending_change_set
-	`, safeSchema, ownerConstraints, safeSchema, activeRolloutExclusion), args...).Scan(&queuedGeneration, &queuedChangeSet)
+	`, safeSchema, ownerConstraints, deviceChangeSetCapabilityContract, deviceChangeSetCapabilityContract, safeSchema, activeRolloutExclusion), args...).Scan(&queuedGeneration, &queuedChangeSet)
 	if err == nil {
 		return queuedGeneration, nil
 	}
@@ -304,12 +307,13 @@ func queueDeviceChangeSet(ctx context.Context, schema, ownerSiteID, ownerRole, d
 		return 0, err
 	}
 
-	var deviceSite, actualRole, changeSetCapability string
+	var deviceSite, actualRole string
+	var changeSetCapability bool
 	var pending, last []byte
 	var desiredGeneration int64
 	lookupErr := Tx(ctx).QueryRowContext(ctx, fmt.Sprintf(
-		`SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->>'device_change_set', 'false'), desired_generation, pending_change_set, last_change_set
-		   FROM %s.devices WHERE id = $1`, safeSchema,
+		`SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->'device_change_set' = '%s'::jsonb, false), desired_generation, pending_change_set, last_change_set
+		   FROM %s.devices WHERE id = $1`, deviceChangeSetCapabilityContract, safeSchema,
 	), deviceID).Scan(&deviceSite, &actualRole, &changeSetCapability, &desiredGeneration, &pending, &last)
 	if lookupErr == sql.ErrNoRows {
 		return 0, ErrDeviceNotFound
@@ -323,7 +327,7 @@ func queueDeviceChangeSet(ctx context.Context, schema, ownerSiteID, ownerRole, d
 	if ownerRolloutID != "" && actualRole != ownerRole {
 		return 0, fmt.Errorf("device role is no longer current")
 	}
-	if changeSetCapability != "true" {
+	if !changeSetCapability {
 		return 0, ErrDeviceChangeSetCapability
 	}
 	if len(last) > 0 && string(last) != "null" {

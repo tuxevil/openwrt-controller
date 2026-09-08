@@ -31,6 +31,12 @@ Content-Type: application/json
   "device_id": "04:A1:51:96:A6:4D",
   "nonce": "0123456789abcdef0123456789abcdef",
   "capabilities": {
+    "device_change_set": {
+      "version": 1,
+      "namespaces": ["system"],
+      "max_operations": 1,
+      "confirmation_policies": ["local_auto"]
+    },
     "architecture": "ath79",
     "kernel": "6.6"
   }

@@ -76,7 +76,7 @@ func TestDeviceChangeSetIntegrationQueuesAndPersistsTerminalStatus(t *testing.T)
 	deviceID := "device-1"
 	siteID := "00000000-0000-0000-0000-000000000001"
 	rolloutID := "00000000-0000-0000-0000-000000000002"
-	if _, err := database.DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id, device_role, capabilities) VALUES ($1, $2, 'AP', '{\"device_change_set\": true}')", quotedDevices), deviceID, siteID); err != nil {
+	if _, err := database.DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id, device_role, capabilities) VALUES ($1, $2, 'AP', '{\"device_change_set\":{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}}')", quotedDevices), deviceID, siteID); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
 	if _, err := database.DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id, status) VALUES ($1, $2, 'RUNNING')", quotedRollouts), rolloutID, siteID); err != nil {
@@ -162,5 +162,39 @@ func TestDeviceChangeSetIntegrationQueuesAndPersistsTerminalStatus(t *testing.T)
 	lateStatus := []byte(fmt.Sprintf(`{"change_set_id":%q,"device_id":%q,"plan_hash":%q,"generation":%d,"state":"APPLYING"}`, changeSet.ChangeSetID, deviceID, changeSet.PlanHash, generation))
 	if err := database.RecordDeviceChangeSetStatus(context.Background(), schema, deviceID, lateStatus); !errors.Is(err, database.ErrDeviceChangeSetStatusNotApplied) {
 		t.Fatalf("late status error = %v, want %v", err, database.ErrDeviceChangeSetStatusNotApplied)
+	}
+
+	unsupportedCapabilities := []struct {
+		name string
+		raw  string
+	}{
+		{name: "legacy boolean", raw: `{"device_change_set":true}`},
+		{name: "unsupported version", raw: `{"device_change_set":{"version":2,"namespaces":["system"],"max_operations":1,"confirmation_policies":["local_auto"]}}`},
+		{name: "unsupported namespace", raw: `{"device_change_set":{"version":1,"namespaces":["system","network"],"max_operations":1,"confirmation_policies":["local_auto"]}}`},
+		{name: "unsupported policy", raw: `{"device_change_set":{"version":1,"namespaces":["system"],"max_operations":1,"confirmation_policies":["controller_confirm"]}}`},
+	}
+	for index, unsupported := range unsupportedCapabilities {
+		unsupportedDeviceID := fmt.Sprintf("unsupported-%d", index)
+		if _, err := database.DB.Exec(fmt.Sprintf("INSERT INTO %s (id, site_id, device_role, capabilities) VALUES ($1, $2, 'AP', $3::jsonb)", quotedDevices), unsupportedDeviceID, siteID, unsupported.raw); err != nil {
+			t.Fatalf("seed %s device: %v", unsupported.name, err)
+		}
+		unsupportedChangeSet, err := services.NewDeviceChangeSet(
+			unsupportedDeviceID,
+			"system",
+			[]services.UciCommand{{Action: "set", Config: "system", Section: "@system[0]", Option: "hostname", Value: "lab-router"}},
+			strings.Repeat("a", 64),
+			nil,
+			services.ConfirmationLocalAuto,
+		)
+		if err != nil {
+			t.Fatalf("build %s changeset: %v", unsupported.name, err)
+		}
+		unsupportedRaw, err := json.Marshal(unsupportedChangeSet)
+		if err != nil {
+			t.Fatalf("marshal %s changeset: %v", unsupported.name, err)
+		}
+		if _, err := database.QueueDeviceChangeSet(context.Background(), schema, unsupportedDeviceID, unsupportedRaw); !errors.Is(err, database.ErrDeviceChangeSetCapability) {
+			t.Errorf("%s capability error = %v, want %v", unsupported.name, err, database.ErrDeviceChangeSetCapability)
+		}
 	}
 }

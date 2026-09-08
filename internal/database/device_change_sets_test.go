@@ -48,7 +48,7 @@ func TestQueueDeviceChangeSetReservesDeviceGeneration(t *testing.T) {
 		`.*WHERE device\.id = \$2\s+` +
 		regexp.QuoteMeta("AND LOWER(device.site_id::text) = LOWER($5)") +
 		`.*` + regexp.QuoteMeta("AND COALESCE(device.device_role, 'AP') = $7") +
-		`.*` + regexp.QuoteMeta("AND COALESCE(device.capabilities->>'device_change_set', 'false') = 'true'") +
+		`.*` + regexp.QuoteMeta("AND COALESCE(device.capabilities->'device_change_set' = '{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}'::jsonb, false)") +
 		`.*AND NOT EXISTS\s+\(\s+SELECT 1\s+FROM ` + regexp.QuoteMeta("tenant_demo.rollout_runs AS active_rollout") +
 		`.*` + regexp.QuoteMeta("LOWER(active_rollout.id::text) <> LOWER($6::text)")
 	mock.ExpectQuery(queueQuery).
@@ -188,9 +188,9 @@ func TestQueueDeviceChangeSetReturnsStoredGenerationForTerminalRetry(t *testing.
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")).
 		WithArgs(sqlmock.AnyArg(), "device-1", changeSet.ChangeSetID, int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_change_set"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->>'device_change_set', 'false'), desired_generation, pending_change_set, last_change_set")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->'device_change_set' = '{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}'::jsonb, false), desired_generation, pending_change_set, last_change_set")).
 		WithArgs("device-1").
-		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", "true", int64(42), nil, statusRaw))
+		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", true, int64(42), nil, statusRaw))
 
 	generation, err := database.QueueDeviceChangeSet(t.Context(), "tenant_demo", "device-1", mustMarshalChangeSet(t, changeSet))
 	if err != nil {
@@ -231,9 +231,9 @@ func TestQueueDeviceChangeSetRejectsRolloutSiteMismatch(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")).
 		WithArgs(sqlmock.AnyArg(), "device-1", changeSet.ChangeSetID, int64(0), "site-2", "rollout-1", "AP").
 		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_change_set"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->>'device_change_set', 'false'), desired_generation, pending_change_set, last_change_set")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->'device_change_set' = '{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}'::jsonb, false), desired_generation, pending_change_set, last_change_set")).
 		WithArgs("device-1").
-		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", "true", int64(0), nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", true, int64(0), nil, nil))
 
 	if _, err := database.QueueDeviceChangeSetForRollout(t.Context(), "tenant_demo", "site-2", "AP", "device-1", mustMarshalChangeSet(t, changeSet), "rollout-1"); err == nil {
 		t.Fatal("cross-site rollout enqueue was accepted")
@@ -280,9 +280,9 @@ func TestQueueDeviceChangeSetRejectsRecoveryRequiredDevice(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")).
 		WithArgs(sqlmock.AnyArg(), "device-1", changeSet.ChangeSetID, int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_change_set"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->>'device_change_set', 'false'), desired_generation, pending_change_set, last_change_set")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->'device_change_set' = '{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}'::jsonb, false), desired_generation, pending_change_set, last_change_set")).
 		WithArgs("device-1").
-		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", "false", int64(42), nil, lastStatus))
+		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", false, int64(42), nil, lastStatus))
 
 	if _, err := database.QueueDeviceChangeSet(t.Context(), "tenant_demo", "device-1", mustMarshalChangeSet(t, changeSet)); err == nil {
 		t.Fatal("changeset was accepted for a recovery-required device")
@@ -318,9 +318,9 @@ func TestQueueDeviceChangeSetRejectsMissingCapability(t *testing.T) {
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")).
 		WithArgs(sqlmock.AnyArg(), "device-1", changeSet.ChangeSetID, int64(0), "site-1", "rollout-1", "AP").
 		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_change_set"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->>'device_change_set', 'false'), desired_generation, pending_change_set, last_change_set")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->'device_change_set' = '{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}'::jsonb, false), desired_generation, pending_change_set, last_change_set")).
 		WithArgs("device-1").
-		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", "false", int64(0), nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", false, int64(0), nil, nil))
 
 	if _, err := database.QueueDeviceChangeSetForRollout(t.Context(), "tenant_demo", "site-1", "AP", "device-1", mustMarshalChangeSet(t, changeSet), "rollout-1"); !errors.Is(err, database.ErrDeviceChangeSetCapability) {
 		t.Fatalf("capability error = %v, want %v", err, database.ErrDeviceChangeSetCapability)
@@ -353,12 +353,12 @@ func TestQueueDeviceChangeSetRequiresCapabilityWithoutRollout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")+`.*`+regexp.QuoteMeta("COALESCE(device.capabilities->>'device_change_set', 'false') = 'true'")).
+	mock.ExpectQuery(`(?s)`+regexp.QuoteMeta("UPDATE tenant_demo.devices AS device")+`.*`+regexp.QuoteMeta("COALESCE(device.capabilities->'device_change_set' @> '{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}'::jsonb, false)")).
 		WithArgs(sqlmock.AnyArg(), "device-1", changeSet.ChangeSetID, int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_change_set"}))
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->>'device_change_set', 'false'), desired_generation, pending_change_set, last_change_set")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT site_id::text, COALESCE(device_role, 'AP'), COALESCE(capabilities->'device_change_set' = '{\"version\":1,\"namespaces\":[\"system\"],\"max_operations\":1,\"confirmation_policies\":[\"local_auto\"]}'::jsonb, false), desired_generation, pending_change_set, last_change_set")).
 		WithArgs("device-1").
-		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", "false", int64(0), nil, nil))
+		WillReturnRows(sqlmock.NewRows([]string{"site_id", "device_role", "device_change_set_capability", "desired_generation", "pending_change_set", "last_change_set"}).AddRow("site-1", "AP", false, int64(0), nil, nil))
 
 	if _, err := database.QueueDeviceChangeSet(t.Context(), "tenant_demo", "device-1", mustMarshalChangeSet(t, changeSet)); !errors.Is(err, database.ErrDeviceChangeSetCapability) {
 		t.Fatalf("capability error = %v, want %v", err, database.ErrDeviceChangeSetCapability)
