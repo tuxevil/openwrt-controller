@@ -307,6 +307,10 @@ func addDeviceGenerations(raw json.RawMessage, generations map[string]int64) (js
 		}
 		generation, ok := generations[deviceID]
 		if !ok {
+			if result["status"] == "WAITING" {
+				seen[deviceID] = true
+				continue
+			}
 			return nil, fmt.Errorf("queued rollout result has unknown device %s", deviceID)
 		}
 		if seen[deviceID] {
@@ -315,8 +319,10 @@ func addDeviceGenerations(raw json.RawMessage, generations map[string]int64) (js
 		result["device_generation"] = generation
 		seen[deviceID] = true
 	}
-	if len(seen) != len(generations) {
-		return nil, fmt.Errorf("queued rollout results do not cover every changeset device")
+	for deviceID := range generations {
+		if !seen[deviceID] {
+			return nil, fmt.Errorf("queued rollout results do not cover changeset device %s", deviceID)
+		}
 	}
 	updated, err := json.Marshal(results)
 	if err != nil {

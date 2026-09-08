@@ -577,6 +577,11 @@ func queueFleetDeviceChangeSets(r *http.Request, schema, siteID, rolloutID, user
 	if err != nil {
 		return nil, err
 	}
+	phase := sequentialFleetRolloutPhases(rolloutResultsFromDraft(draft))[0]
+	queuedDevice := make(map[int]bool, len(phase))
+	for _, index := range phase {
+		queuedDevice[index] = true
+	}
 	queuedResults := make([]fleetSyncResult, 0, len(changeSets))
 	if record.Status == "QUEUED" || record.Status == "completed" || record.Status == "failed" {
 		for _, changeSet := range changeSets {
@@ -598,13 +603,21 @@ func queueFleetDeviceChangeSets(r *http.Request, schema, siteID, rolloutID, user
 				return nil, fmt.Errorf("could not encode changeset for device %s: %w", changeSet.DeviceID, err)
 			}
 			device := draft.Devices[index]
-			items = append(items, database.DeviceChangeSetQueueItem{DeviceRole: device.Role, ChangeSet: changeSetRaw})
+			if queuedDevice[index] {
+				items = append(items, database.DeviceChangeSetQueueItem{DeviceRole: device.Role, ChangeSet: changeSetRaw})
+			}
+			status := "WAITING"
+			output := "waiting for the previous rollout phase to complete"
+			if queuedDevice[index] {
+				status = "QUEUED"
+				output = "device agent will apply and report the durable changeset result"
+			}
 			queuedResults = append(queuedResults, fleetSyncResult{
 				DeviceID:    changeSet.DeviceID,
 				Hostname:    device.Hostname,
 				Role:        device.Role,
-				Status:      "QUEUED",
-				Output:      "device agent will apply and report the durable changeset result",
+				Status:      status,
+				Output:      output,
 				CmdCount:    changeSetCommandCount(changeSet),
 				ChangeSetID: changeSet.ChangeSetID,
 				PlanHash:    changeSet.PlanHash,
@@ -649,8 +662,8 @@ func existingChangeSetResult(record database.RolloutDraftRecord, changeSet servi
 		return fleetSyncResult{}, false
 	}
 	for _, result := range results {
-		if strings.EqualFold(result.DeviceID, changeSet.DeviceID) && result.ChangeSetID == changeSet.ChangeSetID && result.PlanHash == changeSet.PlanHash && result.DeviceGeneration > 0 {
-			if requiredStatus == "QUEUED" && !strings.EqualFold(result.Status, "QUEUED") {
+		if strings.EqualFold(result.DeviceID, changeSet.DeviceID) && result.ChangeSetID == changeSet.ChangeSetID && result.PlanHash == changeSet.PlanHash && (result.DeviceGeneration > 0 || (requiredStatus == "QUEUED" && strings.EqualFold(result.Status, "WAITING"))) {
+			if requiredStatus == "QUEUED" && !strings.EqualFold(result.Status, "QUEUED") && !strings.EqualFold(result.Status, "WAITING") {
 				continue
 			}
 			if requiredStatus == "TERMINAL" && strings.EqualFold(result.Status, "QUEUED") {

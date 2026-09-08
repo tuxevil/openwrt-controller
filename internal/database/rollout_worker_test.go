@@ -69,9 +69,9 @@ func TestActiveTenantSchemasRejectsInvalidAliases(t *testing.T) {
 func TestGetRolloutProgressCountsTerminalResults(t *testing.T) {
 	db, mock, cleanup := setupRolloutWorkerSQLMock(t)
 	defer cleanup()
-	mock.ExpectQuery(regexp.QuoteMeta("SELECT status, results FROM tenant_demo.rollout_runs WHERE id = $1 AND site_id = $2")).
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status, plan, results FROM tenant_demo.rollout_runs WHERE id = $1 AND site_id = $2")).
 		WithArgs("rollout-1", "site-1").
-		WillReturnRows(sqlmock.NewRows([]string{"status", "results"}).AddRow("RUNNING", []byte(`[
+		WillReturnRows(sqlmock.NewRows([]string{"status", "plan", "results"}).AddRow("RUNNING", []byte(`{}`), []byte(`[
 			{"status":"QUEUED"},
 			{"status":"SUCCESS"},
 			{"status":"QUEUED","change_set_state":"COMMITTED"}

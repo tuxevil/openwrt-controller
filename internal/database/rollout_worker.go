@@ -27,6 +27,8 @@ type RolloutProgress struct {
 	Status        string
 	TerminalCount int
 	ResultCount   int
+	Plan          []byte
+	Results       []byte
 }
 
 // ActiveTenantSchemas returns validated tenant schemas for background work.
@@ -64,10 +66,11 @@ func GetRolloutProgress(ctx context.Context, schema, rolloutID, siteID string) (
 	var progress RolloutProgress
 	var raw []byte
 	if err := DB.QueryRowContext(ctx, fmt.Sprintf(
-		"SELECT status, results FROM %s.rollout_runs WHERE id = $1 AND site_id = $2", safeSchema,
-	), rolloutID, siteID).Scan(&progress.Status, &raw); err != nil {
+		"SELECT status, plan, results FROM %s.rollout_runs WHERE id = $1 AND site_id = $2", safeSchema,
+	), rolloutID, siteID).Scan(&progress.Status, &progress.Plan, &raw); err != nil {
 		return RolloutProgress{}, err
 	}
+	progress.Results = append([]byte(nil), raw...)
 	var results []struct {
 		Status         string `json:"status"`
 		ChangeSetState string `json:"change_set_state"`
@@ -113,6 +116,32 @@ func UpdateRolloutWorkerCursor(ctx context.Context, schema string, lease Rollout
 	return nil
 }
 
+// UpdateRolloutWorkerResults atomically replaces mutable execution results
+// under the worker fence. The immutable rollout plan is never rewritten.
+func UpdateRolloutWorkerResults(ctx context.Context, schema string, lease RolloutLease, results []byte) error {
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return err
+	}
+	result, err := DB.ExecContext(ctx, fmt.Sprintf(`
+		UPDATE %s.rollout_runs
+		   SET results = $1::jsonb, updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $2 AND site_id = $3 AND status = 'RUNNING'
+		   AND worker_token::text = $4 AND worker_lease_until >= CURRENT_TIMESTAMP
+	`, safeSchema), results, lease.RolloutID, lease.SiteID, lease.Token)
+	if err != nil {
+		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return ErrRolloutLeaseLost
+	}
+	return nil
+}
+
 // ClaimQueuedRollout claims one queued rollout for leaseDuration. Expired
 // leases are reclaimable, so a controller restart does not strand work.
 func ClaimQueuedRollout(ctx context.Context, schema string, leaseDuration time.Duration) (RolloutLease, error) {
@@ -131,7 +160,7 @@ func ClaimQueuedRollout(ctx context.Context, schema string, leaseDuration time.D
 		       updated_at = CURRENT_TIMESTAMP
 		 WHERE id = (
 			SELECT id FROM %s.rollout_runs
-			 WHERE (status = 'QUEUED'
+				 WHERE (status = 'QUEUED'
 			    OR (status = 'RUNNING' AND worker_lease_until < CURRENT_TIMESTAMP))
 			   AND NOT EXISTS (
 					SELECT 1 FROM %s.rollout_runs active
