@@ -16,6 +16,7 @@ import (
 const (
 	defaultInterval = 5 * time.Second
 	defaultLease    = 30 * time.Second
+	maxDiagnostic   = 4096
 )
 
 // Worker reconciles durable changeset rollouts. Devices pull their queued
@@ -72,7 +73,7 @@ func (w Worker) Start(ctx context.Context) {
 func (w Worker) reconcile(ctx context.Context, leaseDuration time.Duration, logger *slog.Logger) {
 	schemas, err := database.ActiveTenantSchemas(ctx)
 	if err != nil {
-		logger.Warn("rollout worker could not list tenants", "err", err)
+		logger.Warn("rollout worker could not list tenants", "err", boundedDiagnostic(err.Error()))
 		return
 	}
 	for _, schema := range schemas {
@@ -81,7 +82,7 @@ func (w Worker) reconcile(ctx context.Context, leaseDuration time.Duration, logg
 			continue
 		}
 		if err != nil {
-			logger.Warn("rollout worker could not claim rollout", "schema", schema, "err", err)
+			logger.Warn("rollout worker could not claim rollout", "schema", schema, "err", boundedDiagnostic(err.Error()))
 			continue
 		}
 		go w.reconcileLease(ctx, schema, lease, leaseDuration, logger)
@@ -98,19 +99,19 @@ func (w Worker) reconcileLease(ctx context.Context, schema string, lease databas
 	for {
 		progress, err := database.GetRolloutProgress(ctx, schema, lease.RolloutID, lease.SiteID)
 		if err != nil {
-			logger.Warn("rollout worker could not read progress", "rollout_id", lease.RolloutID, "err", err)
+			logger.Warn("rollout worker could not read progress", "rollout_id", lease.RolloutID, "err", boundedDiagnostic(err.Error()))
 			return
 		}
 		if progress.TerminalCount > lease.Cursor {
 			if err := database.UpdateRolloutWorkerCursor(ctx, schema, lease, progress.TerminalCount); err != nil {
-				logger.Warn("rollout worker lost lease while updating cursor", "rollout_id", lease.RolloutID, "err", err)
+				logger.Warn("rollout worker lost lease while updating cursor", "rollout_id", lease.RolloutID, "err", boundedDiagnostic(err.Error()))
 				return
 			}
 			lease.Cursor = progress.TerminalCount
 		}
 		if lease.Cursor > 0 && progress.Status != "FAILED" && progress.Status != "failed" {
 			if err := w.queueNextPhase(ctx, schema, lease, progress); err != nil {
-				logger.Warn("rollout worker could not queue next phase", "rollout_id", lease.RolloutID, "err", err)
+				logger.Warn("rollout worker could not queue next phase", "rollout_id", lease.RolloutID, "err", boundedDiagnostic(err.Error()))
 				return
 			}
 		}
@@ -122,11 +123,18 @@ func (w Worker) reconcileLease(ctx context.Context, schema string, lease databas
 			return
 		case <-ticker.C:
 			if err := database.RenewRolloutLease(ctx, schema, lease, leaseDuration); err != nil {
-				logger.Warn("rollout worker lease renewal failed", "rollout_id", lease.RolloutID, "err", err)
+				logger.Warn("rollout worker lease renewal failed", "rollout_id", lease.RolloutID, "err", boundedDiagnostic(err.Error()))
 				return
 			}
 		}
 	}
+}
+
+func boundedDiagnostic(value string) string {
+	if len(value) <= maxDiagnostic {
+		return value
+	}
+	return value[:maxDiagnostic] + " [diagnostic output truncated]"
 }
 
 func (w Worker) queueNextPhase(ctx context.Context, schema string, lease database.RolloutLease, progress database.RolloutProgress) error {
