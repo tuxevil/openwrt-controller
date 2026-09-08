@@ -27,6 +27,7 @@ type RolloutProgress struct {
 	Status        string
 	TerminalCount int
 	ResultCount   int
+	FailureCount  int
 	Plan          []byte
 	Results       []byte
 }
@@ -82,10 +83,14 @@ func GetRolloutProgress(ctx context.Context, schema, rolloutID, siteID string) (
 	}
 	progress.ResultCount = len(results)
 	for _, result := range results {
-		if result.Status == "SUCCESS" || result.Status == "SKIPPED" ||
+		terminal := result.Status == "SUCCESS" || result.Status == "SKIPPED" ||
 			result.ChangeSetState == "COMMITTED" || result.ChangeSetState == "RESTORED" ||
-			result.ChangeSetState == "RECOVERY_REQUIRED" || result.ChangeSetState == "REJECTED" {
+			result.ChangeSetState == "RECOVERY_REQUIRED" || result.ChangeSetState == "REJECTED"
+		if terminal {
 			progress.TerminalCount++
+			if result.Status != "SUCCESS" && result.Status != "SKIPPED" && result.ChangeSetState != "COMMITTED" {
+				progress.FailureCount++
+			}
 		}
 	}
 	return progress, nil

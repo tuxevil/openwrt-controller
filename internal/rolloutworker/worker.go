@@ -109,7 +109,7 @@ func (w Worker) reconcileLease(ctx context.Context, schema string, lease databas
 			}
 			lease.Cursor = progress.TerminalCount
 		}
-		if lease.Cursor > 0 && progress.Status != "FAILED" && progress.Status != "failed" {
+		if lease.Cursor > 0 && progress.FailureCount == 0 {
 			if err := w.queueNextPhase(ctx, schema, lease, progress); err != nil {
 				logger.Warn("rollout worker could not queue next phase", "rollout_id", lease.RolloutID, "err", boundedDiagnostic(err.Error()))
 				return

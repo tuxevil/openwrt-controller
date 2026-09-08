@@ -81,8 +81,25 @@ func TestGetRolloutProgressCountsTerminalResults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRolloutProgress returned error: %v", err)
 	}
-	if progress.Status != "RUNNING" || progress.ResultCount != 3 || progress.TerminalCount != 2 {
-		t.Fatalf("progress = %#v, want running/3/2", progress)
+	if progress.Status != "RUNNING" || progress.ResultCount != 3 || progress.TerminalCount != 2 || progress.FailureCount != 0 {
+		t.Fatalf("progress = %#v, want running/3/2/0", progress)
+	}
+	_ = db
+}
+
+func TestGetRolloutProgressCountsTerminalFailure(t *testing.T) {
+	db, mock, cleanup := setupRolloutWorkerSQLMock(t)
+	defer cleanup()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT status, plan, results FROM tenant_demo.rollout_runs WHERE id = $1 AND site_id = $2")).
+		WithArgs("rollout-1", "site-1").
+		WillReturnRows(sqlmock.NewRows([]string{"status", "plan", "results"}).AddRow("QUEUED", []byte(`{}`), []byte(`[{"status":"FAILED","change_set_state":"REJECTED"}]`)))
+
+	progress, err := database.GetRolloutProgress(context.Background(), "tenant_demo", "rollout-1", "site-1")
+	if err != nil {
+		t.Fatalf("GetRolloutProgress returned error: %v", err)
+	}
+	if progress.TerminalCount != 1 || progress.FailureCount != 1 {
+		t.Fatalf("progress = %#v, want one terminal failure", progress)
 	}
 	_ = db
 }
