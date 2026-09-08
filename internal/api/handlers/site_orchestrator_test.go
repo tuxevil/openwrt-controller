@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -506,6 +507,31 @@ func TestPreviewSyncRejectsUnsafeNamespaceBeforeDatabaseAccess(t *testing.T) {
 	PreviewSyncHandler(recorder, request)
 	if recorder.Code != http.StatusBadRequest || !strings.Contains(recorder.Body.String(), "not supported") {
 		t.Fatalf("status=%d body=%q, want early unsupported namespace rejection", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSyncFleetReturnsNotFoundForMissingImmutableDraft(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	previousDB := database.DB
+	database.DB = db
+	defer func() { database.DB = previousDB }()
+	mock.ExpectQuery(regexp.QuoteMeta("SELECT id::text, site_id::text, generation, status, claim_token::text, plan_hash, requested_by, target_device_ids, plan, results FROM public.rollout_runs WHERE id = $1 AND site_id = $2")).
+		WithArgs("00000000-0000-0000-0000-000000000001", "site-1").
+		WillReturnError(sql.ErrNoRows)
+
+	request := httptest.NewRequest("POST", "/api/sites/site-1/orchestrator/sync?rollout_id=00000000-0000-0000-0000-000000000001", nil)
+	request.SetPathValue("site_id", "site-1")
+	recorder := httptest.NewRecorder()
+	SyncFleetHandler(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("status=%d body=%q, want missing draft", recorder.Code, recorder.Body.String())
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
 	}
 }
 
