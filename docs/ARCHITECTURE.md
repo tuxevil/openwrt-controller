@@ -16,7 +16,7 @@
 1. The browser authenticates with JWT and selects a site or tenant context.
 2. Middleware validates the token, role and tenant schema before the handler runs.
 3. Read operations query the tenant schema or InfluxDB.
-4. Mutating operations validate identifiers, write an audit event and queue typed device operations; fleet orchestration persists an immutable rollout draft before execution. Safe namespace selections derive ordered `DeviceChangeSet` operations and deliver them through config pull instead of SSH.
+4. Mutating operations validate identifiers, write an audit event and queue typed device operations; fleet orchestration persists an immutable rollout draft before execution. Safe namespace selections derive ordered `DeviceChangeSet` operations and deliver them through config pull instead of SSH. Durable rollout workers claim queued runs with a fenced lease and advance one canary/sequential phase at a time.
 5. Device operations resolve the device inside the authorized tenant, verify its host key and execute a constrained script.
 
 The shipped agent reads a complete `CONTROLLER_URL` from root-owned runtime configuration. `REQUIRE_TLS=true` rejects plain HTTP before any controller request; configure a CA file or curl public-key pin when the controller uses a private PKI.
@@ -43,9 +43,21 @@ legacy SSH/UCI path uses that sequence only for ordering, audit and draft
 fencing; it does not write any device generation column. Device generations
 are reserved and advanced only by typed device operations.
 
+Durable safe rollouts store `worker_token`, `worker_lease_until` and
+`worker_cursor` on `rollout_runs`. The controller queues the first ordered
+phase and leaves later device results as `WAITING`; the worker derives later
+changesets from the immutable draft after successful terminal telemetry. A
+terminal failure blocks later phases. Expired leases are reclaimable after a
+controller restart, while every cursor/result mutation is fenced by the
+current worker token.
+
 ## Desired State
 
 `site_configs` stores a site template. `RenderSiteConfig` turns that template into role-aware UCI commands for Gateway, AP and other supported roles. The controller can preview those commands before applying them.
+
+The safe DeviceChangeSet namespace contract currently excludes `network` and
+`wireless`. Those writers remain legacy/specialized until an authenticated
+`controller_confirm` contract is defined.
 
 The rollout path is deliberately explicit. Preview is the point at which the
 rendered commands and read-only UCI observations are persisted; apply cannot

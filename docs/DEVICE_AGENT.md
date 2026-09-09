@@ -23,12 +23,20 @@ DEVICE_TOKEN_FILE="/etc/nerve-device-token"
 ENROLLMENT_TOKEN_FILE="/etc/nerve/enrollment-token"
 ENROLLMENT_NONCE_FILE="/etc/nerve/enrollment-nonce"
 AGENT_UPDATE_PUBLIC_KEY_FILE="/etc/nerve/agent-update-public-key"
+AGENT_VERSION_NUMBER_FILE="/etc/nerve/agent-version-number"
 EOF
 ```
 
 `REQUIRE_TLS=true` rejects an `http://` controller URL. `CONTROLLER_CA_FILE` is optional when the controller certificate chains to the device trust store; `CONTROLLER_PINNED_PUBKEY` can use curl's `sha256//...` public-key pin format. Never use `-k` to bypass certificate verification.
 
 The bootstrap script installs the agent and configures the service. It does not invent a device token. Its template is HTTPS-first and fails if the root-password placeholder is left unchanged.
+
+The bootstrap and running agent verify the Ed25519 signature and SHA-256 hash
+of updates. Each site artifact also has a monotonic `version_number`; the
+agent persists the installed number outside the signed script and rejects
+missing, malformed, or non-increasing update metadata. The running agent does
+not install or remove packages; optional capabilities must be provisioned
+explicitly by the image or a typed controller operation.
 
 ## Enrollment Contract
 
@@ -57,6 +65,11 @@ Its telemetry capabilities include the versioned contract
 "dropbear", "sqm"], max_operations: 8, confirmation_policies: ["local_auto"]}`.
 The controller requires this exact v2 contract before queuing safe changesets;
 a legacy boolean or an unsupported contract is rejected without mutation.
+
+Fleet safe rollouts are asynchronous. The controller returns `202` after the
+immutable draft and first phase are durable. Later phases are delivered only
+after the previous phase reports terminal success; a failed canary leaves
+remaining devices in `WAITING`.
 
 ## Local Responsibilities
 

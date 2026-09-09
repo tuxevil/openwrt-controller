@@ -16,6 +16,9 @@ Generation and operation status changes should also exercise the SQL seam with:
 ```bash
 go test ./internal/database -run 'TestQueueDeviceOperation|TestRecordDeviceOperationStatus' -count=1
 go test ./internal/database -run 'Test.*DeviceChangeSet' -count=1
+DATABASE_URL_TEST=postgres://user:password@localhost:5432/testdb \
+OPENWRT_INTEGRATION_DB=1 \
+go test ./internal/database -run 'Test.*RolloutWorker|Test.*MigrationContract' -count=1
 ```
 
 Agent contracts are shell checks and should run after any agent or bootstrap change:
@@ -43,6 +46,11 @@ go test ./internal/database -run TestDeviceChangeSetIntegrationQueuesAndPersists
 ```
 
 The migration contract creates a temporary tenant schema, simulates a legacy `site_configs` table, runs the real tenant migration and verifies the upgrade is idempotent.
+
+The rollout worker integration test creates a temporary schema, verifies that
+an expired worker lease is reclaimed after restart, and exercises renewal with
+the new fencing token. Integration tests never use the configured controller
+database implicitly and skip when the test variables are absent.
 
 ## Test Boundaries
 

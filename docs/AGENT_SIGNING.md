@@ -40,7 +40,7 @@ remain temporarily enabled with `ALLOW_LEGACY_PROVISION=true`.
 4. Confirm a signed update succeeds on one canary device before fleet distribution.
 5. Remove the old private key only after all devices have received the new public key.
 
-There is no unsigned fallback after a device has a pinned public key. During a key migration, overlap must be implemented explicitly; an absent signature is never an automatic downgrade. TLS protects the confidentiality of enrollment and device tokens; Ed25519 protects artifact integrity and authenticity, not transport secrecy.
+There is no unsigned fallback after a device has a pinned public key. During a key migration, overlap must be implemented explicitly; an absent signature is never an automatic downgrade. Artifact metadata also carries a site-scoped monotonic `version_number`; devices reject signed artifacts whose number is missing, malformed, or not greater than the installed number. TLS protects the confidentiality of enrollment and device tokens; Ed25519 protects artifact integrity and authenticity, not transport secrecy.
 
 ## Recovery
 
