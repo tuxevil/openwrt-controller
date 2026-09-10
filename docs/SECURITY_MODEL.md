@@ -4,12 +4,12 @@
 
 - Browser to controller: JWT authentication, role checks and restricted WebSocket ticket authentication.
 - Controller to database: server-side credentials from the environment; tenant schema identifiers are validated before SQL interpolation.
-- Controller to device: SSH public-key authentication with persisted TOFU host keys.
+- Controller to device: legacy SSH paths use public-key authentication with persisted TOFU host keys; safe DeviceChangeSet rollouts are delivered through authenticated config-pull and reported through per-device-token telemetry.
 - Device to controller: the agent uses a complete controller URL; production runtime configuration requires HTTPS, with optional CA or public-key pinning. First enrollment uses a short-lived site enrollment token and subsequent pulls, updates and telemetry use a per-device token.
 
 ## Privileged Actions
 
-Configuration writes, fleet sync, safe rollout, key operations and other privileged actions are audited. Safe rollout defaults to preview and requires explicit confirmation. UCI namespaces and command identifiers are allow-listed before shell generation.
+Configuration writes, fleet sync, safe rollout, key operations and other privileged actions are audited. Safe rollout defaults to preview and requires explicit confirmation. UCI namespaces and command identifiers are allow-listed before shell generation. The safe namespace contract currently excludes `network` and `wireless` until controller confirmation and durable recovery semantics are defined.
 
 ## Secrets
 
