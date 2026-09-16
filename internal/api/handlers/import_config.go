@@ -74,7 +74,7 @@ func ImportDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Connect to device and run unified SSH query
-	cmd := `uci show wireless; echo "===SECTION_BREAK==="; uci show network; echo "===SECTION_BREAK==="; uci show dhcp; echo "===SECTION_BREAK==="; uci show firewall; echo "===SECTION_BREAK==="; uci show system; echo "===SECTION_BREAK==="; uci show dropbear; echo "===SECTION_BREAK==="; uci show usteer`
+	cmd := importedConfigReadCommand
 	out, err := runSSHCommandForRequest(r, deviceID, cmd)
 	log.Printf("[IMPORT_DEBUG] runSSHCommand output: %q, error: %v", out, err)
 	if err != nil {

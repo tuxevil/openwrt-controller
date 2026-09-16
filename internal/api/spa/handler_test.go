@@ -30,6 +30,53 @@ func TestFileExistsDoesNotEscapeDistributionDirectory(t *testing.T) {
 	}
 }
 
+func TestResolveDistributionPathRejectsNonLocalPaths(t *testing.T) {
+	root := t.TempDir()
+
+	for _, path := range []string{
+		"../secret.txt",
+		"assets/../../secret.txt",
+		"/../../etc/passwd",
+		"assets\\..\\secret.txt",
+	} {
+		if _, ok := resolveDistributionPath(root, path); ok {
+			t.Fatalf("resolveDistributionPath accepted unsafe path %q", path)
+		}
+	}
+}
+
+func TestResolveDistributionPathReturnsContainedPath(t *testing.T) {
+	root := t.TempDir()
+
+	got, ok := resolveDistributionPath(root, "/assets/app.js")
+	if !ok {
+		t.Fatal("resolveDistributionPath rejected a local asset path")
+	}
+	want := filepath.Join(root, "assets", "app.js")
+	if got != want {
+		t.Fatalf("resolved path = %q, want %q", got, want)
+	}
+}
+
+func TestFileExistsDoesNotFollowSymlinkOutsideDistributionDirectory(t *testing.T) {
+	root := t.TempDir()
+	distDir := filepath.Join(root, "dist")
+	if err := os.Mkdir(distDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	secretPath := filepath.Join(root, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secretPath, filepath.Join(distDir, "leak.txt")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	if fileExists(distDir, "/leak.txt") {
+		t.Fatal("fileExists followed a symlink outside the distribution directory")
+	}
+}
+
 func TestHandlerReloadsIndexAfterFrontendBuild(t *testing.T) {
 	distDir := t.TempDir()
 	indexPath := filepath.Join(distDir, "index.html")

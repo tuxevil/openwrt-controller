@@ -20,6 +20,10 @@ import (
 	"openwrt-controller/internal/services"
 )
 
+const sshShellEntrypoint = "sh -s"
+
+const importedConfigReadCommand = `uci show wireless; echo "===SECTION_BREAK==="; uci show network; echo "===SECTION_BREAK==="; uci show dhcp; echo "===SECTION_BREAK==="; uci show firewall; echo "===SECTION_BREAK==="; uci show system; echo "===SECTION_BREAK==="; uci show dropbear; echo "===SECTION_BREAK==="; uci show usteer`
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func getDeviceIPForSite(ctx context.Context, schema, siteID, deviceID string) (string, error) {
@@ -59,22 +63,34 @@ func getDeviceIPForTenant(ctx context.Context, schema, deviceID string) (string,
 }
 
 func runSSHCommandForSite(ctx context.Context, schema, siteID, deviceID, cmd string) (string, error) {
+	commandScript, err := buildSSHReadScript(cmd)
+	if err != nil {
+		return "", err
+	}
 	targetIP, err := getDeviceIPForSite(ctx, schema, siteID, deviceID)
 	if err != nil {
 		return "", err
 	}
-	return runSSHTransport(ctx, targetIP, cmd, nil, 30*time.Second)
+	return runSSHTransport(ctx, targetIP, commandScript, 30*time.Second)
 }
 
 func runSSHScriptForSite(ctx context.Context, schema, siteID, deviceID, script string) (string, error) {
+	scriptReader, err := buildSSHScript(script)
+	if err != nil {
+		return "", err
+	}
 	targetIP, err := getDeviceIPForSite(ctx, schema, siteID, deviceID)
 	if err != nil {
 		return "", err
 	}
-	return runSSHTransport(ctx, targetIP, "sh -s", strings.NewReader(script), 60*time.Second)
+	return runSSHTransport(ctx, targetIP, scriptReader, 60*time.Second)
 }
 
 func runSSHCommandForRequest(r *http.Request, deviceID, cmd string) (string, error) {
+	commandScript, err := buildSSHReadScript(cmd)
+	if err != nil {
+		return "", err
+	}
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return "", err
@@ -83,10 +99,14 @@ func runSSHCommandForRequest(r *http.Request, deviceID, cmd string) (string, err
 	if err != nil {
 		return "", err
 	}
-	return runSSHTransport(r.Context(), targetIP, cmd, nil, 30*time.Second)
+	return runSSHTransport(r.Context(), targetIP, commandScript, 30*time.Second)
 }
 
 func runSSHScriptForRequest(r *http.Request, deviceID, script string) (string, error) {
+	scriptReader, err := buildSSHScript(script)
+	if err != nil {
+		return "", err
+	}
 	schema, err := getTenantSchema(r)
 	if err != nil {
 		return "", err
@@ -95,7 +115,58 @@ func runSSHScriptForRequest(r *http.Request, deviceID, script string) (string, e
 	if err != nil {
 		return "", err
 	}
-	return runSSHTransport(r.Context(), targetIP, "sh -s", strings.NewReader(script), 60*time.Second)
+	return runSSHTransport(r.Context(), targetIP, scriptReader, 60*time.Second)
+}
+
+func buildSSHReadScript(command string) (io.Reader, error) {
+	if err := validateSSHReadCommand(command); err != nil {
+		return nil, err
+	}
+	return strings.NewReader(command + "\n"), nil
+}
+
+func buildSSHScript(script string) (io.Reader, error) {
+	if script == "" || strings.IndexByte(script, 0) >= 0 {
+		return nil, fmt.Errorf("empty or invalid SSH script")
+	}
+	return strings.NewReader(script), nil
+}
+
+// validateSSHReadCommand limits the command mode to the fixed read-only
+// operations used by the handlers. Mutations use generated scripts and never
+// place user-controlled data in the SSH exec request itself.
+func validateSSHReadCommand(command string) error {
+	if command == importedConfigReadCommand || command == "ls /etc/config/ 2>/dev/null" {
+		return nil
+	}
+
+	if strings.HasPrefix(command, "uci export ") && strings.HasSuffix(command, " 2>/dev/null") {
+		config := strings.TrimSuffix(strings.TrimPrefix(command, "uci export "), " 2>/dev/null")
+		if isAllowedUciConfig(config) {
+			return nil
+		}
+	}
+
+	if strings.HasPrefix(command, "uci show ") && strings.HasSuffix(command, " 2>&1") {
+		target := strings.TrimSuffix(strings.TrimPrefix(command, "uci show "), " 2>&1")
+		parts := strings.Split(target, ".")
+		if len(parts) >= 1 && len(parts) <= 3 && isAllowedUciConfig(parts[0]) {
+			for _, part := range parts {
+				if !uciPathSegmentPattern.MatchString(part) {
+					return fmt.Errorf("invalid SSH read command")
+				}
+			}
+			return nil
+		}
+	}
+
+	for config := range allowedUciConfigs {
+		if command == fmt.Sprintf(`ubus call uci get '{"config": "%s"}'`, config) {
+			return nil
+		}
+	}
+
+	return fmt.Errorf("SSH command is not an allowlisted read")
 }
 
 type sshExitStatusError struct {
@@ -123,7 +194,10 @@ func (b *synchronizedBuffer) String() string {
 	return b.buf.String()
 }
 
-func runSSHTransport(ctx context.Context, targetIP, command string, stdin io.Reader, timeout time.Duration) (string, error) {
+func runSSHTransport(ctx context.Context, targetIP string, stdin io.Reader, timeout time.Duration) (string, error) {
+	if stdin == nil {
+		return "", fmt.Errorf("SSH script input is required")
+	}
 	signer, err := getSSHSigner()
 	if err != nil {
 		return "", err
@@ -167,7 +241,7 @@ func runSSHTransport(ctx context.Context, targetIP, command string, stdin io.Rea
 	var output synchronizedBuffer
 	sess.Stdout = &output
 	sess.Stderr = &output
-	if err := sess.Start(command); err != nil {
+	if err := sess.Start(sshShellEntrypoint); err != nil {
 		return output.String(), fmt.Errorf("SSH command start: %w", err)
 	}
 	wait := make(chan error, 1)
