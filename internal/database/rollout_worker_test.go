@@ -66,6 +66,17 @@ func TestActiveTenantSchemasRejectsInvalidAliases(t *testing.T) {
 	_ = db
 }
 
+func TestActiveTenantSchemasReturnsErrorWhenDatabaseIsNotInitialized(t *testing.T) {
+	previousDB := database.DB
+	database.DB = nil
+	t.Cleanup(func() { database.DB = previousDB })
+
+	_, err := database.ActiveTenantSchemas(context.Background())
+	if !errors.Is(err, database.ErrDatabaseNotInitialized) {
+		t.Fatalf("error = %v, want ErrDatabaseNotInitialized", err)
+	}
+}
+
 func TestGetRolloutProgressCountsTerminalResults(t *testing.T) {
 	db, mock, cleanup := setupRolloutWorkerSQLMock(t)
 	defer cleanup()

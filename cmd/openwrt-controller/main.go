@@ -76,7 +76,8 @@ func main() {
 
 	// Initialize PostgreSQL
 	if err := database.InitPostgres(); err != nil {
-		logger.Warn("postgres init failed", "err", err)
+		logger.Error("postgres init failed; refusing to start", "err", err)
+		os.Exit(1)
 	}
 	workerContext, workerCancel := context.WithCancel(context.Background())
 	defer workerCancel()

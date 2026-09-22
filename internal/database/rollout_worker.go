@@ -10,6 +10,7 @@ import (
 )
 
 var (
+	ErrDatabaseNotInitialized  = errors.New("database is not initialized")
 	ErrRolloutLeaseUnavailable = errors.New("rollout worker lease unavailable")
 	ErrRolloutLeaseLost        = errors.New("rollout worker lease lost")
 )
@@ -34,6 +35,10 @@ type RolloutProgress struct {
 
 // ActiveTenantSchemas returns validated tenant schemas for background work.
 func ActiveTenantSchemas(ctx context.Context) ([]string, error) {
+	if DB == nil {
+		return nil, ErrDatabaseNotInitialized
+	}
+
 	rows, err := DB.QueryContext(ctx, "SELECT schema_alias FROM tenants WHERE is_active = true")
 	if err != nil {
 		return nil, err
