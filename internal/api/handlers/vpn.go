@@ -51,6 +51,10 @@ func UpdateVPNEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	// One statement keeps the mutation and audit event atomic, including when
 	// invoked without the request-scoped transaction middleware.
 	payload, _ := json.Marshal(req)
+	remoteIP, _, splitErr := net.SplitHostPort(r.RemoteAddr)
+	if splitErr != nil {
+		remoteIP = r.RemoteAddr
+	}
 	var changed int
 	err := database.Tx(r.Context()).QueryRowContext(r.Context(), `
 		WITH changed AS (
@@ -60,7 +64,7 @@ func UpdateVPNEndpointHandler(w http.ResponseWriter, r *http.Request) {
 			SELECT $3, 'VPN_ENDPOINT_UPDATE', 'SITE', id::text, $4, $5 FROM changed
 			RETURNING id
 		) SELECT count(*) FROM logged`, req.Endpoint, siteID,
-		GetUsernameFromReq(r), string(payload), r.RemoteAddr).Scan(&changed)
+		GetUsernameFromReq(r), string(payload), remoteIP).Scan(&changed)
 	if err != nil {
 		http.Error(w, `{"error": "db error"}`, http.StatusInternalServerError)
 		return
@@ -82,7 +86,7 @@ func UpdateVPNEndpointHandler(w http.ResponseWriter, r *http.Request) {
 // The deployed site agent splits host:port at the first colon. IPv6 endpoints
 // must remain rejected until that renderer supports bracketed IPv6 literals.
 func validVPNEndpoint(endpoint string) bool {
-	if endpoint == "" || endpoint != strings.TrimSpace(endpoint) {
+	if endpoint == "" || endpoint != strings.TrimSpace(endpoint) || strings.ContainsAny(endpoint, "[]") {
 		return false
 	}
 	host, port, err := net.SplitHostPort(endpoint)

@@ -18,7 +18,7 @@ func TestVPNEndpointValidation(t *testing.T) {
 			t.Errorf("rejected %q", endpoint)
 		}
 	}
-	for _, endpoint := range []string{"", "192.0.2.1", "999.1.1.1:51820", "0.0.0.0:51820", "224.0.0.1:1", "vpn:0", "vpn:65536", "vpn:+80", "vpn: 80", " vpn:80", "vpn:80\n", "a..b:80", "-vpn:80", "vpn-:80", "vpn;reboot:80", "$(reboot):80", "a'b:80", "[2001:db8::1]:51820"} {
+	for _, endpoint := range []string{"", "192.0.2.1", "999.1.1.1:51820", "0.0.0.0:51820", "224.0.0.1:1", "vpn:0", "vpn:65536", "vpn:+80", "vpn: 80", " vpn:80", "vpn:80\n", "a..b:80", "-vpn:80", "vpn-:80", "vpn;reboot:80", "$(reboot):80", "a'b:80", "[2001:db8::1]:51820", "[192.0.2.1]:51820", "[vpn.example.test]:51820"} {
 		if validVPNEndpoint(endpoint) {
 			t.Errorf("accepted %q", endpoint)
 		}
@@ -45,10 +45,11 @@ func TestVPNEndpointUpdateAuditsAndReportsMissingSite(t *testing.T) {
 		previous := database.DB
 		database.DB = db
 		mock.ExpectQuery("WITH changed AS .*UPDATE sites.*INSERT INTO audit_logs.*SELECT count").
-			WithArgs("vpn.example.test:51820", "site-id", sqlmock.AnyArg(), `{"endpoint":"vpn.example.test:51820"}`, sqlmock.AnyArg()).
+			WithArgs("vpn.example.test:51820", "site-id", sqlmock.AnyArg(), `{"endpoint":"vpn.example.test:51820"}`, "2001:db8::1").
 			WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(count))
 		r := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"endpoint":"vpn.example.test:51820"}`))
 		r.SetPathValue("site_id", "site-id")
+		r.RemoteAddr = "[2001:db8::1]:12345"
 		w := httptest.NewRecorder()
 		UpdateVPNEndpointHandler(w, r)
 		database.DB = previous
