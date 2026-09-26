@@ -3,7 +3,12 @@ package handlers
 import (
 	"database/sql"
 	"encoding/json"
+	"io"
+	"net"
 	"net/http"
+	"net/netip"
+	"strconv"
+	"strings"
 
 	"openwrt-controller/internal/database"
 )
@@ -31,20 +36,85 @@ func UpdateVPNEndpointHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Endpoint string `json:"endpoint"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
 		http.Error(w, `{"error": "invalid payload"}`, http.StatusBadRequest)
 		return
 	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF || !validVPNEndpoint(req.Endpoint) {
+		http.Error(w, `{"error":"endpoint must be an IPv4 address or DNS hostname followed by :port"}`, http.StatusBadRequest)
+		return
+	}
 
-	_, err := database.Tx(r.Context()).Exec("UPDATE sites SET wg_endpoint = $1 WHERE id = $2", req.Endpoint, siteID)
+	// One statement keeps the mutation and audit event atomic, including when
+	// invoked without the request-scoped transaction middleware.
+	payload, _ := json.Marshal(req)
+	var changed int
+	err := database.Tx(r.Context()).QueryRowContext(r.Context(), `
+		WITH changed AS (
+			UPDATE sites SET wg_endpoint = $1 WHERE id = $2 RETURNING id
+		), logged AS (
+			INSERT INTO audit_logs (username, action, resource_type, resource_id, payload, ip_addr)
+			SELECT $3, 'VPN_ENDPOINT_UPDATE', 'SITE', id::text, $4, $5 FROM changed
+			RETURNING id
+		) SELECT count(*) FROM logged`, req.Endpoint, siteID,
+		GetUsernameFromReq(r), string(payload), r.RemoteAddr).Scan(&changed)
 	if err != nil {
 		http.Error(w, `{"error": "db error"}`, http.StatusInternalServerError)
+		return
+	}
+	if changed == 0 {
+		http.Error(w, `{"error":"site not found"}`, http.StatusNotFound)
+		return
+	}
+	if err := database.CommitRequestTx(r.Context()); err != nil {
+		http.Error(w, `{"error":"could not commit endpoint update"}`, http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(`{"status":"success"}`))
+}
+
+// The deployed site agent splits host:port at the first colon. IPv6 endpoints
+// must remain rejected until that renderer supports bracketed IPv6 literals.
+func validVPNEndpoint(endpoint string) bool {
+	if endpoint == "" || endpoint != strings.TrimSpace(endpoint) {
+		return false
+	}
+	host, port, err := net.SplitHostPort(endpoint)
+	if err != nil || host == "" || len(host) > 253 || port == "" {
+		return false
+	}
+	for _, c := range port {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	n, err := strconv.Atoi(port)
+	if err != nil || n < 1 || n > 65535 {
+		return false
+	}
+	if addr, err := netip.ParseAddr(host); err == nil {
+		return addr.Is4() && !addr.IsUnspecified() && !addr.IsMulticast()
+	}
+	if strings.Trim(host, "0123456789.") == "" {
+		return false
+	}
+	for _, label := range strings.Split(strings.TrimSuffix(host, "."), ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, c := range label {
+			if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // GetVPNPeersHandler returns devices with their assigned wg_ip

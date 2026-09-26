@@ -156,7 +156,7 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── VPN Matrix / SECURE_TUNNEL ───────────────────────────────────────────
 	mux.HandleFunc("GET /api/sites/{site_id}/vpn", middleware.WithAuth(handlers.GetVPNConfigHandler))
-	mux.HandleFunc("POST /api/sites/{site_id}/vpn/endpoint", middleware.WithAuth(handlers.UpdateVPNEndpointHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/vpn/endpoint", middleware.WithAuth(middleware.RequireAdmin(handlers.UpdateVPNEndpointHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/vpn/peers", middleware.WithAuth(handlers.GetVPNPeersHandler))
 
 	// ── Vault / Firmware ──────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"golang.zx2c4.com/wireguard/wgctrl/wgtypes"
 
@@ -10,6 +11,29 @@ import (
 	"openwrt-controller/internal/models"
 	"openwrt-controller/internal/orchestrator"
 )
+
+// Keep the API contract separate from the record holding provisioning secrets.
+type vpnMeshNodeResponse struct {
+	ID             string    `json:"id"`
+	MeshID         string    `json:"mesh_id"`
+	DeviceID       string    `json:"device_id"`
+	DeviceName     string    `json:"device_name,omitempty"`
+	Role           string    `json:"role"`
+	PublicKey      string    `json:"public_key"`
+	ListenPort     int       `json:"listen_port"`
+	InternalIP     string    `json:"internal_ip"`
+	PublicEndpoint string    `json:"public_endpoint,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+}
+
+func publicVPNMeshNode(node models.VPNMeshNode) vpnMeshNodeResponse {
+	return vpnMeshNodeResponse{
+		ID: node.ID, MeshID: node.MeshID, DeviceID: node.DeviceID,
+		DeviceName: node.DeviceName, Role: node.Role, PublicKey: node.PublicKey,
+		ListenPort: node.ListenPort, InternalIP: node.InternalIP,
+		PublicEndpoint: node.PublicEndpoint, CreatedAt: node.CreatedAt,
+	}
+}
 
 func GetVPNMeshesHandler(w http.ResponseWriter, r *http.Request) {
 	schema, err := getTenantSchema(r)
@@ -82,10 +106,12 @@ func GetVPNMeshNodesHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if nodes == nil {
-		nodes = []models.VPNMeshNode{}
+	response := make([]vpnMeshNodeResponse, 0, len(nodes))
+	for _, node := range nodes {
+		response = append(response, publicVPNMeshNode(node))
 	}
-	json.NewEncoder(w).Encode(nodes)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
 }
 
 func AddVPNMeshNodeHandler(w http.ResponseWriter, r *http.Request) {
@@ -126,7 +152,8 @@ func AddVPNMeshNodeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	json.NewEncoder(w).Encode(node)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(publicVPNMeshNode(*node))
 }
 
 func DeleteVPNMeshNodeHandler(w http.ResponseWriter, r *http.Request) {

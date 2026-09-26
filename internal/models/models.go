@@ -131,7 +131,7 @@ type VPNMeshNode struct {
 	DeviceID       string    `json:"device_id"`
 	DeviceName     string    `json:"device_name,omitempty"` // For UI
 	Role           string    `json:"role"`
-	PrivateKey     string    `json:"private_key"`
+	PrivateKey     string    `json:"-"` // Persistence/orchestration only; never serialize a VPN private key.
 	PublicKey      string    `json:"public_key"`
 	ListenPort     int       `json:"listen_port"`
 	InternalIP     string    `json:"internal_ip"`
