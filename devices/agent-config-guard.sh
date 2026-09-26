@@ -89,10 +89,20 @@ confirm() {
     mv "$ROOT/active" "$ROOT/committed-$1"
     sync
 }
+rollback() {
+    [ "$(cat "$ROOT/active/id")" = "$1" ]
+    # Fence confirmation immediately, and retry via the worker if restoration
+    # is interrupted or its service restart fails.
+    printf '0\n' > "$ROOT/active/deadline.new"
+    mv "$ROOT/active/deadline.new" "$ROOT/active/deadline"
+    sync
+    restore
+}
 case "${1:-}" in
     arm) [ "$#" -eq 4 ]; locked arm "$2" "$3" "$4";;
     apply) [ "$#" -eq 2 ]; locked apply "$2";;
     confirm) [ "$#" -eq 2 ]; locked confirm "$2";;
+    rollback) [ "$#" -eq 2 ]; locked rollback "$2";;
     check) locked check;;
     boot) locked check boot;;
     worker)
@@ -101,5 +111,5 @@ case "${1:-}" in
             "$0" check || logger -t nerve-config-guard 'Restore failed; retrying'
             sleep 2
         done;;
-    *) echo 'Usage: agent-config-guard {arm ID TTL CANDIDATE|apply ID|confirm ID|check|boot|worker}' >&2; exit 2;;
+    *) echo 'Usage: agent-config-guard {arm ID TTL CANDIDATE|apply ID|confirm ID|rollback ID|check|boot|worker}' >&2; exit 2;;
 esac

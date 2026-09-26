@@ -34,6 +34,10 @@ access and unchanged UCI. Then, before the deadline:
 ```
 
 Omitting confirmation restores the previous file and restarts only `agent`.
+An external health monitor can request immediate recovery with
+`agent-config-guard rollback unique-change-id`. It verifies the active identity
+and expires its deadline before restoring, so interruption cannot leave that
+change confirmable and the supervised worker can retry recovery.
 Use a new ID after a terminal result. Never change multiple fleet members
 at once; complete canaries before touching a gateway. Confirm only after
 all required health checks succeed. Stage the certificate separately and

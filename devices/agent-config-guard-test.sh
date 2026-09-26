@@ -60,4 +60,10 @@ if "$GUARD" apply corrupt; then echo 'Corrupt candidate was accepted' >&2; exit 
 cmp "$GUARD_TARGET" "$LAB/candidate"
 printf '3000.00 0.00\n' > "$GUARD_UPTIME_FILE"
 "$GUARD" check
-echo 'PASS: timeout, expired/wrong confirmation, boot recovery, duplicate fencing, commit, restore retry, candidate integrity.'
+"$GUARD" arm abort 30 "$LAB/original"
+"$GUARD" apply abort
+if "$GUARD" rollback wrong-id; then exit 1; fi
+"$GUARD" rollback abort
+cmp "$GUARD_TARGET" "$LAB/candidate"
+test "$(cat "$GUARD_ROOT/restored-abort/result")" = RESTORED
+echo 'PASS: timeout, expired/wrong confirmation, boot recovery, duplicate fencing, commit, restore retry, candidate integrity, fenced explicit rollback.'
