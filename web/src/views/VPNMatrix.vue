@@ -102,7 +102,7 @@ export default {
     },
     async saveEndpoint() {
       try {
-        await fetch(`/api/sites/${this.site_id}/vpn/endpoint`, {
+        const response = await fetch(`/api/sites/${this.site_id}/vpn/endpoint`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -110,8 +110,16 @@ export default {
           },
           body: JSON.stringify({ endpoint: this.endpoint })
         });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          const message = typeof body.error === 'string' && body.error.length > 0
+            ? body.error.slice(0, 160)
+            : 'The server rejected the endpoint update';
+          alert(`Failed to save endpoint (${response.status}): ${message}`);
+          return;
+        }
         alert('Endpoint updated. Devices will configure upon next check-in.');
-        this.refreshData();
+        await this.refreshData();
       } catch (e) {
         alert('Failed to save endpoint');
       }
