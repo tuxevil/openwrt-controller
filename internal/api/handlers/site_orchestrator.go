@@ -178,6 +178,8 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		PortForwardingRules  json.RawMessage `json:"port_forwarding_rules"`
 		ThreatShieldEnabled  bool            `json:"threat_shield_enabled"`
 		SQMCakeEnabled       bool            `json:"sqm_cake_enabled"`
+		SQMSection           string          `json:"sqm_section"`
+		SQMInterface         string          `json:"sqm_interface"`
 		SqmDownload          int             `json:"sqm_download"`
 		SqmUpload            int             `json:"sqm_upload"`
 		DPIEnabled           bool            `json:"dpi_enabled"`
@@ -228,6 +230,8 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 
 	sc := services.SiteConfig{
 		SQMCakeEnabled:       dto.SQMCakeEnabled,
+		SQMSection:           dto.SQMSection,
+		SQMInterface:         dto.SQMInterface,
 		SqmDownload:          dto.SqmDownload,
 		SqmUpload:            dto.SqmUpload,
 		DPIEnabled:           dto.DPIEnabled,
@@ -261,6 +265,10 @@ func PutSiteConfigHandler(w http.ResponseWriter, r *http.Request) {
 		HealthChecks:         dto.HealthChecks,
 	}
 
+	if err := sc.ValidateSQM(); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
 	if err := services.UpsertSiteConfig(r.Context(), sc); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusInternalServerError)
@@ -893,6 +901,10 @@ func PreviewSyncHandler(w http.ResponseWriter, r *http.Request) {
 	sc, err := services.GetSiteConfig(r.Context(), siteID)
 	if err != nil {
 		http.Error(w, `{"error":"no site config found — save a template first"}`, http.StatusBadRequest)
+		return
+	}
+	if err := sc.ValidateSQM(); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusConflict)
 		return
 	}
 

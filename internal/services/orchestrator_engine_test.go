@@ -9,27 +9,6 @@ import (
 	"openwrt-controller/internal/database"
 )
 
-func TestResolveResourcesUsesReportedCapabilities(t *testing.T) {
-	radioSection, radioDevice, sqmInterface := resolveResources(DeviceCapabilities{
-		Radios:                 []string{"radio1"},
-		Interfaces:             []string{"br-wan", "lan"},
-		WirelessDeviceSections: []string{"radio1"},
-		WirelessIfaceSections:  []string{"default_radio1"},
-		LogicalNetworks:        map[string]string{"lan": "home"},
-		SQMCandidates:          []string{"br-wan"},
-	})
-	if radioSection != "default_radio1" || radioDevice != "radio1" || sqmInterface != "br-wan" {
-		t.Fatalf("got %q, %q, %q", radioSection, radioDevice, sqmInterface)
-	}
-}
-
-func TestResolveResourcesPreservesLegacyFallback(t *testing.T) {
-	radioSection, radioDevice, sqmInterface := resolveResources(DeviceCapabilities{})
-	if radioSection != "cfg_radio0_0" || radioDevice != "radio0" || sqmInterface != "eth1" {
-		t.Fatalf("got %q, %q, %q", radioSection, radioDevice, sqmInterface)
-	}
-}
-
 func TestLogicalNetworkSectionUsesExplicitMapping(t *testing.T) {
 	capabilities := DeviceCapabilities{LogicalNetworks: map[string]string{"lan": "home"}}
 	if got := logicalNetworkSection(capabilities, "lan"); got != "home" {
@@ -90,15 +69,15 @@ func TestRenderGatewayEnsuresDHCPReservationsWithoutUnconditionalAdds(t *testing
 	}
 }
 
-func TestRenderGatewayUsesNamedSQMSectionWhenEnabled(t *testing.T) {
-	results := RenderSiteConfig(SiteConfig{SQMCakeEnabled: true}, []DeviceRoleInfo{{
+func TestRenderGatewayUsesConfiguredSQMSectionAndWANInterface(t *testing.T) {
+	results := RenderSiteConfig(SiteConfig{SQMCakeEnabled: true, SQMSection: "eth1", SQMInterface: "wan", SqmDownload: 115000, SqmUpload: 18000}, []DeviceRoleInfo{{
 		DeviceID: "gateway",
 		Role:     "Gateway",
 		Capabilities: DeviceCapabilities{
-			SQMCandidates: []string{"eth1"},
+			SQMCandidates: []string{"eth0", "eth1"},
 		},
 	}})
-	found := false
+	foundEnabled, foundInterface := false, false
 	for _, command := range results[0].Commands {
 		if command.Config != "sqm" {
 			continue
@@ -106,13 +85,55 @@ func TestRenderGatewayUsesNamedSQMSectionWhenEnabled(t *testing.T) {
 		if command.Section == "@queue[0]" || command.Section == "@sqm[0]" {
 			t.Fatalf("SQM must target a named section, got %#v", command)
 		}
-		if command.Section == "eth1" {
-			found = true
+		if command.Section != "eth1" {
+			t.Fatalf("SQM targeted %q instead of the configured queue", command.Section)
+		}
+		if command.Option == "enabled" && command.Value == "1" {
+			foundEnabled = true
+		}
+		if command.Option == "interface" && command.Value == "wan" {
+			foundInterface = true
 		}
 	}
-	if !found {
-		t.Fatal("renderer did not target the reported SQM section")
+	if !foundEnabled || !foundInterface {
+		t.Fatal("renderer did not target the configured SQM queue and WAN interface")
 	}
+}
+
+func TestSQMRequiresExplicitSafeTargetAndRates(t *testing.T) {
+	cases := []SiteConfig{
+		{SQMCakeEnabled: true, SQMSection: "", SQMInterface: "wan", SqmDownload: 115000, SqmUpload: 18000},
+		{SQMCakeEnabled: true, SQMSection: "eth1", SQMInterface: "", SqmDownload: 115000, SqmUpload: 18000},
+		{SQMCakeEnabled: true, SQMSection: "@queue[0]", SQMInterface: "wan", SqmDownload: 115000, SqmUpload: 18000},
+		{SQMCakeEnabled: true, SQMSection: "eth1", SQMInterface: "wan", SqmDownload: 0, SqmUpload: 18000},
+	}
+	for _, cfg := range cases {
+		if err := cfg.ValidateSQM(); err == nil {
+			t.Fatalf("accepted unsafe SQM configuration: %#v", cfg)
+		}
+	}
+	if err := (SiteConfig{SQMCakeEnabled: true, SQMSection: "eth1", SQMInterface: "wan", SqmDownload: 115000, SqmUpload: 18000}).ValidateSQM(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRenderAPNeverEnablesGatewaySQM(t *testing.T) {
+	results := RenderSiteConfig(SiteConfig{SQMCakeEnabled: true, SQMSection: "eth1", SQMInterface: "wan", SqmDownload: 115000, SqmUpload: 18000}, []DeviceRoleInfo{{DeviceID: "ap", Role: "AP"}})
+	for _, command := range results[0].Commands {
+		if command.Config == "sqm" {
+			t.Fatalf("AP received gateway SQM command: %#v", command)
+		}
+	}
+}
+
+func TestRenderGatewayDisablesHardwareOffloadForCAKE(t *testing.T) {
+	results := RenderSiteConfig(SiteConfig{SQMCakeEnabled: true, SQMSection: "eth1", SQMInterface: "wan", SqmDownload: 115000, SqmUpload: 18000}, []DeviceRoleInfo{{DeviceID: "gateway", Role: "Gateway"}})
+	for _, command := range results[0].Commands {
+		if command.Config == "firewall" && command.Section == "@defaults[0]" && command.Option == "flow_offloading_hw" && command.Value == "0" {
+			return
+		}
+	}
+	t.Fatal("gateway CAKE must disable hardware flow offloading")
 }
 
 func TestUpdateDeviceRoleForTenantRejectsRunningRollout(t *testing.T) {

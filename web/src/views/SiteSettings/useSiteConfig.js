@@ -32,6 +32,8 @@ const defaultConfig = () => ({
   dropbear_password_auth: true,
   threat_shield_enabled: false,
   sqm_cake_enabled: false,
+  sqm_section: '',
+  sqm_interface: '',
   dpi_enabled: false,
   guest_portal_enabled: false,
   // Tailscale fields are referenced from the SECURITY tab but were

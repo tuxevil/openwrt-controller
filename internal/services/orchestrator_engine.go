@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	"openwrt-controller/internal/database"
@@ -41,6 +42,8 @@ type SiteConfig struct {
 	Timezone             string          `json:"timezone"`
 	HostnamePrefix       string          `json:"hostname_prefix"`
 	SQMCakeEnabled       bool            `json:"sqm_cake_enabled"`
+	SQMSection           string          `json:"sqm_section"`
+	SQMInterface         string          `json:"sqm_interface"`
 	SqmDownload          int             `json:"sqm_download"`
 	SqmUpload            int             `json:"sqm_upload"`
 	DPIEnabled           bool            `json:"dpi_enabled"`
@@ -64,6 +67,22 @@ type SiteConfig struct {
 	HealthChecks      json.RawMessage `json:"health_checks"`
 }
 
+var sqmSectionPattern = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+var sqmInterfacePattern = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+
+func (sc SiteConfig) ValidateSQM() error {
+	if !sc.SQMCakeEnabled {
+		return nil
+	}
+	if !sqmSectionPattern.MatchString(sc.SQMSection) || !sqmInterfacePattern.MatchString(sc.SQMInterface) {
+		return errors.New("SQM requires an explicit named queue section and network interface")
+	}
+	if sc.SqmDownload <= 0 || sc.SqmUpload <= 0 {
+		return errors.New("SQM download and upload rates must be positive Kbps")
+	}
+	return nil
+}
+
 // DeviceRoleInfo holds the device identity and role for rendering.
 type DeviceRoleInfo struct {
 	DeviceID     string             `json:"device_id"`
@@ -80,21 +99,6 @@ type DeviceCapabilities struct {
 	WirelessIfaceSections  []string          `json:"wifi_iface_sections"`
 	LogicalNetworks        map[string]string `json:"logical_networks"`
 	SQMCandidates          []string          `json:"sqm_candidates"`
-}
-
-func resolveResources(capabilities DeviceCapabilities) (string, string, string) {
-	radioSection, radioDevice := "cfg_radio0_0", "radio0"
-	if len(capabilities.WirelessIfaceSections) > 0 && capabilities.WirelessIfaceSections[0] != "" {
-		radioSection = capabilities.WirelessIfaceSections[0]
-	}
-	if len(capabilities.WirelessDeviceSections) > 0 && capabilities.WirelessDeviceSections[0] != "" {
-		radioDevice = capabilities.WirelessDeviceSections[0]
-	}
-	sqmInterface := "eth1"
-	if len(capabilities.SQMCandidates) > 0 && capabilities.SQMCandidates[0] != "" {
-		sqmInterface = capabilities.SQMCandidates[0]
-	}
-	return radioSection, radioDevice, sqmInterface
 }
 
 func logicalNetworkSection(capabilities DeviceCapabilities, name string) string {
@@ -134,7 +138,6 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 		if role == "" {
 			role = "AP" // default
 		}
-		_, _, sqmInterface := resolveResources(dev.Capabilities)
 
 		// ── SYSTEM (ALL roles) ───────────────────────────────────────
 		hostname := fmt.Sprintf("%s-%s-%d", cfg.HostnamePrefix, role, i+1)
@@ -227,14 +230,15 @@ func RenderSiteConfig(cfg SiteConfig, devices []DeviceRoleInfo) []RenderResult {
 
 			// ── SQM CAKE (Gateway only) ──────────────────────────────────
 			if cfg.SQMCakeEnabled {
+				cmds = append(cmds, UciCommand{Action: "set", Config: "firewall", Section: "@defaults[0]", Option: "flow_offloading_hw", Value: "0"})
 				cmds = append(cmds,
-					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "enabled", Value: "1"},
-					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "interface", Value: sqmInterface},
-					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "download", Value: strconv.Itoa(cfg.SqmDownload)},
-					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "upload", Value: strconv.Itoa(cfg.SqmUpload)},
-					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "qdisc", Value: "cake"},
-					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "script", Value: "piece_of_cake.qos"},
-					UciCommand{Action: "set", Config: "sqm", Section: sqmInterface, Option: "linklayer", Value: "none"},
+					UciCommand{Action: "set", Config: "sqm", Section: cfg.SQMSection, Option: "enabled", Value: "1"},
+					UciCommand{Action: "set", Config: "sqm", Section: cfg.SQMSection, Option: "interface", Value: cfg.SQMInterface},
+					UciCommand{Action: "set", Config: "sqm", Section: cfg.SQMSection, Option: "download", Value: strconv.Itoa(cfg.SqmDownload)},
+					UciCommand{Action: "set", Config: "sqm", Section: cfg.SQMSection, Option: "upload", Value: strconv.Itoa(cfg.SqmUpload)},
+					UciCommand{Action: "set", Config: "sqm", Section: cfg.SQMSection, Option: "qdisc", Value: "cake"},
+					UciCommand{Action: "set", Config: "sqm", Section: cfg.SQMSection, Option: "script", Value: "piece_of_cake.qos"},
+					UciCommand{Action: "set", Config: "sqm", Section: cfg.SQMSection, Option: "linklayer", Value: "none"},
 				)
 			}
 
@@ -390,7 +394,7 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 	var sc SiteConfig
 	err := database.Tx(ctx).QueryRow(`
 		SELECT id, site_id, enable_global_ssid, global_ssid, global_wpa_key, global_encryption,
-		       lan_ipaddr, COALESCE(sqm_cake_enabled, false), COALESCE(sqm_download, 0), COALESCE(sqm_upload, 0), COALESCE(dpi_enabled, false), COALESCE(secure_tunnel_enabled, true), COALESCE(tailscale_enabled, false), COALESCE(tailscale_auth_key, ''), lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
+		       lan_ipaddr, COALESCE(sqm_cake_enabled, false), COALESCE(sqm_section, ''), COALESCE(sqm_interface, ''), COALESCE(sqm_download, 0), COALESCE(sqm_upload, 0), COALESCE(dpi_enabled, false), COALESCE(secure_tunnel_enabled, true), COALESCE(tailscale_enabled, false), COALESCE(tailscale_auth_key, ''), lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 		       dns_primary, dns_secondary, timezone, hostname_prefix,
 		       firewall_syn_flood, firewall_drop_invalid,
 		       dropbear_port, dropbear_password_auth,
@@ -404,7 +408,7 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 		FROM site_configs WHERE site_id = $1
 	`, siteID).Scan(
 		&sc.ID, &sc.SiteID, &sc.EnableGlobalSSID, &sc.GlobalSSID, &sc.GlobalWPAKey, &sc.GlobalEncryption,
-		&sc.LanIPAddr, &sc.SQMCakeEnabled, &sc.SqmDownload, &sc.SqmUpload, &sc.DPIEnabled, &sc.SecureTunnelEnabled, &sc.TailscaleEnabled, &sc.TailscaleAuthKey, &sc.LanNetmask, &sc.DHCPStart, &sc.DHCPLimit, &sc.DHCPLeasetime,
+		&sc.LanIPAddr, &sc.SQMCakeEnabled, &sc.SQMSection, &sc.SQMInterface, &sc.SqmDownload, &sc.SqmUpload, &sc.DPIEnabled, &sc.SecureTunnelEnabled, &sc.TailscaleEnabled, &sc.TailscaleAuthKey, &sc.LanNetmask, &sc.DHCPStart, &sc.DHCPLimit, &sc.DHCPLeasetime,
 		&sc.DNSPrimary, &sc.DNSSecondary, &sc.Timezone, &sc.HostnamePrefix,
 		&sc.FirewallSynFlood, &sc.FirewallDropInvalid,
 		&sc.DropbearPort, &sc.DropbearPasswordAuth,
@@ -419,6 +423,9 @@ func GetSiteConfig(ctx context.Context, siteID string) (*SiteConfig, error) {
 }
 
 func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
+	if err := sc.ValidateSQM(); err != nil {
+		return err
+	}
 	// Ensure wan_interfaces is a valid JSON array — never NULL
 	if len(sc.WANInterfaces) == 0 {
 		sc.WANInterfaces = json.RawMessage(`[]`)
@@ -435,17 +442,17 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 	_, err := database.Tx(ctx).Exec(`
 		INSERT INTO site_configs (
 			site_id, enable_global_ssid, global_ssid, global_wpa_key, global_encryption,
-			lan_ipaddr, sqm_cake_enabled, sqm_download, sqm_upload, dpi_enabled, secure_tunnel_enabled, tailscale_enabled, tailscale_auth_key, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
+			lan_ipaddr, sqm_cake_enabled, sqm_section, sqm_interface, sqm_download, sqm_upload, dpi_enabled, secure_tunnel_enabled, tailscale_enabled, tailscale_auth_key, lan_netmask, dhcp_start, dhcp_limit, dhcp_leasetime,
 			dns_primary, dns_secondary, timezone, hostname_prefix,
 			firewall_syn_flood, firewall_drop_invalid,
 			dropbear_port, dropbear_password_auth,
 			dhcp_reservations, port_forwarding_rules, threat_shield_enabled, guest_portal_enabled,
 			wan_interfaces, allow_public_surveys, benchmark_baseline, topology_metadata, health_checks, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,CURRENT_TIMESTAMP)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,CURRENT_TIMESTAMP)
 		ON CONFLICT (site_id) DO UPDATE SET
 			enable_global_ssid=EXCLUDED.enable_global_ssid, global_ssid=EXCLUDED.global_ssid, global_wpa_key=EXCLUDED.global_wpa_key,
 			global_encryption=EXCLUDED.global_encryption,
-			lan_ipaddr=EXCLUDED.lan_ipaddr, sqm_cake_enabled=EXCLUDED.sqm_cake_enabled, sqm_download=EXCLUDED.sqm_download, sqm_upload=EXCLUDED.sqm_upload, dpi_enabled=EXCLUDED.dpi_enabled, secure_tunnel_enabled=EXCLUDED.secure_tunnel_enabled, tailscale_enabled=EXCLUDED.tailscale_enabled, tailscale_auth_key=EXCLUDED.tailscale_auth_key, lan_netmask=EXCLUDED.lan_netmask,
+			lan_ipaddr=EXCLUDED.lan_ipaddr, sqm_cake_enabled=EXCLUDED.sqm_cake_enabled, sqm_section=EXCLUDED.sqm_section, sqm_interface=EXCLUDED.sqm_interface, sqm_download=EXCLUDED.sqm_download, sqm_upload=EXCLUDED.sqm_upload, dpi_enabled=EXCLUDED.dpi_enabled, secure_tunnel_enabled=EXCLUDED.secure_tunnel_enabled, tailscale_enabled=EXCLUDED.tailscale_enabled, tailscale_auth_key=EXCLUDED.tailscale_auth_key, lan_netmask=EXCLUDED.lan_netmask,
 			dhcp_start=EXCLUDED.dhcp_start, dhcp_limit=EXCLUDED.dhcp_limit,
 			dhcp_leasetime=EXCLUDED.dhcp_leasetime,
 			dns_primary=EXCLUDED.dns_primary, dns_secondary=EXCLUDED.dns_secondary,
@@ -465,7 +472,7 @@ func UpsertSiteConfig(ctx context.Context, sc SiteConfig) error {
 			allow_public_surveys=EXCLUDED.allow_public_surveys,
 			updated_at=CURRENT_TIMESTAMP
 	`, sc.SiteID, sc.EnableGlobalSSID, sc.GlobalSSID, sc.GlobalWPAKey, sc.GlobalEncryption,
-		sc.LanIPAddr, sc.SQMCakeEnabled, sc.SqmDownload, sc.SqmUpload, sc.DPIEnabled, sc.SecureTunnelEnabled, sc.TailscaleEnabled, sc.TailscaleAuthKey, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
+		sc.LanIPAddr, sc.SQMCakeEnabled, sc.SQMSection, sc.SQMInterface, sc.SqmDownload, sc.SqmUpload, sc.DPIEnabled, sc.SecureTunnelEnabled, sc.TailscaleEnabled, sc.TailscaleAuthKey, sc.LanNetmask, sc.DHCPStart, sc.DHCPLimit, sc.DHCPLeasetime,
 		sc.DNSPrimary, sc.DNSSecondary, sc.Timezone, sc.HostnamePrefix,
 		sc.FirewallSynFlood, sc.FirewallDropInvalid,
 		sc.DropbearPort, sc.DropbearPasswordAuth,

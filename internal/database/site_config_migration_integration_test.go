@@ -92,7 +92,7 @@ func TestSiteConfigMigrationContract(t *testing.T) {
 	}
 
 	for _, column := range []string{
-		"sqm_cake_enabled", "sqm_download", "sqm_upload", "dpi_enabled",
+		"sqm_cake_enabled", "sqm_section", "sqm_interface", "sqm_download", "sqm_upload", "dpi_enabled",
 		"secure_tunnel_enabled", "tailscale_enabled", "tailscale_auth_key",
 		"topology_metadata", "benchmark_baseline", "health_checks",
 		"wan_interfaces", "allow_public_surveys",

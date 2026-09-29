@@ -34,6 +34,16 @@ const emit = defineEmits(['mark-dirty'])
           <input v-model.number="config.sqm_upload" @input="emit('mark-dirty')" type="number" class="field font-mono" />
         </div>
       </div>
+      <div class="grid grid-cols-2 gap-4" :class="config.sqm_cake_enabled ? 'opacity-100' : 'opacity-30 pointer-events-none'">
+        <div>
+          <label class="field-label" for="sqm-section">SQM queue section</label>
+          <input id="sqm-section" v-model.trim="config.sqm_section" @input="emit('mark-dirty')" placeholder="eth1" class="field font-mono" />
+        </div>
+        <div>
+          <label class="field-label" for="sqm-interface">WAN network interface</label>
+          <input id="sqm-interface" v-model.trim="config.sqm_interface" @input="emit('mark-dirty')" placeholder="wan" class="field font-mono" />
+        </div>
+      </div>
     </div>
   </section>
 
