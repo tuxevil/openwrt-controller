@@ -1977,7 +1977,7 @@ while true; do
                 fi
                 if [ "$TMP_HASH" = "$LATEST_HASH" ] && [ "$SIGNATURE_OK" = "1" ]; then
                     logger -t agent "Agent downloaded securely. Updating and restarting."
-                    if chmod +x "$0.tmp" && cp "$0" "$0.old" && mv "$0.tmp" "$0" && printf '%s\n' "$LATEST_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE"; then
+                    if chmod +x "$0.tmp" && cp "$0" "$0.old" && printf '%s\n' "$AGENT_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE.old" && mv "$0.tmp" "$0" && printf '%s\n' "$LATEST_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE"; then
                         AGENT_VERSION_NUMBER="$LATEST_VERSION_NUMBER"
                         logger -t agent "Agent updated. Reloading in-process to preserve procd respawn budget."
                         # Use exec to re-exec the new script in the same PID.
@@ -1988,6 +1988,8 @@ while true; do
                             logger -t agent "exec failed; restoring the previous agent"
                             if ! mv "$0.old" "$0"; then
                                 logger -t agent "previous agent could not be restored"
+                            elif [ -f "$AGENT_VERSION_NUMBER_FILE.old" ]; then
+                                mv "$AGENT_VERSION_NUMBER_FILE.old" "$AGENT_VERSION_NUMBER_FILE"
                             fi
                             exit 0
                         fi
@@ -2280,6 +2282,9 @@ EOF
 
     if [ "$HTTP_CODE" = "202" ]; then
         T_FAILS=0
+        # A verified heartbeat commits the update. An old fallback left on
+        # disk could otherwise be restored after unrelated transient errors.
+        rm -f "$0.old" "$AGENT_VERSION_NUMBER_FILE.old"
     else
         T_FAILS=$((T_FAILS+1))
         logger -t agent "Telemetry failed ($HTTP_CODE). Fail count: $T_FAILS"
@@ -2288,6 +2293,9 @@ EOF
             logger -t agent "Telemetry failed 3 times. Initiating rollback."
             if [ -f "$0.old" ]; then
                 mv "$0.old" "$0"
+                if [ -f "$AGENT_VERSION_NUMBER_FILE.old" ]; then
+                    mv "$AGENT_VERSION_NUMBER_FILE.old" "$AGENT_VERSION_NUMBER_FILE"
+                fi
                 # Re-exec the rolled-back script in-place so procd does not count
                 # this as a crash. Belt-and-suspenders: the init.d/agent script
                 # uses generous respawn thresholds too.
@@ -2446,7 +2454,7 @@ EOF
                 
                 for RADIO in $(uci -q show wireless | grep "=wifi-device" | cut -d'.' -f2 | cut -d'=' -f1); do
                     M_BAND=""
-                    R_BAND=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.band" 2>/dev/null)
+                    R_BAND=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.band" 2>/dev/null || true)
                     if [ -n "$R_BAND" ]; then
                         if [ "$R_BAND" = "2g" ] || [ "$R_BAND" = "2g-5g" ]; then M_BAND="2.4GHz"
                         elif [ "$R_BAND" = "5g" ]; then M_BAND="5GHz"
@@ -2454,14 +2462,14 @@ EOF
                     fi
                     
                     if [ -z "$M_BAND" ]; then
-                        R_HW=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.hwmode" 2>/dev/null)
+                        R_HW=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.hwmode" 2>/dev/null || true)
                         if [ "$R_HW" = "11a" ] || [ "$R_HW" = "11ac" ] || [ "$R_HW" = "11ax" ]; then M_BAND="5GHz"
                         elif [ "$R_HW" = "11g" ] || [ "$R_HW" = "11b" ] || [ "$R_HW" = "11n" ]; then M_BAND="2.4GHz"
                         fi
                     fi
                     
                     if [ -z "$M_BAND" ]; then
-                        R_CHAN=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.channel" 2>/dev/null)
+                        R_CHAN=$(ubus call network.wireless status | jsonfilter -e "@.$RADIO.config.channel" 2>/dev/null || true)
                         if [ "$R_CHAN" != "auto" ] && [ "$R_CHAN" -gt 14 ]; then M_BAND="5GHz"
                         else M_BAND="2.4GHz"
                         fi
@@ -2471,18 +2479,18 @@ EOF
                     while [ $i -lt "$WLAN_COUNT" ]; do
                         W_SSID=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ssid" 2>/dev/null)
                         W_SEC=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].security" 2>/dev/null)
-                        W_KEY=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].key" 2>/dev/null)
+                        W_KEY=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].key" 2>/dev/null || true)
                         W_BAND=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].band" 2>/dev/null)
-                        W_ROAMING=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211r" 2>/dev/null)
-                        W_80211K=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211k" 2>/dev/null)
-                        W_80211V=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211v" 2>/dev/null)
-                        W_MFP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211w" 2>/dev/null)
+                        W_ROAMING=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211r" 2>/dev/null || true)
+                        W_80211K=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211k" 2>/dev/null || true)
+                        W_80211V=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211v" 2>/dev/null || true)
+                        W_MFP=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].ieee80211w" 2>/dev/null || true)
 
-                        W_AUTH_SERVER=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].auth_server" 2>/dev/null)
+                        W_AUTH_SERVER=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].auth_server" 2>/dev/null || true)
 
-                        W_AUTH_SECRET=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].auth_secret" 2>/dev/null)
+                        W_AUTH_SECRET=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].auth_secret" 2>/dev/null || true)
 
-                        W_DYN_VLAN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].dynamic_vlan" 2>/dev/null)
+                        W_DYN_VLAN=$(echo "$CONFIG_RESPONSE" | jsonfilter -e "@.config.wireless.wlans[$i].dynamic_vlan" 2>/dev/null || true)
                         
                         if [ "$W_BAND" = "both" ] || [ "$W_BAND" = "$M_BAND" ]; then
                             SECTION="cfg_${RADIO}_${i}"
