@@ -159,3 +159,31 @@ de salida en 0,87 s con `false` y 716 tokens en 4,47 s con `true`.
 Solo la segunda respuesta incluyó un campo de razonamiento separado.
 La muestra confirma el efecto del parámetro. La calidad requiere
 evaluar más casos con evidencia conocida.
+
+### Evaluación de evidencia de roaming
+
+Se comparó el prompt base del investigador con una pauta que distingue
+el resultado de asociación y la continuidad del tráfico. La prueba
+usó Gemma 4 E2B en LiteLLM, razonamiento activo, caché deshabilitada,
+temperatura cero y los mismos datos sintéticos en ambas variantes.
+La evaluación manual se hizo sobre el JSON final con evidencia ya
+recopilada.
+
+- Con FT completado y un segundo de pérdida, ambas variantes conservaron
+  el traspaso y la pérdida observada.
+- Sin medición del cliente, la pauta mejorada expresó que el corte era
+  indeterminado. El prompt base sugirió una interrupción a partir de la
+  ausencia de datos.
+- Con cero pérdidas a diez paquetes por segundo, la pauta mejorada
+  interpretó correctamente la medición. El prompt base confundió
+  frecuencia de muestreo con pérdidas.
+- Con rechazo de asociación y el cliente aún en el AP original, la
+  variante mejorada conservó esos hechos, pero quedó ambigua sobre
+  si el intento se completó. Una segunda redacción omitió la evidencia
+  del rechazo y se descartó.
+- El caso de control sobre el colector siguió siendo incierto en ambas
+  variantes.
+
+La prueba aísla la interpretación de evidencia. La selección de
+herramientas y la precisión durante roaming real requieren evaluación
+por separado.

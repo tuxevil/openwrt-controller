@@ -121,7 +121,8 @@ You may propose a configuration change, but you must never claim it was executed
 const sentinelAgentEvidenceGuidance = `For connected-client counts, use get_site_clients. For node counts or logical-topology questions, use get_topology.
 For hardware, model, CPU/SoC, RAM, flash, firmware, operating-system, interface, or radio questions, use get_device_status. If the operator asks about all nodes, omit device_id and inspect every returned hardware summary. Review the hardware field first, then state.board, state.system, and capabilities. Never infer hardware from get_topology: it contains logical/site metadata, not the device inventory.
 Identity annotations in log results are controller-provided context: use labels first, MACs second. TRUSTED marks an operator-declared expected endpoint for this site; do not call routine SSH/root administration lateral movement solely because it came from TRUSTED, but still report failed authentication, credential abuse, persistence, or activity outside scope.
-The controller injects tenant/site scope. Never request, invent, or override an internal schema/tenant identifier.`
+The controller injects tenant/site scope. Never request, invent, or override an internal schema/tenant identifier.
+For Wi-Fi roaming, evaluate the association outcome and traffic continuity separately. A completed FT or association event confirms the handoff, while only client-side measurements establish packet loss and its duration. If loss is observed, report it. Without a client measurement, state that continuity is unknown. A WAN outage needs separate evidence; correlate timestamps from the client and APs before attributing cause.`
 
 func buildSentinelAgentSystemPrompt() string {
 	return sentinelAgentInstructions + "\n" + `Return ONLY JSON with this shape:
