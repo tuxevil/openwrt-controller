@@ -827,7 +827,11 @@ function backToList() {
             <div>Started: {{ fmtDate(s.started_at) }}</div>
             <div>Ended: {{ fmtDate(s.ended_at) }}</div>
             <div>Access: <span :class="s.access_mode === 'public' ? 'text-cyan-400' : 'text-gray-400'">{{ s.access_mode }}</span></div>
-            <div>Samples: <b class="text-white">{{ s.point_count || 0 }}</b></div>
+            <div>
+              Samples: <b class="text-white">{{ s.point_count || 0 }}</b>
+              <span v-if="s.probe_count > 0" class="ml-2 text-cyan-400">· Stream probe ({{ s.probe_count }})</span>
+              <span v-else-if="s.point_count > 0" class="ml-2 text-gray-600">· No stream probe</span>
+            </div>
             <div v-if="s.min_dbm != null">
               dBm: <span class="text-[#39FF14]">{{ s.min_dbm.toFixed(0) }}</span> …
               <span class="text-[#ff0055]">{{ s.max_dbm.toFixed(0) }}</span>
@@ -930,28 +934,44 @@ function backToList() {
 
       <!-- Diagnostic summary bar -->
       <div v-if="points.length" class="px-6 py-1.5 border-b border-gray-800/80 bg-zinc-950 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-        <span><b class="text-[#39FF14]">{{ summary.withSignal }}</b> with signal</span>
-        <span v-if="summary.clientNotAssociated" class="text-gray-400">
-          ● <b class="text-white">{{ summary.clientNotAssociated }}</b> Wi-Fi dropped (all APs online)
-        </span>
-        <span v-if="summary.partialApTelemetry" class="text-amber-400">
-          ◌ <b>{{ summary.partialApTelemetry }}</b> AP silent (partial telemetry)
-        </span>
-        <span v-if="summary.noApTelemetry" class="text-orange-400">
-          ◌ <b>{{ summary.noApTelemetry }}</b> no AP telemetry
-        </span>
-        <span v-if="summary.unknownMissing" class="text-gray-500">
-          ● <b>{{ summary.unknownMissing }}</b> no signal (legacy)
-        </span>
-        <span v-if="summary.medianAccuracyM != null" class="text-sky-400">
-          GPS median ±{{ summary.medianAccuracyM.toFixed(0) }}m (max ±{{ summary.maxAccuracyM.toFixed(0) }}m)
-        </span>
-        <span v-if="summary.withProbe" class="text-cyan-300">
-          Local link: avg {{ summary.avgRttMs != null ? summary.avgRttMs + ' ms' : '—' }} · max loss {{ summary.maxLossPct != null ? summary.maxLossPct + '%' : '—' }}
-        </span>
-        <span v-if="displayMetric === 'stream'" class="text-[10px] text-gray-500 ml-auto">
-          Measures phone → Nerve Center stability (test YouTube uplink separately)
-        </span>
+        <template v-if="displayMetric === 'stream'">
+          <span v-if="summary.withProbe === 0" class="text-amber-400">
+            ⚠ This survey has no stream-quality probe samples (recorded without the RTT/loss probe enabled). Select a survey labeled <b>Stream probe</b>.
+          </span>
+          <template v-else>
+            <span class="text-[#39FF14]">● <b>{{ summary.streamGood }}</b> good (&lt;40ms, 0% loss)</span>
+            <span class="text-[#FFD600]">● <b>{{ summary.streamFair }}</b> fair (40–120ms / &lt;5% loss)</span>
+            <span class="text-[#ff0055]">● <b>{{ summary.streamBad }}</b> bad (&gt;120ms or ≥5% loss)</span>
+            <span v-if="summary.streamMissing" class="text-gray-500">● <b>{{ summary.streamMissing }}</b> no probe</span>
+            <span class="text-cyan-300">
+              avg {{ summary.avgRttMs != null ? summary.avgRttMs + ' ms' : '—' }} · max loss {{ summary.maxLossPct != null ? summary.maxLossPct + '%' : '—' }}
+            </span>
+          </template>
+          <span class="text-[10px] text-gray-500 ml-auto">
+            Measures phone → Nerve Center stability (test YouTube uplink separately)
+          </span>
+        </template>
+        <template v-else>
+          <span><b class="text-[#39FF14]">{{ summary.withSignal }}</b> with signal</span>
+          <span v-if="summary.clientNotAssociated" class="text-gray-400">
+            ● <b class="text-white">{{ summary.clientNotAssociated }}</b> Wi-Fi dropped (all APs online)
+          </span>
+          <span v-if="summary.partialApTelemetry" class="text-amber-400">
+            ◌ <b>{{ summary.partialApTelemetry }}</b> AP silent (partial telemetry)
+          </span>
+          <span v-if="summary.noApTelemetry" class="text-orange-400">
+            ◌ <b>{{ summary.noApTelemetry }}</b> no AP telemetry
+          </span>
+          <span v-if="summary.unknownMissing" class="text-gray-500">
+            ● <b>{{ summary.unknownMissing }}</b> no signal (legacy)
+          </span>
+          <span v-if="summary.medianAccuracyM != null" class="text-sky-400">
+            GPS median ±{{ summary.medianAccuracyM.toFixed(0) }}m (max ±{{ summary.maxAccuracyM.toFixed(0) }}m)
+          </span>
+          <span v-if="summary.withProbe" class="text-cyan-300">
+            Local link: avg {{ summary.avgRttMs != null ? summary.avgRttMs + ' ms' : '—' }} · max loss {{ summary.maxLossPct != null ? summary.maxLossPct + '%' : '—' }}
+          </span>
+        </template>
       </div>
 
       <!-- Local Offline Floorplan Drawer -->
@@ -1123,3 +1143,9 @@ function backToList() {
     </div>
   </div>
 </template>
+
+<style scoped>
+:deep(.leaflet-container) {
+  background: #090b0f;
+}
+</style>

@@ -300,7 +300,55 @@ func WriteClientSignalBatch(samples []ClientSignalSample) error {
 	return nil
 }
 
-// GetClosestSurveySignal finds the nearest AP measurement to a GPS fix.
+const (
+	surveyActiveInactiveMaxMs = 3000  // AP saw packets from phone within 3s -> actively serving
+	surveyMaxInactiveMs       = 15000 // >15s inactive in assoclist -> stale ghost after roam/disconnect
+)
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+// selectBestSurveySignal chooses the best AP signal measurement around capturedAt.
+// Stale ghost entries (>15s inactive) are ignored. Actively serving APs
+// (inactive_ms <= 3000) always beat stale/fringe entries (>3000ms) even if the
+// stale AP happened to report closer to capturedAt; within the same tier, the
+// closest timestamp wins (tie-breaking on lower inactive_ms, time, device_id).
+func selectBestSurveySignal(candidates []ClientSignalSample, capturedAt time.Time) (ClientSignalSample, bool) {
+	var best ClientSignalSample
+	bestTier := 99
+	var bestDist time.Duration
+	found := false
+
+	for _, c := range candidates {
+		if c.InactiveMs > surveyMaxInactiveMs {
+			continue
+		}
+		tier := 0
+		if c.InactiveMs > surveyActiveInactiveMaxMs {
+			tier = 1
+		}
+		dist := absDuration(c.Time.Sub(capturedAt))
+		if !found ||
+			tier < bestTier ||
+			(tier == bestTier && dist < bestDist) ||
+			(tier == bestTier && dist == bestDist && c.InactiveMs < best.InactiveMs) ||
+			(tier == bestTier && dist == bestDist && c.InactiveMs == best.InactiveMs && (c.Time.Before(best.Time) || (c.Time.Equal(best.Time) && c.DeviceID < best.DeviceID))) {
+			best = c
+			bestTier = tier
+			bestDist = dist
+			found = true
+		}
+	}
+	return best, found
+}
+
+// GetClosestSurveySignal finds the best AP measurement near a GPS fix,
+// preferring actively serving APs over stale assoclist entries left behind
+// after a fast roam.
 func GetClosestSurveySignal(ctx context.Context, mac, surveyID string, capturedAt time.Time) (ClientSignalSample, bool, error) {
 	if mac == "" || surveyID == "" {
 		return ClientSignalSample{}, false, fmt.Errorf("survey ID and MAC required")
@@ -314,13 +362,13 @@ func GetClosestSurveySignal(ctx context.Context, mac, surveyID string, capturedA
 		from(bucket: %q)
 		  |> range(start: %s, stop: %s)
 		  |> filter(fn: (r) => r["_measurement"] == "client_signal" and r["mac"] == %q and r["survey_id"] == %q)
-		  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+		  |> pivot(rowKey: ["_time", "device_id"], columnKey: ["_field"], valueColumn: "_value")
 		  |> filter(fn: (r) => exists r.signal_dbm)
 		  |> group()
 		  |> map(fn: (r) => ({r with offset_ns: int(v: r._time) - %d}))
 		  |> map(fn: (r) => ({r with distance_ns: if r.offset_ns < 0 then -r.offset_ns else r.offset_ns}))
 		  |> sort(columns: ["distance_ns", "_time", "device_id"])
-		  |> limit(n: 1)
+		  |> limit(n: 32)
 	`, bucket, capturedAt.Add(-window).UTC().Format(time.RFC3339Nano),
 		capturedAt.Add(window).UTC().Format(time.RFC3339Nano), mac, surveyID, capturedAt.UnixNano())
 
@@ -330,6 +378,7 @@ func GetClosestSurveySignal(ctx context.Context, mac, surveyID string, capturedA
 	}
 	defer result.Close()
 
+	var candidates []ClientSignalSample
 	for result.Next() {
 		rec := result.Record()
 		out := ClientSignalSample{
@@ -355,12 +404,13 @@ func GetClosestSurveySignal(ctx context.Context, mac, surveyID string, capturedA
 		} else if v, ok := rec.ValueByKey("inactive_ms").(float64); ok {
 			out.InactiveMs = int64(v)
 		}
-		return out, true, nil
+		candidates = append(candidates, out)
 	}
 	if result.Err() != nil {
 		return ClientSignalSample{}, false, result.Err()
 	}
-	return ClientSignalSample{}, false, nil
+	best, ok := selectBestSurveySignal(candidates, capturedAt)
+	return best, ok, nil
 }
 
 // GetReportingDevicesAround returns the lower-cased device_ids that reported

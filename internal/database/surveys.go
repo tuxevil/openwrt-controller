@@ -34,6 +34,7 @@ type Survey struct {
 	UpdatedAt        string  `json:"updated_at"`
 	// Aggregated fields populated on list queries
 	PointCount int      `json:"point_count,omitempty"`
+	ProbeCount int      `json:"probe_count,omitempty"`
 	MinDBM     *float64 `json:"min_dbm,omitempty"`
 	MaxDBM     *float64 `json:"max_dbm,omitempty"`
 	AvgDBM     *float64 `json:"avg_dbm,omitempty"`
@@ -112,11 +113,13 @@ func GetSiteSurveys(ctx context.Context, schema, siteID string) ([]Survey, error
 		SELECT s.id, s.site_id, s.name, s.status, s.access_mode,
 		       s.started_at, s.ended_at, s.created_at,
 		       COALESCE(p.cnt, 0),
+		       COALESCE(p.probe_cnt, 0),
 		       p.min_dbm, p.max_dbm, p.avg_dbm
 		FROM %[1]s.wifi_surveys s
 		LEFT JOIN (
 			SELECT survey_id,
 			       COUNT(*) AS cnt,
+			       COUNT(*) FILTER (WHERE probe_rtt_ms IS NOT NULL OR probe_loss_pct IS NOT NULL) AS probe_cnt,
 			       MIN(signal_dbm) AS min_dbm,
 			       MAX(signal_dbm) AS max_dbm,
 			       AVG(signal_dbm) AS avg_dbm
@@ -136,7 +139,7 @@ func GetSiteSurveys(ctx context.Context, schema, siteID string) ([]Survey, error
 		var s Survey
 		var started, ended, created *string
 		if err := rows.Scan(&s.ID, &s.SiteID, &s.Name, &s.Status, &s.AccessMode,
-			&started, &ended, &created, &s.PointCount, &s.MinDBM, &s.MaxDBM, &s.AvgDBM); err != nil {
+			&started, &ended, &created, &s.PointCount, &s.ProbeCount, &s.MinDBM, &s.MaxDBM, &s.AvgDBM); err != nil {
 			return nil, err
 		}
 		if started != nil {

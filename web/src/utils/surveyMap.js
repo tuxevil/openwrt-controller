@@ -80,29 +80,48 @@ export function rgbForSignalDbm(dbm) {
   return [255, Math.round(214 * k), Math.round(85 * (1 - k))]
 }
 
+function toFiniteNumber(v) {
+  if (v == null || v === '') return null
+  const n = typeof v === 'number' ? v : Number(v)
+  return Number.isFinite(n) ? n : null
+}
+
 export function streamQualityScore(point) {
   if (!point) return null
-  const hasRtt = point.probe_rtt_ms != null && Number.isFinite(point.probe_rtt_ms)
-  const hasLoss = point.probe_loss_pct != null && Number.isFinite(point.probe_loss_pct)
-  if (!hasRtt && !hasLoss) return null
-  const loss = hasLoss ? point.probe_loss_pct : 0
-  const rtt = hasRtt ? point.probe_rtt_ms : 150
+  const rttVal = toFiniteNumber(point.probe_rtt_ms)
+  const lossVal = toFiniteNumber(point.probe_loss_pct)
+  if (rttVal == null && lossVal == null) return null
+  const loss = lossVal ?? 0
+  const rtt = rttVal ?? 150
   // Higher is better: 100 = ideal (0% loss, <20ms), 0 = unusable (>=20% loss or >=200ms)
   const lossPenalty = Math.min(100, loss * 5)
   const rttPenalty = Math.min(80, Math.max(0, rtt - 15) * 0.45)
   return Math.max(0, Math.min(100, 100 - lossPenalty - rttPenalty))
 }
 
+export function classifyStreamQuality(point) {
+  if (!point) return 'missing'
+  const rttVal = toFiniteNumber(point.probe_rtt_ms)
+  const lossVal = toFiniteNumber(point.probe_loss_pct)
+  if (rttVal == null && lossVal == null) return 'missing'
+  const loss = lossVal ?? 0
+  const rtt = rttVal ?? 999
+  if (loss >= 5 || rtt > 120) return 'bad'
+  if (loss > 0 || rtt >= 40) return 'fair'
+  return 'good'
+}
+
 export function colorForStreamQuality(point) {
-  if (!point) return '#666'
-  const hasRtt = point.probe_rtt_ms != null && Number.isFinite(point.probe_rtt_ms)
-  const hasLoss = point.probe_loss_pct != null && Number.isFinite(point.probe_loss_pct)
-  if (!hasRtt && !hasLoss) return '#666'
-  const loss = hasLoss ? point.probe_loss_pct : 0
-  const rtt = hasRtt ? point.probe_rtt_ms : 999
-  if (loss >= 5 || rtt > 120) return '#ff0055'
-  if (loss > 0 || rtt >= 40) return '#FFD600'
-  return '#39FF14'
+  switch (classifyStreamQuality(point)) {
+    case 'good':
+      return '#39FF14'
+    case 'fair':
+      return '#FFD600'
+    case 'bad':
+      return '#ff0055'
+    default:
+      return '#666'
+  }
 }
 
 export function rgbForStreamScore(score) {
@@ -124,6 +143,10 @@ export function summarizeSurveyPoints(points) {
   let noApTelemetry = 0
   let unknownMissing = 0
   let withProbe = 0
+  let streamGood = 0
+  let streamFair = 0
+  let streamBad = 0
+  let streamMissing = 0
   let rttSum = 0
   let rttCount = 0
   let maxLossPct = null
@@ -142,14 +165,22 @@ export function summarizeSurveyPoints(points) {
       else if (p.missing_reason === 'no_ap_telemetry') noApTelemetry++
       else unknownMissing++
     }
-    if (p.probe_rtt_ms != null || p.probe_loss_pct != null) {
+    const streamTier = classifyStreamQuality(p)
+    if (streamTier === 'good') streamGood++
+    else if (streamTier === 'fair') streamFair++
+    else if (streamTier === 'bad') streamBad++
+    else streamMissing++
+
+    const rttVal = toFiniteNumber(p.probe_rtt_ms)
+    const lossVal = toFiniteNumber(p.probe_loss_pct)
+    if (rttVal != null || lossVal != null) {
       withProbe++
-      if (p.probe_rtt_ms != null) {
-        rttSum += p.probe_rtt_ms
+      if (rttVal != null) {
+        rttSum += rttVal
         rttCount++
       }
-      if (p.probe_loss_pct != null) {
-        maxLossPct = maxLossPct == null ? p.probe_loss_pct : Math.max(maxLossPct, p.probe_loss_pct)
+      if (lossVal != null) {
+        maxLossPct = maxLossPct == null ? lossVal : Math.max(maxLossPct, lossVal)
       }
     }
   }
@@ -167,6 +198,10 @@ export function summarizeSurveyPoints(points) {
     noApTelemetry,
     unknownMissing,
     withProbe,
+    streamGood,
+    streamFair,
+    streamBad,
+    streamMissing,
     medianAccuracyM,
     maxAccuracyM,
     avgRttMs: rttCount ? Number((rttSum / rttCount).toFixed(1)) : null,
