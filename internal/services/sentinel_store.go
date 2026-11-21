@@ -573,6 +573,21 @@ func GetSentinelCase(schema, caseID string) (SentinelCase, error) {
 	return item, nil
 }
 
+// GetSentinelCaseForSite returns a reduced case view for an assigned external site.
+func GetSentinelCaseForSite(ctx context.Context, schema, siteID, caseID string) (SentinelCase, error) {
+	safeSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return SentinelCase{}, err
+	}
+	var item SentinelCase
+	err = database.DB.QueryRowContext(ctx, fmt.Sprintf(`SELECT id::text, site_id::text, severity, status, title, summary, updated_at
+		FROM %s.sentinel_cases WHERE site_id = $1 AND id = $2`, safeSchema), siteID, caseID).
+		Scan(&item.ID, &item.SiteID, &item.Severity, &item.Status, &item.Title, &item.Summary, &item.UpdatedAt)
+	item.Title = redactSentinelSecrets(item.Title)
+	item.Summary = redactSentinelSecrets(item.Summary)
+	return item, err
+}
+
 func CreateSentinelNote(schema, siteID, deviceID, title, content, createdBy string) (SentinelNote, error) {
 	safeSchema, err := sentinelSchema(schema)
 	if err != nil {

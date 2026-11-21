@@ -39,3 +39,9 @@ MCP ya está documentado en [OpenClaw](https://docs.openclaw.ai/tools/mcp) y [He
 ## Primera demostración
 
 En laboratorio, arrancar sin WAN, cerrar la interfaz y simular pérdida de telemetría de un AP. Abrir Nerve Center y preguntar qué pasó. Pedir el mismo informe desde Hermes y OpenClaw. Los tres deben citar el mismo caso, ventana temporal y evidencia, reconocer incertidumbre y mostrar la recuperación. Repetir con el modelo detenido y verificar que el aviso y la cronología siguen disponibles. Esta demostración se completa antes de habilitar cambios autónomos de infraestructura.
+
+### Endpoint MCP de lectura
+
+`/api/sentinel/mcp` usa Streamable HTTP sobre el listener TLS de Nerve Center. Para activarlo, configura `SENTINEL_MCP_IDENTITIES_FILE` con la ruta de un archivo JSON de permisos `0600` legible por el controlador. Cada entrada tiene `name`, `token_sha256`, `tenant_schema` y `site_id`. Usa un token aleatorio independiente de al menos 32 bytes por cliente, guarda solo el SHA-256 hexadecimal del texto del token en el archivo y configura el token original como `Authorization: Bearer …` en cada cliente. Usa el hostname del certificado y confía en la CA local. Actualiza el archivo por reemplazo atómico. Eliminar una entrada revoca su acceso en la siguiente petición.
+
+Las herramientas iniciales son `get_site_health` y `get_case`. La primera devuelve conteos y hora de observación. La segunda devuelve un resumen exclusivamente para el sitio asignado por el controlador. Los clientes no eligen el tenant ni el sitio en la llamada. El endpoint funciona en modo stateless y registra las consultas sin incluir el token.

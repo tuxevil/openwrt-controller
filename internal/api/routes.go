@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"os"
 
 	"openwrt-controller/internal/api/handlers"
 	"openwrt-controller/internal/api/middleware"
@@ -60,6 +61,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/global/settings", middleware.WithAuth(handlers.GetPlatformSettingsHandler))
 	mux.HandleFunc("POST /api/global/settings", middleware.WithAuth(handlers.UpdatePlatformSettingsHandler))
 	mux.HandleFunc("POST /api/chatops/query", middleware.WithAuth(handlers.ChatOpsQueryHandler))
+	mux.Handle("/api/sentinel/mcp", handlers.NewSentinelMCPHandler(os.Getenv("SENTINEL_MCP_IDENTITIES_FILE")))
 	// ── SENTINEL AI operator ────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/sentinel/conversations", middleware.WithAuth(handlers.ListSentinelConversationsHandler))
 	mux.HandleFunc("POST /api/sentinel/conversations", middleware.WithAuth(handlers.CreateSentinelConversationHandler))
