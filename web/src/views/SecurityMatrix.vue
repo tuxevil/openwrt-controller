@@ -19,6 +19,7 @@
       <p v-if="triggerError" class="error-msg">{{ triggerError }}</p>
     </div>
 
+    <p v-if="queuedOperation" class="mb-3" role="status">{{ queuedOperation }}</p>
     <div class="operator-panel" v-if="operatorCases.length || proposals.length">
       <h2 class="neon-cyan">SENTINEL OPERATOR QUEUE</h2>
       <div v-for="item in operatorCases" :key="item.id" class="operator-case">
@@ -36,8 +37,19 @@
       <div v-for="proposal in proposals" :key="proposal.id" class="operator-proposal">
         <div><strong>ACTION PROPOSAL</strong> · {{ proposal.device_id }} · {{ proposal.config }}</div>
         <p>{{ proposal.summary }}</p>
-        <button class="action-btn neon-btn" @click="approveProposal(proposal)">Approve</button>
-        <button class="action-btn reject-btn" @click="rejectProposal(proposal)">Reject</button>
+        <details class="mb-2">
+          <summary>Revisar plan de cambio</summary>
+          <p v-if="proposal.case_id">Caso {{ proposal.case_id }}</p>
+          <p>Vence {{ new Date(proposal.expires_at).toLocaleString() }}</p>
+          <p v-if="proposal.blocked_reason" role="alert">{{ proposal.blocked_reason }}</p>
+          <p v-if="proposal.plan?.plan_hash" class="break-all">Hash del plan {{ proposal.plan.plan_hash }}</p>
+          <pre v-if="proposal.plan?.commands?.length" class="my-2 max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{{ JSON.stringify(proposal.plan.commands, null, 2) }}</pre>
+          <p v-if="proposal.plan?.health_checks?.length">Comprobaciones {{ proposal.plan.health_checks.join(', ') }}</p>
+          <button type="button" class="action-btn neon-btn"
+            :disabled="approving || !proposal.plan?.plan_hash || !proposal.plan?.commands?.length || !!proposal.blocked_reason"
+            @click="approveProposal(proposal)">Aprobar y encolar</button>
+        </details>
+        <button type="button" class="action-btn reject-btn" :disabled="approving" @click="rejectProposal(proposal)">Rechazar</button>
       </div>
     </div>
 
@@ -126,6 +138,8 @@ const triggerError = ref('');
 const operatorCases = ref([]);
 const acknowledging = ref(false);
 const proposals = ref([]);
+const approving = ref(false);
+const queuedOperation = ref('');
 const operatorNotes = ref([]);
 const savingNote = ref(false);
 const editingNoteId = ref('');
@@ -225,11 +239,19 @@ const acknowledgeCase = async (item) => {
 };
 
 const approveProposal = async (proposal) => {
+  if (approving.value || proposal.blocked_reason || !proposal.plan?.plan_hash || !proposal.plan?.commands?.length) return;
+  if (!window.confirm(`¿Aprobar el plan ${proposal.plan.plan_hash} para ${proposal.device_id}?`)) return;
+  approving.value = true;
+  triggerError.value = '';
+  queuedOperation.value = '';
   try {
-    await api.client.post(`/sentinel/proposals/${proposal.id}/approve`);
+    const { data } = await api.client.post(`/sentinel/proposals/${proposal.id}/approve`);
+    queuedOperation.value = `Operación ${data.operation_id} encolada para ${proposal.device_id}, generación ${data.generation}.`;
     await fetchOperatorState();
   } catch (e) {
     triggerError.value = e.response?.data?.error?.message || e.message;
+  } finally {
+    approving.value = false;
   }
 };
 
