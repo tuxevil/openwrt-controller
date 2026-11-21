@@ -1,6 +1,20 @@
 <template>
   <section class="mb-6 rounded border border-purple-800 bg-slate-950 p-4 text-slate-100">
     <h2 class="text-lg font-semibold">Conversación con Sentinel</h2>
+    <div class="mt-3">
+      <button type="button" class="underline" :disabled="loadingReport" @click="loadReport">
+        {{ loadingReport ? 'Consultando telemetría…' : 'Consultar informe de salud' }}
+      </button>
+      <p v-if="reportError" role="alert" class="text-red-300">{{ reportError }}</p>
+      <div v-if="report" class="mt-2 rounded border border-slate-700 p-3">
+        <p>Consulta realizada {{ new Date(report.observed_at).toLocaleString() }}</p>
+        <p>{{ report.fresh }} de {{ report.devices }} nodos reportaron en los últimos dos minutos.
+          {{ report.never_reported }} figuran sin fecha de último contacto.</p>
+        <p>{{ report.open_incidents }} incidentes abiertos.
+          En las últimas 24 horas se abrieron {{ report.opened_last_24_hours }}
+          y se resolvieron {{ report.resolved_last_24_hours }}.</p>
+      </div>
+    </div>
     <div class="mt-3 flex flex-wrap items-center gap-2">
       <label for="sentinel-history">Conversaciones recientes</label>
       <select id="sentinel-history" :value="conversationID || ''" :disabled="busy"
@@ -65,6 +79,23 @@ const conversations = ref([]);
 const messages = ref([]);
 const loading = ref(false);
 const busy = computed(() => running.value || loading.value);
+const report = ref(null);
+const reportError = ref('');
+const loadingReport = ref(false);
+
+async function loadReport() {
+  loadingReport.value = true;
+  reportError.value = '';
+  try {
+    const { data } = await api.client.get('/sentinel/health-report', requestOptions);
+    report.value = data;
+  } catch {
+    if (!lifetime.signal.aborted) reportError.value = 'No se pudo actualizar el informe de salud.';
+  } finally {
+    loadingReport.value = false;
+  }
+}
+
 let timer;
 let finishDelay;
 

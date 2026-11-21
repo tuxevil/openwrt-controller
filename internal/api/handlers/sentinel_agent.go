@@ -8,10 +8,12 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	"openwrt-controller/internal/api/middleware"
+	"openwrt-controller/internal/database"
 	"openwrt-controller/internal/services"
 )
 
@@ -329,4 +331,34 @@ func RejectSentinelProposalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeSentinelJSON(w, http.StatusOK, map[string]string{"status": "REJECTED", "proposal_id": proposalID})
+}
+
+func GetSentinelHealthReportHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var report struct {
+		ObservedAt          time.Time `json:"observed_at"`
+		Devices             int       `json:"devices"`
+		Fresh               int       `json:"fresh"`
+		NeverReported       int       `json:"never_reported"`
+		OpenIncidents       int       `json:"open_incidents"`
+		OpenedLast24Hours   int       `json:"opened_last_24_hours"`
+		ResolvedLast24Hours int       `json:"resolved_last_24_hours"`
+	}
+	err := database.Tx(ctx).QueryRowContext(ctx, `
+		SELECT CURRENT_TIMESTAMP, count(*),
+		       count(*) FILTER (WHERE last_seen_at > CURRENT_TIMESTAMP - INTERVAL '2 minutes'),
+		       count(*) FILTER (WHERE last_seen_at IS NULL),
+		       (SELECT count(*) FROM incidents WHERE status = 'OPEN'),
+		       (SELECT count(*) FROM incidents WHERE created_at > CURRENT_TIMESTAMP - INTERVAL '24 hours'),
+		       (SELECT count(*) FROM incidents WHERE resolved_at > CURRENT_TIMESTAMP - INTERVAL '24 hours')
+		FROM devices
+	`).Scan(&report.ObservedAt, &report.Devices, &report.Fresh, &report.NeverReported,
+		&report.OpenIncidents, &report.OpenedLast24Hours, &report.ResolvedLast24Hours)
+	if err != nil {
+		writeSentinelError(w, http.StatusServiceUnavailable, "REPORT_UNAVAILABLE", "Sentinel health report unavailable")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeSentinelJSON(w, http.StatusOK, report)
 }
