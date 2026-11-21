@@ -102,3 +102,20 @@ un único bloque Markdown `json`. Una respuesta vacía, truncada o con texto
 fuera del objeto produce un error de investigación. Sentinel valida el
 turno antes de enviar llamadas al Tool Registry. Conserva la evidencia
 recopilada hasta ese punto en el resultado de la investigación.
+
+## Tool calling nativo por ruta
+
+El flujo por Case usa `legacy_json` por defecto. Configura
+`SENTINEL_ROUTINE_TOOL_MODE=native_tools` o
+`SENTINEL_DEEP_RCA_TOOL_MODE=native_tools` para enviar los esquemas
+del registro como funciones OpenAI-compatible. El modo nativo conserva
+los mensajes assistant y devuelve cada resultado en un mensaje tool con
+el identificador de la llamada. El modelo devuelve la conclusión en
+`content` como JSON con `message` y, si procede, una `proposal` sujeta
+a la aprobación habitual. La ruta nativa queda fijada durante el Case.
+
+Prueba tu modelo y servidor con una consulta que requiera herramientas.
+Algunos servidores anuncian compatibilidad OpenAI pero implementan un
+subconjunto del formato. Para volver al contrato anterior, establece
+`legacy_json` en la ruta y reinicia el controlador. Puedes cambiar el
+modelo o endpoint mediante las variables de la misma ruta.

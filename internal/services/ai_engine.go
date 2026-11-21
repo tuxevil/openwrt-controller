@@ -17,12 +17,13 @@ import (
 type aiCompletion struct {
 	Model   string `json:"model"`
 	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
+		Message      aiChatMessage `json:"message"`
+		FinishReason string        `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
-		TotalTokens int `json:"total_tokens"`
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage"`
 }
 
@@ -114,13 +115,21 @@ func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, syst
 	if jsonMode {
 		payload["response_format"] = map[string]string{"type": "json_object"}
 	}
+	result, err := requestAICompletion(ctx, baseURL, apiKey, payload)
+	if err != nil {
+		return "", result.Model, result.Usage.TotalTokens, err
+	}
+	return result.Choices[0].Message.Content, result.Model, result.Usage.TotalTokens, nil
+}
+
+func requestAICompletion(ctx context.Context, baseURL, apiKey string, payload map[string]interface{}) (aiCompletion, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", "", 0, err
+		return aiCompletion{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", "", 0, err
+		return aiCompletion{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if apiKey != "" {
@@ -129,30 +138,34 @@ func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, syst
 	client := &http.Client{Timeout: 300 * time.Second}
 	if sentinelBoolEnv(os.Getenv, "SENTINEL_OFFGRID", false) {
 		if !sentinelOffgridEndpoint(baseURL) {
-			return "", "", 0, fmt.Errorf("off-grid AI requires an HTTP(S) loopback or private IP")
+			return aiCompletion{}, fmt.Errorf("off-grid AI requires an HTTP(S) loopback or private IP")
 		}
 		client = offgridAIClient
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", "", 0, fmt.Errorf("AI engine request failed: %w", err)
+		return aiCompletion{}, fmt.Errorf("AI engine request failed: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
-	responseBody, err := io.ReadAll(resp.Body)
+	const maxAIResponseBytes = 4 << 20
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxAIResponseBytes+1))
 	if err != nil {
-		return "", "", 0, err
+		return aiCompletion{}, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", 0, fmt.Errorf("AI engine returned status %d: %s", resp.StatusCode, string(responseBody))
+		return aiCompletion{}, fmt.Errorf("AI engine returned status %d", resp.StatusCode)
+	}
+	if len(responseBody) > maxAIResponseBytes {
+		return aiCompletion{}, fmt.Errorf("AI engine response exceeded size limit")
 	}
 	var result aiCompletion
 	if err := json.Unmarshal(responseBody, &result); err != nil {
-		return "", "", 0, fmt.Errorf("decode AI engine response: %w", err)
+		return aiCompletion{}, fmt.Errorf("decode AI engine response: %w", err)
 	}
 	if len(result.Choices) == 0 {
-		return "", result.Model, result.Usage.TotalTokens, fmt.Errorf("AI engine returned no choices")
+		return result, fmt.Errorf("AI engine returned no choices")
 	}
-	return result.Choices[0].Message.Content, result.Model, result.Usage.TotalTokens, nil
+	return result, nil
 }
 
 func AnalyzeFleetContext(contextLogs string) (string, string, []string, string, int, error) {

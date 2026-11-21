@@ -114,20 +114,31 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 	// bounded even when a prefetch attempt fails and produces no evidence row.
 	modelToolLimit := sentinelMaxToolCalls - sentinelCaseContextToolReserve
 	modelToolCalls := 0
+	native := newSentinelNativeConversation(reasoningClass, prompt.String())
 
 	for round := 0; round < sentinelMaxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			result.Answer = "Investigation timed out before Sentinel could complete its evidence review."
 			return result, err
 		}
-		content, execution, tokens, err := completeSentinelReasoningContext(ctx, reasoningClass, sentinelAgentSystemPrompt, prompt.String(), false)
-		result.Rounds = round + 1
-		result.LLMModel = execution.Model
-		result.TokensUsed += tokens
-		if err != nil {
-			return result, err
+		var envelope sentinelAssistantTurn
+		var model string
+		var tokens int
+		var err error
+		if native != nil {
+			envelope, model, tokens, err = native.next(ctx, modelToolLimit-modelToolCalls)
+		} else {
+			var content string
+			var execution SentinelModelExecution
+			content, execution, tokens, err = completeSentinelTextReasoning(ctx, reasoningClass, sentinelAgentSystemPrompt, prompt.String(), false, true)
+			model = execution.Model
+			if err == nil {
+				envelope, err = parseSentinelEnvelope(content)
+			}
 		}
-		envelope, err := parseSentinelEnvelope(content)
+		result.Rounds = round + 1
+		result.LLMModel = model
+		result.TokensUsed += tokens
 		if err != nil {
 			return result, err
 		}
@@ -148,7 +159,14 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 			}
 			return result, nil
 		}
-		for _, call := range envelope.ToolCalls {
+		for index, call := range envelope.ToolCalls {
+			reportFailure := func(status string, err error) {
+				if native != nil {
+					native.addResult(index, call.Name, status, false)
+					return
+				}
+				prompt.WriteString(fmt.Sprintf("\nTOOL %s %s: %s", call.Name, status, err))
+			}
 			if modelToolCalls >= modelToolLimit {
 				prompt.WriteString("\nTOOL LIMIT: stop requesting tools and summarize the available evidence.")
 				break
@@ -156,23 +174,27 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 			modelToolCalls++
 			result.ToolCalls++
 			if err := validateSentinelToolCall(call); err != nil {
-				prompt.WriteString(fmt.Sprintf("\nTOOL %s REJECTED: %s", call.Name, err))
+				reportFailure("REJECTED", err)
 				continue
 			}
 			if err := toolBudget.Reserve(call.Name); err != nil {
-				prompt.WriteString(fmt.Sprintf("\nTOOL %s REJECTED: %s", call.Name, err))
+				reportFailure("REJECTED", err)
 				continue
 			}
 			originalArguments := append(json.RawMessage(nil), call.Arguments...)
 			call.Arguments = sentinelToolArgumentsForCaseCall(call, schema, compiled)
 			toolResult, err := executeSentinelToolContext(ctx, call)
 			if err != nil {
-				prompt.WriteString(fmt.Sprintf("\nTOOL %s ERROR: %s", call.Name, err))
+				reportFailure("ERROR", err)
 				continue
 			}
 			encodedText := encodeSentinelToolResult(toolResult)
 			result.Evidence = append(result.Evidence, SentinelEvidence{Tool: call.Name, Args: originalArguments, Result: json.RawMessage(encodedText)})
-			appendSentinelCaseEvidencePrompt(&prompt, call.Name, encodedText)
+			if native != nil {
+				native.addResult(index, call.Name, encodedText, true)
+			} else {
+				appendSentinelCaseEvidencePrompt(&prompt, call.Name, encodedText)
+			}
 		}
 	}
 	if result.Answer == "" {

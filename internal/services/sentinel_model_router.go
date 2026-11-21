@@ -25,11 +25,12 @@ const (
 )
 
 type SentinelModelRoute struct {
-	Class   SentinelReasoningClass `json:"class"`
-	BaseURL string                 `json:"-"`
-	Model   string                 `json:"model"`
-	APIKey  string                 `json:"-"`
-	Local   bool                   `json:"local"`
+	ToolMode string                 `json:"tool_mode"`
+	Class    SentinelReasoningClass `json:"class"`
+	BaseURL  string                 `json:"-"`
+	Model    string                 `json:"model"`
+	APIKey   string                 `json:"-"`
+	Local    bool                   `json:"local"`
 }
 
 type SentinelModelExecution struct {
@@ -152,7 +153,14 @@ func resolveSentinelModelRouteWithEnv(class SentinelReasoningClass, settings dat
 	if !local && apiKey == "" {
 		return SentinelModelRoute{}, fmt.Errorf("%s remote model route has no API key", class)
 	}
-	return SentinelModelRoute{Class: class, BaseURL: baseURL, Model: model, APIKey: apiKey, Local: local}, nil
+	mode := strings.TrimSpace(getenv(prefix + "_TOOL_MODE"))
+	if mode == "" {
+		mode = "legacy_json"
+	}
+	if mode != "legacy_json" && mode != "native_tools" {
+		return SentinelModelRoute{}, fmt.Errorf("%s has an invalid Sentinel tool mode", class)
+	}
+	return SentinelModelRoute{ToolMode: mode, Class: class, BaseURL: baseURL, Model: model, APIKey: apiKey, Local: local}, nil
 }
 
 func ResolveSentinelModelRoute(class SentinelReasoningClass) (SentinelModelRoute, error) {
@@ -167,12 +175,19 @@ func sentinelReasoningRouteChain(class SentinelReasoningClass) []SentinelReasoni
 }
 
 func completeSentinelReasoningContext(ctx context.Context, class SentinelReasoningClass, systemPrompt, userPrompt string, jsonMode bool) (string, SentinelModelExecution, int, error) {
+	return completeSentinelTextReasoning(ctx, class, systemPrompt, userPrompt, jsonMode, false)
+}
+
+func completeSentinelTextReasoning(ctx context.Context, class SentinelReasoningClass, systemPrompt, userPrompt string, jsonMode, legacyOnly bool) (string, SentinelModelExecution, int, error) {
 	settings := database.GetPlatformSettings()
 	failures := make([]string, 0, 2)
 	for _, candidate := range sentinelReasoningRouteChain(class) {
 		route, err := resolveSentinelModelRouteWithEnv(candidate, settings, os.Getenv)
 		if err != nil {
 			failures = append(failures, err.Error())
+			continue
+		}
+		if legacyOnly && route.ToolMode != "legacy_json" {
 			continue
 		}
 		content, model, tokens, err := completeAIEndpointContext(ctx, route.BaseURL, route.Model, route.APIKey, systemPrompt, userPrompt, jsonMode)
