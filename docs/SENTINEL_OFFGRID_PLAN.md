@@ -93,3 +93,10 @@ dashboard conectados por WebSocket. Un nodo sintético con 12 minutos sin
 telemetría generó un caso `NODE_DOWN`. Dos barridos conservaron el mismo
 identificador. Tras una petición válida a `POST /api/telemetry` que devolvió
 HTTP 202, el mismo caso pasó a `RESOLVED`.
+
+También se abrió el dashboard compilado en Chromium dentro del espacio de
+red aislado. La prueba inició sesión con un usuario sintético, abrió
+Sentinel, leyó el resumen diario y el informe bajo demanda, recuperó una
+conversación guardada, completó otra consulta y leyó el acuse persistido.
+Esta ejecución usó el proveedor simulado. El ciclo con LiteLLM real se
+verificó por API en la prueba anterior.
