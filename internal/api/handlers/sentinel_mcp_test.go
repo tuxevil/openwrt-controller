@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 
@@ -65,6 +66,13 @@ func TestSentinelMCPRevocationAndCaseScope(t *testing.T) {
 	params := fmt.Sprintf(`{"name":"get_case","arguments":{"case_id":%q}}`, caseID)
 	if r := call("tools/call", params, token); r.Code != 200 || !strings.Contains(r.Body.String(), "case unavailable") {
 		t.Fatalf("case response: %d %s", r.Code, r.Body)
+	}
+	mock.ExpectQuery(`SELECT count\(d.id\).*FROM "tenant_lab".incidents WHERE site_id = \$1.*s.id = \$1`).WithArgs(site).
+		WillReturnRows(sqlmock.NewRows([]string{"devices", "fresh", "now", "open", "opened", "resolved"}).
+			AddRow(3, 2, time.Now(), 1, 2, 1))
+	if r := call("tools/call", `{"name":"get_site_health","arguments":{}}`, token); r.Code != 200 ||
+		!strings.Contains(r.Body.String(), `"open_incidents":1`) {
+		t.Fatalf("health response: %d %s", r.Code, r.Body)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

@@ -107,7 +107,7 @@ func NewSentinelMCPHandler(identitiesPath string) http.Handler {
 		return nil, sentinelMCPCase{ID: item.ID, SiteID: item.SiteID, Severity: item.Severity, Status: item.Status, Title: item.Title, Summary: item.Summary, UpdatedAt: item.UpdatedAt}, nil
 	})
 	mcp.AddTool(server, &mcp.Tool{
-		Name: "get_site_health", Description: "Read the telemetry freshness summary of your assigned site.",
+		Name: "get_site_health", Description: "Read telemetry freshness and the last 24 hours of incident counts for your assigned site.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true},
 	}, func(ctx context.Context, req *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		identity, ok := sentinelMCPCaller(req)
@@ -121,18 +121,25 @@ func NewSentinelMCPHandler(identitiesPath string) http.Handler {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		var snapshot struct {
-			SiteID     string    `json:"site_id"`
-			Devices    int       `json:"devices"`
-			Fresh      int       `json:"fresh_within_two_minutes"`
-			ObservedAt time.Time `json:"observed_at"`
+			SiteID              string    `json:"site_id"`
+			Devices             int       `json:"devices"`
+			Fresh               int       `json:"fresh_within_two_minutes"`
+			ObservedAt          time.Time `json:"observed_at"`
+			OpenIncidents       int       `json:"open_incidents"`
+			OpenedLast24Hours   int       `json:"opened_last_24_hours"`
+			ResolvedLast24Hours int       `json:"resolved_last_24_hours"`
 		}
 		snapshot.SiteID = identity.SiteID
 		err = database.DB.QueryRowContext(ctx, fmt.Sprintf(`
 			SELECT count(d.id), count(d.id) FILTER (WHERE d.last_seen_at > CURRENT_TIMESTAMP - INTERVAL '2 minutes'),
-			       CURRENT_TIMESTAMP
+			       CURRENT_TIMESTAMP,
+			       (SELECT count(*) FROM %[1]s.incidents WHERE site_id = $1 AND status = 'OPEN'),
+			       (SELECT count(*) FROM %[1]s.incidents WHERE site_id = $1 AND created_at > CURRENT_TIMESTAMP - INTERVAL '24 hours'),
+			       (SELECT count(*) FROM %[1]s.incidents WHERE site_id = $1 AND resolved_at > CURRENT_TIMESTAMP - INTERVAL '24 hours')
 			FROM %[1]s.sites s LEFT JOIN %[1]s.devices d ON d.site_id = s.id
 			WHERE s.id = $1 GROUP BY s.id`, schema), identity.SiteID).
-			Scan(&snapshot.Devices, &snapshot.Fresh, &snapshot.ObservedAt)
+			Scan(&snapshot.Devices, &snapshot.Fresh, &snapshot.ObservedAt,
+				&snapshot.OpenIncidents, &snapshot.OpenedLast24Hours, &snapshot.ResolvedLast24Hours)
 		slog.Info("Sentinel MCP site health", "client", identity.Name, "site", identity.SiteID, "found", err == nil)
 		if err != nil {
 			return nil, nil, errors.New("site unavailable")
