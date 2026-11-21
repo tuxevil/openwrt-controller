@@ -119,3 +119,17 @@ Algunos servidores anuncian compatibilidad OpenAI pero implementan un
 subconjunto del formato. Para volver al contrato anterior, establece
 `legacy_json` en la ruta y reinicia el controlador. Puedes cambiar el
 modelo o endpoint mediante las variables de la misma ruta.
+
+### Validación con LiteLLM en la LAN
+
+El 2026-11-21 se probó el LiteLLM configurado en Nerve Center con
+`gemma4:e2b`, TLS y el transporte off-grid. En modo JSON textual, una
+consulta sintética devolvió JSON válido en 946 ms. En modo nativo, la
+primera respuesta solicitó `get_device_status` en 1,789 s. Tras validar
+los argumentos con el registro, la prueba devolvió una muestra sintética
+como mensaje tool con su identificador. El modelo citó la hora de la
+muestra y cerró la investigación en 897 ms adicionales.
+
+La medición cubre el intercambio autenticado entre el harness y LiteLLM.
+Las comprobaciones de arranque del dashboard y de independencia de WAN
+del servidor de inferencia forman parte de una prueba de despliegue.
