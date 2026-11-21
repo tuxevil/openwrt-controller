@@ -45,3 +45,10 @@ En laboratorio, arrancar sin WAN, cerrar la interfaz y simular pérdida de telem
 `/api/sentinel/mcp` usa Streamable HTTP sobre el listener TLS de Nerve Center. Para activarlo, configura `SENTINEL_MCP_IDENTITIES_FILE` con la ruta de un archivo JSON de permisos `0600` legible por el controlador. Cada entrada tiene `name`, `token_sha256`, `tenant_schema` y `site_id`. Usa un token aleatorio independiente de al menos 32 bytes por cliente, guarda solo el SHA-256 hexadecimal del texto del token en el archivo y configura el token original como `Authorization: Bearer …` en cada cliente. Usa el hostname del certificado y confía en la CA local. Actualiza el archivo por reemplazo atómico. Eliminar una entrada revoca su acceso en la siguiente petición.
 
 Las herramientas iniciales son `get_site_health` y `get_case`. La primera devuelve la frescura de la telemetría, la hora de observación y los conteos de incidentes abiertos y resueltos del sitio en las últimas 24 horas. La segunda devuelve un resumen exclusivamente para el sitio asignado por el controlador. Los clientes no eligen el tenant ni el sitio en la llamada. El endpoint funciona en modo stateless y registra las consultas sin incluir el token.
+
+En OpenClaw 2026.9.4, establece `transport: "streamable-http"` junto a
+`url` y la cabecera de autorización. En un perfil de laboratorio,
+`openclaw mcp probe sentinel --json` descubrió las herramientas
+`get_site_health` y `get_case` con TLS y una credencial temporal.
+La selección automática intentó SSE y recibió HTTP 405. El endpoint
+stateless atiende las operaciones del cliente mediante POST.
