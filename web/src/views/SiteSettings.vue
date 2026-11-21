@@ -227,7 +227,7 @@ async function applyDraft() {
       <button @click="successMsg = null" class="ml-auto text-green-600">✕</button>
     </div>
 
-    <div class="flex flex-1 overflow-hidden">
+    <div class="flex flex-col md:flex-row flex-1 min-h-0 overflow-hidden">
       <SiteSettingsTabNav
         :active-tab="activeTab"
         :devices="devices"
@@ -235,13 +235,13 @@ async function applyDraft() {
         @change-role="changeRole"
       />
 
-      <main class="flex-1 overflow-auto bg-[#040407]">
-        <div class="px-8 py-6 max-w-4xl space-y-6">
-          <div class="flex items-center gap-4 pb-4 border-b border-gray-800/50">
-            <div class="w-1 h-8 rounded-full" :style="`background: ${activeTabDef.color}; box-shadow: 0 0 12px ${activeTabDef.color}`"></div>
+      <main class="flex-1 overflow-y-auto bg-vantablack/80">
+        <div class="px-4 sm:px-6 lg:px-8 py-5 max-w-4xl space-y-6">
+          <div class="flex items-center gap-3 pb-3 border-b border-gridline">
+            <div class="w-1 h-7" :style="`background: ${activeTabDef.color}; box-shadow: 0 0 12px ${activeTabDef.color}`"></div>
             <div>
-              <h2 class="text-lg font-bold tracking-[0.2em]" :style="`color: ${activeTabDef.color}`">{{ activeTabDef.label }}</h2>
-              <p class="text-[10px] text-gray-600 tracking-widest">Applies to: {{ activeTabDef.badge }}</p>
+              <h2 class="text-base sm:text-lg font-bold tracking-[0.18em]" :style="`color: ${activeTabDef.color}`">{{ activeTabDef.label }}</h2>
+              <p class="text-[10px] text-muted tracking-widest">Applies to: {{ activeTabDef.badge }}</p>
             </div>
           </div>
 

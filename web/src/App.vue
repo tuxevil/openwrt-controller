@@ -1,319 +1,252 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { computed, ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api from './services/api'
 import { useAuthStore } from './stores/auth'
 import ChatOpsTerminal from './components/ChatOpsTerminal.vue'
+import NavSidebar from './components/shell/NavSidebar.vue'
+import TopCommandBar from './components/shell/TopCommandBar.vue'
+import MobileBottomNav from './components/shell/MobileBottomNav.vue'
+import CommandPalette from './components/shell/CommandPalette.vue'
+import { isStandaloneRoute, resolveBreadcrumb } from './navigation/navConfig'
 
 const globalHealth = ref(0)
+const sites = ref([])
+const showChatOps = ref(false)
+const showCommandPalette = ref(false)
+const mobileNavOpen = ref(false)
+const sidebarCollapsed = ref(localStorage.getItem('nc_sidebar_collapsed') === 'true')
+const lastSiteId = ref(localStorage.getItem('nc_last_site_id') || '')
+
 let pulseInterval = null
 const route = useRoute()
 const appRouter = useRouter()
-const showChatOps = ref(false)
-
-// ── Auth (centralised in Pinia store) ──────────────────────────
-// All JWT / role / assumed-tenant state lives in useAuthStore; App.vue
-// only reads through the computed getters and emits logout / exit-
-// identity actions. Previously this component parsed the JWT with
-// JSON.parse(atob(token.split('.')[1])) inline, which was duplicated
-// in 5+ other views.
 const auth = useAuthStore()
 
-const exitAssumedIdentity = () => {
+const isStandalone = computed(() => isStandaloneRoute(route) || !auth.isAuthenticated)
+
+const activeSiteId = computed(() => {
+  const param = route.params?.site_id
+  if (typeof param === 'string' && param) return param
+  return lastSiteId.value
+})
+
+const breadcrumb = computed(() => resolveBreadcrumb(route, sites.value))
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+  localStorage.setItem('nc_sidebar_collapsed', String(sidebarCollapsed.value))
+}
+
+function handleSelectSite(siteId) {
+  if (!siteId) return
+  lastSiteId.value = siteId
+  localStorage.setItem('nc_last_site_id', siteId)
+}
+
+function exitAssumedIdentity() {
   auth.exitAssumedIdentity()
   appRouter.push('/landlord')
 }
 
-// ── Accordion state ──────────────────────────────────────────────
-// Only one sector open at a time. Default: guess from current route.
-const sectors = ['CORE_VISIBILITY', 'ACTIVE_DEFENSE_SOC', 'RF_TELEMETRY', 'SYSTEM_OPS']
-
-const sectorRoutes = {
-  CORE_VISIBILITY:    [/^\/site\/[^/]+$/, /topology/, /clients/, /advanced-telemetry/],
-  ACTIVE_DEFENSE_SOC: [/threat-shield/, /flow-radar/, /bandwidth/, /incidents/, /diagnostics/],
-  RF_TELEMETRY:       [/\/rf$/, /\/surveys?/],
-  SYSTEM_OPS:         [/vault/, /logs/, /site-settings/, /settings/, /central-config/, /orchestrator/, /migration/],
+function handleLogout() {
+  mobileNavOpen.value = false
+  showCommandPalette.value = false
+  showChatOps.value = false
+  auth.logout()
+  appRouter.push('/login')
 }
 
-function detectSector(path) {
-  for (const [sector, patterns] of Object.entries(sectorRoutes)) {
-    if (patterns.some(p => p.test(path))) return sector
-  }
-  return 'CORE_VISIBILITY'
-}
-
-const openSector = ref(detectSector(route.path))
-
-watch(() => route.path, (path) => {
-  openSector.value = detectSector(path)
-})
-
-function toggle(name) {
-  openSector.value = openSector.value === name ? null : name
-}
-
-// ── Health pulse ─────────────────────────────────────────────────
-// Skip polling while unauthenticated. The /api/global/health endpoint
-// is auth-required; polling it on the /login screen produced a
-// continuous stream of 401s in the browser console, the response
-// interceptor would clear localStorage and push to /login (looping),
-// and the visual pulse had nothing useful to display anyway.
-onMounted(async () => {
-  if (!auth.isAuthenticated) return
-  await fetchHealth()
-  pulseInterval = setInterval(fetchHealth, 10000)
-})
-onUnmounted(() => { if (pulseInterval) clearInterval(pulseInterval) })
-
-const fetchHealth = async () => {
-  // Defensive check: if the user was logged out between ticks the
-  // request would 401 and the response interceptor would wipe state.
+async function fetchHealth() {
   if (!auth.isAuthenticated) return
   try {
     const res = await api.getGlobalHealth()
-    globalHealth.value = res.data.health || 0
-  } catch (e) { console.error(e) }
+    globalHealth.value = res?.data?.health ?? 0
+  } catch (e) {
+    console.error(e)
+  }
 }
+
+async function fetchSites() {
+  if (!auth.isAuthenticated) return
+  try {
+    const res = await api.getSites()
+    sites.value = res?.data?.data || []
+  } catch (_) {
+    // Non-blocking: shell works even if sites fail to load
+  }
+}
+
+function startPolling() {
+  stopPolling()
+  if (!auth.isAuthenticated) return
+  fetchHealth()
+  fetchSites()
+  pulseInterval = setInterval(fetchHealth, 10000)
+}
+
+function stopPolling() {
+  if (pulseInterval) {
+    clearInterval(pulseInterval)
+    pulseInterval = null
+  }
+}
+
+function isEditableTarget(el) {
+  if (!el) return false
+  const tag = el.tagName?.toLowerCase()
+  return tag === 'input' || tag === 'textarea' || tag === 'select' || el.isContentEditable
+}
+
+function handleGlobalKeydown(e) {
+  if (!auth.isAuthenticated || isStandalone.value) return
+
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    e.preventDefault()
+    showCommandPalette.value = !showCommandPalette.value
+    return
+  }
+
+  if (e.key === 'Escape' && mobileNavOpen.value) {
+    mobileNavOpen.value = false
+    return
+  }
+
+  if (e.key === '[' && !e.metaKey && !e.ctrlKey && !e.altKey && !isEditableTarget(e.target)) {
+    e.preventDefault()
+    toggleSidebar()
+  }
+}
+
+watch(
+  () => route.params?.site_id,
+  (siteId) => {
+    if (typeof siteId === 'string' && siteId) {
+      handleSelectSite(siteId)
+    }
+  },
+  { immediate: true }
+)
+
+watch(
+  () => route.path,
+  () => {
+    mobileNavOpen.value = false
+    if (auth.isAuthenticated && sites.value.length === 0) {
+      fetchSites()
+    }
+  }
+)
+
+watch(
+  () => auth.isAuthenticated,
+  (authenticated) => {
+    if (authenticated) {
+      startPolling()
+    } else {
+      stopPolling()
+      sites.value = []
+      globalHealth.value = 0
+    }
+  }
+)
+
+onMounted(() => {
+  window.addEventListener('keydown', handleGlobalKeydown)
+  if (auth.isAuthenticated) {
+    startPolling()
+  }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', handleGlobalKeydown)
+  stopPolling()
+})
 </script>
 
 <template>
-  <div class="flex h-screen w-screen overflow-hidden bg-vantablack text-white font-mono">
+  <!-- Standalone / Public Views (Login, Public Surveyor PWA) -->
+  <div v-if="isStandalone" class="min-h-screen w-full bg-vantablack text-gray-100 font-mono">
+    <router-view />
+  </div>
 
-    <!-- ░░░ NERVE CENTER SIDEBAR ░░░ -->
-    <div
-      v-if="$route.path.startsWith('/site/') || $route.path === '/incidents'"
-      class="w-64 border-r-2 border-neon-green/30 flex flex-col p-4 shrink-0 bg-panel z-10 shadow-[5px_0_15px_rgba(0,255,65,0.1)]"
-    >
-      <h1 class="text-neon-green text-xl font-bold tracking-widest text-center select-none">NERVE_CENTER</h1>
+  <!-- Authenticated Unified NERVE_CENTER Shell -->
+  <div v-else class="flex h-[100dvh] w-full overflow-hidden bg-vantablack text-gray-100 font-mono">
+    <!-- Unified Navigation Rail (Desktop) & Tactical Slide-over Drawer (Mobile) -->
+    <NavSidebar
+      :sites="sites"
+      :active-site-id="activeSiteId"
+      :global-health="globalHealth"
+      :is-admin="auth.isAdmin"
+      :is-super-admin="auth.isSuperAdmin"
+      :collapsed="sidebarCollapsed"
+      :mobile-open="mobileNavOpen"
+      @close-mobile="mobileNavOpen = false"
+      @select-site="handleSelectSite"
+      @open-command="showCommandPalette = true"
+    />
 
-      <!-- Global pulse strip -->
-      <div class="flex items-center justify-between mb-4 pb-3 border-b border-neon-green/50 mt-2 px-1">
-        <span class="text-[10px] text-neon-green/50 tracking-widest">GLOBAL_PULSE</span>
-        <div class="flex items-center gap-2">
-          <span class="text-xs font-bold" :class="globalHealth < 50 ? 'text-neon-red drop-shadow-[0_0_8px_#ff0055]' : 'text-neon-green'">{{ globalHealth }}%</span>
-          <svg class="w-4 h-4" :class="globalHealth < 50 ? 'text-neon-red animate-pulse' : 'text-neon-green'" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-          </svg>
-        </div>
-      </div>
+    <!-- Right Workspace Column -->
+    <div class="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
+      <TopCommandBar
+        :breadcrumb="breadcrumb"
+        :global-health="globalHealth"
+        :username="auth.username"
+        :role="auth.role"
+        :collapsed="sidebarCollapsed"
+        @open-mobile-nav="mobileNavOpen = true"
+        @toggle-sidebar="toggleSidebar"
+        @open-command="showCommandPalette = true"
+        @open-sentinel="showChatOps = true"
+        @logout="handleLogout"
+      />
 
-      <!-- ── Accordion nav ─────────────────────────────────────── -->
-      <nav class="flex flex-col flex-1 select-none">
-
-        <!-- ▸ CORE_VISIBILITY -->
-        <div class="mb-1">
-          <button
-            @click="toggle('CORE_VISIBILITY')"
-            class="w-full flex items-center justify-between px-2 py-1.5 text-[10px] tracking-[0.2em] uppercase font-bold select-none transition-colors"
-            :class="openSector === 'CORE_VISIBILITY' ? 'text-neon-green' : 'text-gray-500 hover:text-gray-300'"
-          >
-            <span>// CORE_VISIBILITY</span>
-            <svg class="w-3 h-3 transition-transform duration-200" :class="openSector === 'CORE_VISIBILITY' ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
-            </svg>
-          </button>
-          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'CORE_VISIBILITY' ? 'max-height:280px;opacity:1' : 'max-height:0;opacity:0'">
-            <div class="flex flex-col gap-1 pt-1 pb-1">
-              <router-link :to="`/site/${$route.params.site_id}`" exact-active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-                <span class="tracking-widest">DASHBOARD</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/echolocation`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
-                <span class="tracking-widest">ECHO_LOCATION</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/topology`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                <span class="tracking-widest">THE_GRID (TOPOLOGY)</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/clients`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
-                <span class="tracking-widest">CLIENTS</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/advanced-telemetry`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                <span class="tracking-widest">MATRIX_ANALYTICS</span>
-              </router-link>
-            </div>
-          </div>
-        </div>
-
-        <!-- ▸ ACTIVE_DEFENSE_SOC -->
-        <div class="mb-1">
-          <button
-            @click="toggle('ACTIVE_DEFENSE_SOC')"
-            class="w-full flex items-center justify-between px-2 py-1.5 text-[10px] tracking-[0.2em] uppercase font-bold select-none transition-colors"
-            :class="openSector === 'ACTIVE_DEFENSE_SOC' ? 'text-neon-green' : 'text-gray-500 hover:text-gray-300'"
-          >
-            <span>// ACTIVE_DEFENSE_SOC</span>
-            <svg class="w-3 h-3 transition-transform duration-200" :class="openSector === 'ACTIVE_DEFENSE_SOC' ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
-            </svg>
-          </button>
-          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'ACTIVE_DEFENSE_SOC' ? 'max-height:280px;opacity:1' : 'max-height:0;opacity:0'">
-            <div class="flex flex-col gap-1 pt-1 pb-1">
-              <router-link :to="`/site/${$route.params.site_id}/threat-shield`" active-class="bg-red-600 !text-white shadow-[0_0_12px_rgba(239,68,68,0.5)]" class="p-2.5 border border-red-500/50 clip-chamfer text-red-400 hover:bg-red-600 hover:text-white transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                <span class="tracking-widest">THREAT_SHIELD</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/flow-radar`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" stroke-width="2"/>
-                  <circle cx="12" cy="12" r="5" stroke-width="1.5" opacity="0.6"/>
-                  <circle cx="12" cy="12" r="1.5" fill="currentColor"/>
-                </svg>
-                <span class="tracking-widest">FLOW_RADAR</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/bandwidth`" active-class="bg-[#39FF14] !text-black shadow-[0_0_10px_#39FF14]" class="p-2.5 border border-[#39FF14] clip-chamfer text-[#39FF14] hover:bg-[#39FF14] hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                <span class="tracking-widest">BW_SENTRY</span>
-              </router-link>
-              
-              <router-link :to="`/site/${$route.params.site_id}/diagnostics`" active-class="bg-orange-500 !text-black shadow-[0_0_10px_#f97316]" class="p-2.5 border border-orange-500 clip-chamfer text-orange-400 hover:bg-orange-500 hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 002-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"></path></svg>
-                <span class="tracking-widest">DIAGNOSTICS</span>
-              </router-link>
-
-              <router-link :to="`/site/${$route.params.site_id}/incidents`" active-class="bg-neon-red !border-neon-red !text-black shadow-[0_0_10px_#ff0041]" class="p-2.5 border border-neon-red clip-chamfer text-neon-red hover:bg-neon-red hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm relative group">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-                <span class="tracking-widest">INCIDENTS</span>
-              </router-link>
-            </div>
-          </div>
-        </div>
-
-        <!-- ▸ RF_TELEMETRY -->
-        <div class="mb-1">
-          <button
-            @click="toggle('RF_TELEMETRY')"
-            class="w-full flex items-center justify-between px-2 py-1.5 text-[10px] tracking-[0.2em] uppercase font-bold select-none transition-colors"
-            :class="openSector === 'RF_TELEMETRY' ? 'text-neon-green' : 'text-gray-500 hover:text-gray-300'"
-          >
-            <span>// RF_TELEMETRY</span>
-            <svg class="w-3 h-3 transition-transform duration-200" :class="openSector === 'RF_TELEMETRY' ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
-            </svg>
-          </button>
-          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'RF_TELEMETRY' ? 'max-height:200px;opacity:1' : 'max-height:0;opacity:0'">
-            <div class="flex flex-col gap-1 pt-1 pb-1">
-              <router-link :to="`/site/${$route.params.site_id}/rf`" active-class="bg-[#00ffff] !text-black shadow-[0_0_10px_#00ffff]" class="p-2.5 border border-[#00ffff] clip-chamfer text-[#00ffff] hover:bg-[#00ffff] hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                <span class="tracking-widest">RF_ANALYZER</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/surveys`" active-class="bg-[#39FF14] !text-black shadow-[0_0_10px_#39FF14]" class="p-2.5 border border-[#39FF14] clip-chamfer text-[#39FF14] hover:bg-[#39FF14] hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                <span class="tracking-widest">WI-FI_SURVEY</span>
-              </router-link>
-            </div>
-          </div>
-        </div>
-
-        <!-- ▸ SYSTEM_OPS -->
-        <div class="mb-1">
-          <button
-            @click="toggle('SYSTEM_OPS')"
-            class="w-full flex items-center justify-between px-2 py-1.5 text-[10px] tracking-[0.2em] uppercase font-bold select-none transition-colors"
-            :class="openSector === 'SYSTEM_OPS' ? 'text-neon-green' : 'text-gray-500 hover:text-gray-300'"
-          >
-            <span>// SYSTEM_OPS</span>
-            <svg class="w-3 h-3 transition-transform duration-200" :class="openSector === 'SYSTEM_OPS' ? 'rotate-90' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/>
-            </svg>
-          </button>
-          <div class="overflow-hidden transition-all duration-200 ease-in-out" :style="openSector === 'SYSTEM_OPS' ? 'max-height:420px;opacity:1' : 'max-height:0;opacity:0'">
-            <div class="flex flex-col gap-1 pt-1 pb-1">
-              <router-link :to="`/site/${$route.params.site_id}/site-settings`" active-class="bg-[#00ffff] !text-black shadow-[0_0_12px_rgba(0,255,255,0.5)]" class="p-2.5 border border-[#00ffff] clip-chamfer text-[#00ffff] hover:bg-[#00ffff] hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>
-                <span class="tracking-widest">SITE_SETTINGS</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/vault`" active-class="bg-white !text-black shadow-[0_0_15px_#ffffff]" class="p-2.5 border border-white clip-chamfer text-white hover:bg-white hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                <span class="tracking-widest">THE_VAULT</span>
-              </router-link>
-              <router-link :to="`/site/${$route.params.site_id}/logs`" active-class="bg-neon-green !text-black shadow-[0_0_10px_#00ff41]" class="p-2.5 border border-neon-green clip-chamfer text-neon-green hover:bg-neon-green hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
-                <span class="tracking-widest">MATRIX LOGS</span>
-              </router-link>
-
-              <router-link :to="`/site/${$route.params.site_id}/migration`" active-class="bg-purple-500 !text-black shadow-[0_0_12px_rgba(168,85,247,0.5)]" class="p-2.5 border border-purple-500/50 clip-chamfer text-purple-400 hover:bg-purple-500 hover:text-black transition-all flex items-center gap-2.5 active:scale-95 text-sm">
-                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
-                <span class="tracking-widest">STATE_MIGRATOR</span>
-              </router-link>
-            </div>
-          </div>
-        </div>
-
-      </nav>
-
-      <!-- ── GLOBAL AREA ─────────────────────────────────────── -->
-      <div class="mt-auto pt-3 border-t border-gray-800 flex flex-col gap-1.5">
-        <router-link v-if="auth.isSuperAdmin" to="/landlord" class="text-xs px-3 py-2 border-2 border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all block text-center uppercase tracking-[0.2em] clip-chamfer font-bold shadow-[0_0_10px_rgba(245,158,11,0.4)]">
-          👑 LANDLORD PANEL
-        </router-link>
-        <router-link to="/orchestrator" class="text-xs px-3 py-2 border border-yellow-500/40 text-yellow-400 hover:bg-yellow-500/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
-          ⚡ ORCHESTRATOR
-        </router-link>
-        <router-link to="/orchestrator/agent" class="text-xs px-3 py-2 border border-[#ffff00]/60 text-[#ffff00] hover:bg-[#ffff00]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer font-bold drop-shadow-[0_0_5px_rgba(255,255,0,0.8)]">
-          [ AGENT_MGMT ]
-        </router-link>
-        <router-link to="/runbook" class="text-xs px-3 py-2 border border-[#80ed99] text-[#80ed99] hover:bg-[#80ed99]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
-          [ RUNBOOK_MANUAL ]
-        </router-link>
-        <router-link to="/global/settings" class="text-xs px-3 py-2 border border-neon-cyan text-neon-cyan hover:bg-neon-cyan/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer">
-          ⚙️ PLATFORM_CONFIG
-        </router-link>
-        <button
-          type="button"
-          aria-label="Open Sentinel Operator chat"
-          @click="showChatOps = true"
-          class="text-xs w-full px-3 py-2 border border-neon-cyan text-neon-cyan hover:bg-neon-cyan/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer shadow-[0_0_5px_#00ffff]"
-        >
-          🛰️ SENTINEL OPERATOR
-        </button>
-        <router-link to="/global/sentinel" class="text-xs px-3 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-colors block text-center uppercase tracking-[0.2em] clip-chamfer shadow-[0_0_5px_#bc13fe]">
-          👁️ GLOBAL_PULSE (AI)
-        </router-link>
-        <router-link to="/global" class="text-xs text-muted hover:text-white transition-colors block text-center uppercase tracking-[0.2em] mt-1">Exit to Global</router-link>
-      </div>
-    </div>
-
-    <!-- MAIN CONTENT -->
-    <div class="flex-1 overflow-auto relative">
       <!-- Assumed Tenant Identity Banner -->
       <div
         v-if="auth.assumedTenant && auth.isSuperAdmin && $route.path !== '/landlord'"
-        class="sticky top-0 z-40 px-4 py-2 bg-amber-500/15 border-b-2 border-amber-500/50 flex items-center justify-between backdrop-blur-sm"
+        class="shrink-0 px-3 sm:px-4 py-2 bg-neon-amber/15 border-b border-neon-amber/50 flex flex-wrap items-center justify-between gap-2 backdrop-blur-sm z-20"
       >
-        <div class="flex items-center gap-2">
-          <span class="text-amber-400 text-xs tracking-[0.15em] uppercase">
-            👑 OPERATING AS: <span class="font-bold text-white">{{ auth.assumedTenantName }}</span>
-            <span class="text-amber-400/50 ml-1">(tenant_{{ auth.assumedTenant }})</span>
+        <div class="flex items-center gap-2 min-w-0 text-[11px] sm:text-xs text-neon-amber tracking-[0.12em] uppercase">
+          <span class="w-2 h-2 bg-neon-amber shrink-0 animate-pulse"></span>
+          <span class="truncate">
+            OPERATING AS: <strong class="text-white">{{ auth.assumedTenantName }}</strong>
+            <span class="text-neon-amber/60 ml-1 hidden sm:inline">(tenant_{{ auth.assumedTenant }})</span>
           </span>
         </div>
         <button
+          type="button"
           @click="exitAssumedIdentity"
-          class="px-3 py-1 border border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all text-[10px] tracking-widest uppercase font-bold"
-        >EXIT IDENTITY</button>
+          class="px-2.5 py-1 border border-neon-amber text-neon-amber hover:bg-neon-amber hover:text-black transition-all text-[10px] tracking-widest uppercase font-bold clip-chamfer-sm shrink-0"
+        >
+          EXIT IDENTITY
+        </button>
       </div>
 
-      <router-view />
+      <!-- Main Route Content -->
+      <main class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden relative pb-16 lg:pb-0">
+        <router-view />
+      </main>
     </div>
 
-    <!-- Global launcher: site pages keep the sidebar entry above, while
-         global routes have no site navigation and need a discoverable entry. -->
-    <button
-      v-if="auth.isAuthenticated && !$route.path.startsWith('/site/')"
-      type="button"
-      data-testid="sentinel-chat-launcher"
-      aria-label="Open Sentinel Operator chat"
-      title="Open Sentinel Operator chat"
-      @click="showChatOps = true"
-      class="fixed bottom-5 right-5 z-40 flex items-center gap-2 px-4 py-3 border border-neon-cyan bg-black/90 text-neon-cyan hover:bg-neon-cyan/20 transition-all clip-chamfer shadow-[0_0_14px_rgba(0,255,255,0.35)] text-[11px] tracking-[0.16em] uppercase font-bold"
-    >
-      <span aria-hidden="true">🛰️</span>
-      <span>SENTINEL OPERATOR</span>
-    </button>
+    <!-- Mobile Quick Dock -->
+    <MobileBottomNav
+      :active-site-id="activeSiteId"
+      @open-menu="mobileNavOpen = true"
+    />
 
+    <!-- Ctrl+K Command Palette -->
+    <CommandPalette
+      v-model="showCommandPalette"
+      :sites="sites"
+      :active-site-id="activeSiteId"
+      :is-admin="auth.isAdmin"
+      :is-super-admin="auth.isSuperAdmin"
+      @open-sentinel="showChatOps = true"
+      @toggle-sidebar="toggleSidebar"
+      @logout="handleLogout"
+    />
+
+    <!-- Sentinel Operator Terminal Modal -->
     <ChatOpsTerminal v-model="showChatOps" />
   </div>
 </template>

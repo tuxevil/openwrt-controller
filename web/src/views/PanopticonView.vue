@@ -40,18 +40,13 @@ const formatTime = (ts) => {
 </script>
 
 <template>
-  <div class="p-8 h-screen w-full flex flex-col gap-6 bg-vantablack text-white font-mono overflow-auto relative">
-    <div class="flex justify-between items-center pb-2 border-b border-gray-600">
-      <div class="flex items-center gap-4">
-        <router-link to="/global" class="text-gray-400 hover:text-white transition-colors uppercase tracking-[0.2em] text-sm">
-          ← BACK
-        </router-link>
-        <h1 class="text-3xl text-gray-300 w-fit tracking-[0.2em] flex items-center gap-2">
-          <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3 9c7 0 10-9 10-9s-3-9-10-9-10 9-10 9 3 9 10 9z"/></svg>
-          EL PANÓPTICO
-        </h1>
-      </div>
-      <div class="text-gray-500 text-sm tracking-widest">[ AUDIT LOGS ]</div>
+  <div class="p-4 sm:p-6 lg:p-8 min-h-full w-full flex flex-col gap-5 bg-vantablack text-white font-mono relative">
+    <div class="flex flex-wrap justify-between items-center gap-3 pb-3 border-b border-gridline">
+      <h1 class="text-xl sm:text-2xl text-neon-amber font-bold tracking-[0.18em] flex items-center gap-2.5">
+        <svg class="w-6 h-6 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="1.8" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3 9c7 0 10-9 10-9s-3-9-10-9-10 9-10 9 3 9 10 9z"/></svg>
+        PANOPTICON
+      </h1>
+      <div class="text-muted text-xs tracking-widest">[ AUDIT_LOGS ]</div>
     </div>
     
     <div v-if="error" class="bg-red-900/40 border border-neon-red text-neon-red p-4 mt-4 clip-chamfer font-bold">
@@ -101,7 +96,7 @@ const formatTime = (ts) => {
   </div>
 
   <!-- PAYLOAD MODAL -->
-  <div v-if="showModal" class="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-8">
+  <div v-if="showModal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-3 sm:p-6">
     <div class="w-full max-w-4xl max-h-[80vh] flex flex-col bg-[#111] border border-gray-500 shadow-[0_0_30px_rgba(255,255,255,0.1)]">
       <div class="flex justify-between items-center p-3 border-b border-gray-700 bg-[#0a0a0a]">
         <h3 class="text-gray-300 font-bold tracking-widest uppercase text-sm">[ TRANSCRIPT_PAYLOAD ]</h3>

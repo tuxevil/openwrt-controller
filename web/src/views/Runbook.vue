@@ -19,22 +19,18 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-8 bg-vantablack text-white font-mono gap-10 overflow-auto">
+  <div class="min-h-full flex flex-col p-4 sm:p-6 lg:p-8 bg-vantablack text-white font-mono gap-6 max-w-6xl mx-auto w-full">
 
     <!-- Header Clasificado -->
-    <div class="flex items-center justify-between border-b-2 border-[#80ed99] pb-6 shrink-0 relative">
-      <div class="absolute -top-4 right-0 text-[10px] text-[#80ed99]/30 tracking-[0.4em] select-none">
-        TOP SECRET // EYES ONLY
-      </div>
+    <div class="flex flex-wrap items-end justify-between gap-4 border-b border-neon-green/40 pb-4 shrink-0 relative">
       <div>
-        <h1 class="text-4xl text-[#80ed99] tracking-widest font-bold" style="text-shadow: 0 0 15px #80ed99;">[PROJECT_OMEGA] MANIFIESTO</h1>
-        <p class="text-sm text-[#80ed99]/60 mt-1 uppercase tracking-widest">Manual Táctico de Operaciones e Infraestructura</p>
+        <div class="text-[10px] text-neon-green/60 tracking-[0.25em] uppercase mb-1">OPERATIONAL_RUNBOOK // SOP</div>
+        <h1 class="text-xl sm:text-3xl text-neon-green tracking-widest font-bold">[PROJECT_OMEGA] MANIFIESTO</h1>
+        <p class="text-xs text-muted mt-1 uppercase tracking-widest">Manual Táctico de Operaciones e Infraestructura</p>
       </div>
-      <div class="text-right flex flex-col items-end gap-1">
-        <span class="text-xs text-muted uppercase">Global Heartbeat</span>
-        <div class="flex items-center gap-3">
-          <span class="text-2xl font-bold" :class="globalHealth < 50 ? 'text-neon-red' : 'text-[#80ed99]'">{{ globalHealth }}%</span>
-        </div>
+      <div class="text-left sm:text-right flex flex-col sm:items-end gap-0.5">
+        <span class="text-[10px] text-muted uppercase tracking-widest">Global Heartbeat</span>
+        <span class="text-xl sm:text-2xl font-bold" :class="globalHealth < 50 ? 'text-neon-red' : 'text-neon-green'">{{ globalHealth }}%</span>
       </div>
     </div>
 
@@ -71,7 +67,7 @@ onMounted(async () => {
         MANUAL DE RECUPERACIÓN DE DESASTRES (S.O.S)
       </h2>
       
-      <div class="prose prose-invert prose-p:text-white/70 prose-a:text-[#80ed99] max-w-none bg-[#110505] p-8 border border-neon-red/30">
+      <div class="prose prose-invert prose-p:text-white/70 prose-a:text-[#80ed99] max-w-none bg-[#110505] p-4 sm:p-6 lg:p-8 border border-neon-red/30">
         <h3 class="text-neon-red uppercase tracking-widest mt-0 mb-4 text-lg">I. Colapso Total de Red Inalámbrica (RF Collapse)</h3>
         <p>1. Navegue al módulo <code>RF_ANALYZER</code> del sitio comprometido.</p>
         <p>2. Presione el botón <code>[AUTO_OPTIMIZE]</code>. Esto forzará un escaneo en todos los radios y moverá los anchos de banda a canales con menor interferencia detectada (-90 dBm a -105 dBm).</p>

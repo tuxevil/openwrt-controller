@@ -205,18 +205,18 @@ const auditLineClass = (line) => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-8 bg-vantablack text-white font-mono gap-8 overflow-auto">
+  <div class="min-h-full flex flex-col p-4 sm:p-6 lg:p-8 bg-vantablack text-white font-mono gap-6">
 
     <!-- Header -->
-    <div class="flex items-center justify-between border-b border-neon-white pb-4 shrink-0">
-      <h1 class="text-3xl text-neon-white drop-shadow-[0_0_10px_#ffffff] tracking-widest">&gt; THE_VAULT</h1>
-      <span class="text-xs text-neon-white/60">RESILIENCE_AND_RESTORE v1.0</span>
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-neon-green/35 pb-3 shrink-0">
+      <h1 class="text-xl sm:text-2xl text-neon-green font-bold tracking-widest">&gt; THE_VAULT</h1>
+      <span class="text-xs text-muted">RESILIENCE_AND_RESTORE v1.0</span>
     </div>
 
     <!-- Active Device Selector -->
-    <div class="flex gap-4 items-center">
-      <span class="text-xs text-neon-white/50 tracking-widest">ACTIVE_NODE:</span>
-      <select v-model="activeDevice" @change="fetchBackups" class="bg-black border border-neon-white/40 text-white px-3 py-1 font-mono text-sm focus:outline-none appearance-none cursor-pointer hover:border-neon-white transition">
+    <div class="flex flex-wrap gap-3 items-center">
+      <span class="text-xs text-muted tracking-widest">ACTIVE_NODE:</span>
+      <select v-model="activeDevice" @change="fetchBackups" class="terminal-input text-xs py-1.5 bg-black cursor-pointer">
         <option v-for="d in devices" :key="d.id" :value="d.id">{{ d.name || d.id }}</option>
       </select>
     </div>

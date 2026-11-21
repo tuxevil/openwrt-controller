@@ -108,7 +108,7 @@ const formatDate = (d) => {
 </script>
 
 <template>
-  <div class="min-h-screen bg-vantablack text-white font-mono flex flex-col">
+  <div class="min-h-full bg-vantablack text-white font-mono flex flex-col">
 
     <!-- ░░░ ACCESS DENIED STATE ░░░ -->
     <div v-if="error" class="flex-1 flex items-center justify-center">

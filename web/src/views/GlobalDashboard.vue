@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import api from '../services/api'
 import { useAuthStore } from '../stores/auth'
@@ -10,20 +10,41 @@ const sites = ref([])
 const pendingDevices = ref([])
 const newSiteName = ref('')
 const selectedSite = ref('')
+const siteSearch = ref('')
+const loading = ref(true)
+const creating = ref(false)
+const actionError = ref('')
+
+const filteredSites = computed(() => {
+  const q = siteSearch.value.trim().toLowerCase()
+  if (!q) return sites.value
+  return sites.value.filter(
+    (s) => s.name?.toLowerCase().includes(q) || s.id?.toLowerCase().includes(q)
+  )
+})
 
 onMounted(async () => {
   await fetchData()
 })
 
 const fetchData = async () => {
+  loading.value = true
+  actionError.value = ''
   try {
-    const sitesRes = await api.getSites()
+    const [sitesRes, devicesRes] = await Promise.all([
+      api.getSites(),
+      api.getPendingDevices(),
+    ])
     sites.value = sitesRes.data.data || []
-    
-    const devicesRes = await api.getPendingDevices()
     pendingDevices.value = devicesRes.data.data || []
+    if (!selectedSite.value && sites.value.length === 1) {
+      selectedSite.value = sites.value[0].id
+    }
   } catch (e) {
-    console.error("Error fetching global data:", e)
+    console.error('Error fetching global data:', e)
+    actionError.value = e.response?.data?.error || 'Failed to sync fleet directory'
+  } finally {
+    loading.value = false
   }
 }
 
@@ -33,16 +54,25 @@ const handleDeleteSite = async (site) => {
     await api.deleteSite(site.id)
     await fetchData()
   } catch (e) {
-    alert('Failed to delete site')
+    actionError.value = e.response?.data?.error || 'Failed to delete site'
     console.error(e)
   }
 }
 
 const handleCreateSite = async () => {
-  if (!newSiteName.value) return
-  await api.createSite(newSiteName.value)
-  newSiteName.value = ''
-  await fetchData()
+  const name = newSiteName.value.trim()
+  if (!name || creating.value) return
+  creating.value = true
+  actionError.value = ''
+  try {
+    await api.createSite(name)
+    newSiteName.value = ''
+    await fetchData()
+  } catch (e) {
+    actionError.value = e.response?.data?.error || 'Failed to create site'
+  } finally {
+    creating.value = false
+  }
 }
 
 const handleForget = async (device) => {
@@ -51,15 +81,23 @@ const handleForget = async (device) => {
     await api.forgetDevice(device.id)
     await fetchData()
   } catch (e) {
-    alert('Failed to forget device')
+    actionError.value = e.response?.data?.error || 'Failed to forget device'
     console.error(e)
   }
 }
 
 const handleAdopt = async (deviceId) => {
-  if (!selectedSite.value) return alert("Select a site to adopt to!")
-  await api.adoptDevice(deviceId, selectedSite.value)
-  await fetchData()
+  if (!selectedSite.value) {
+    actionError.value = 'Select a target site before adopting a device.'
+    return
+  }
+  actionError.value = ''
+  try {
+    await api.adoptDevice(deviceId, selectedSite.value)
+    await fetchData()
+  } catch (e) {
+    actionError.value = e.response?.data?.error || 'Failed to adopt device'
+  }
 }
 
 const jumpToSite = (siteId) => {
@@ -68,72 +106,206 @@ const jumpToSite = (siteId) => {
 </script>
 
 <template>
-  <div class="p-8 h-screen w-full flex flex-col gap-8">
-    <div class="flex justify-between items-center pb-2 border-b border-neon-green/30">
-      <h1 class="text-4xl shadow-neon glitch-anim w-fit">GLOBAL_DASHBOARD</h1>
-      <div class="flex gap-4">
-        <router-link v-if="auth.isAdmin" to="/landlord" class="px-4 py-2 border-2 border-amber-500 text-amber-400 hover:bg-amber-500 hover:text-black transition-all font-bold tracking-[0.2em] shadow-[0_0_12px_rgba(245,158,11,0.4)] active:scale-95 flex items-center gap-2 clip-chamfer">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-          [ LANDLORD PANEL ]
+  <div class="min-h-full p-4 sm:p-6 lg:p-8 flex flex-col gap-5 max-w-7xl mx-auto w-full">
+    <!-- Header -->
+    <div class="flex flex-wrap items-end justify-between gap-3 border-b border-neon-green/25 pb-4">
+      <div>
+        <div class="text-[10px] text-muted tracking-[0.25em] uppercase mb-1">FLEET_COMMAND // DIRECTORY</div>
+        <h1 class="text-xl sm:text-2xl lg:text-3xl font-bold text-neon-green tracking-[0.18em]">
+          SITES &amp; ADOPTION
+        </h1>
+      </div>
+
+      <div class="flex flex-wrap items-center gap-2">
+        <router-link
+          v-if="auth.isSuperAdmin"
+          to="/landlord"
+          class="px-3 py-1.5 border border-neon-amber/60 text-neon-amber hover:bg-neon-amber hover:text-black transition-all text-[11px] font-bold tracking-[0.16em] uppercase clip-chamfer-sm"
+        >
+          LANDLORD
         </router-link>
-        <router-link v-if="auth.isAdmin" to="/global/identity" class="px-4 py-2 border border-[#bc13fe] text-[#bc13fe] hover:bg-[#bc13fe]/20 transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_#bc13fe] active:scale-95 flex items-center gap-2 clip-chamfer">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-          [ IDENTITY MATRIX ]
+        <router-link
+          v-if="auth.isAdmin"
+          to="/global/identity"
+          class="px-3 py-1.5 border border-neon-cyan/50 text-neon-cyan hover:bg-neon-cyan hover:text-black transition-all text-[11px] font-bold tracking-[0.16em] uppercase clip-chamfer-sm"
+        >
+          IDENTITY
         </router-link>
-        <router-link v-if="auth.isAdmin" to="/global/panopticon" class="px-4 py-2 border border-gray-400 text-gray-400 hover:text-white hover:border-white transition-all font-bold tracking-[0.2em] shadow-[0_0_10px_gray] active:scale-95 flex items-center gap-2 clip-chamfer">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3 9c7 0 10-9 10-9s-3-9-10-9-10 9-10 9 3 9 10 9z"/></svg>
-          [ PANÓPTICO ]
+        <button
+          type="button"
+          @click="fetchData"
+          class="px-3 py-1.5 border border-gridline text-muted hover:text-neon-green hover:border-neon-green/50 transition-all text-[11px] font-bold tracking-[0.16em] uppercase clip-chamfer-sm"
+        >
+          SYNC
+        </button>
+      </div>
+    </div>
+
+    <!-- Error Banner -->
+    <div
+      v-if="actionError"
+      role="alert"
+      class="px-4 py-2.5 border border-neon-red/60 bg-neon-red/10 text-neon-red text-xs flex items-center justify-between gap-3 clip-chamfer-sm"
+    >
+      <span>&gt; ERR: {{ actionError }}</span>
+      <button type="button" @click="actionError = ''" class="text-neon-red hover:text-white">✕</button>
+    </div>
+
+    <!-- Fleet KPI Telemetry Strip -->
+    <div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div class="neon-panel !p-3.5 flex flex-col justify-between">
+        <span class="text-[10px] text-muted tracking-[0.2em] uppercase">MANAGED_SITES</span>
+        <div class="text-2xl sm:text-3xl font-bold neon-text-green mt-1">{{ sites.length }}</div>
+      </div>
+      <div class="neon-panel !p-3.5 border-neon-amber/35 flex flex-col justify-between">
+        <span class="text-[10px] text-muted tracking-[0.2em] uppercase">PENDING_QUEUE</span>
+        <div class="text-2xl sm:text-3xl font-bold mt-1" :class="pendingDevices.length > 0 ? 'neon-text-amber' : 'text-gray-300'">
+          {{ pendingDevices.length }}
+        </div>
+      </div>
+      <div class="neon-panel !p-3.5 border-neon-cyan/30 flex flex-col justify-between">
+        <span class="text-[10px] text-muted tracking-[0.2em] uppercase">OPERATOR_ROLE</span>
+        <div class="text-base sm:text-lg font-bold text-neon-cyan mt-2 truncate uppercase">{{ auth.role || 'OPERATOR' }}</div>
+      </div>
+      <div class="neon-panel !p-3.5 border-gridline flex flex-col justify-between">
+        <span class="text-[10px] text-muted tracking-[0.2em] uppercase">QUICK_NAV</span>
+        <router-link to="/global/sentinel" class="text-xs text-neon-green hover:underline mt-2 tracking-wider uppercase font-bold">
+          &gt; SENTINEL_AI →
         </router-link>
       </div>
     </div>
-    
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 flex-1">
+
+    <!-- Main Two-Column Directory -->
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-5 flex-1">
       <!-- SITES PANEL -->
-      <div class="neon-panel flex flex-col gap-4">
-        <h2 class="text-xl border-b border-neon-green/50 pb-2">> ORG_SITES_DIRECTORY</h2>
-        <div class="flex gap-2 items-center">
-          <input v-model="newSiteName" type="text" placeholder="[NEW_SITE_NAME]" class="bg-black border border-neon-green/50 text-neon-green px-3 py-2 font-mono flex-1 outline-none focus:border-neon-green clip-chamfer" />
-          <button @click="handleCreateSite" class="neon-btn">CREATE</button>
+      <section class="neon-panel flex flex-col gap-4">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-neon-green/25 pb-2.5">
+          <h2 class="text-sm sm:text-base font-bold text-neon-green tracking-[0.18em]">&gt; ORG_SITES_DIRECTORY</h2>
+          <span class="text-[10px] text-muted tracking-widest">{{ filteredSites.length }} / {{ sites.length }}</span>
         </div>
-        
-        <div class="flex flex-col gap-2 overflow-y-auto mt-4">
-          <div v-for="site in sites" :key="site.id" class="border border-neon-green/30 p-3 hover:border-neon-green transition-colors flex justify-between items-center group cursor-pointer" @click="jumpToSite(site.id)">
-            <span class="neon-text-green">> {{ site.name }}</span>
-            <span class="text-xs text-muted">{{ site.id.substring(0, 8) }}</span>
-            <div class="flex gap-2">
-              <button class="text-neon-green text-sm px-2 py-1 border border-transparent group-hover:border-neon-green/50">JUMP</button>
-              <button @click.stop="handleDeleteSite(site)" class="text-neon-red text-sm px-2 py-1 border border-transparent group-hover:border-neon-red/50">DELETE</button>
+
+        <!-- Create Site Form -->
+        <form @submit.prevent="handleCreateSite" class="flex flex-col sm:flex-row gap-2">
+          <input
+            v-model="newSiteName"
+            type="text"
+            placeholder="NEW_SITE_NAME..."
+            class="terminal-input flex-1 min-w-0"
+          />
+          <button type="submit" :disabled="creating || !newSiteName.trim()" class="neon-btn shrink-0">
+            {{ creating ? 'CREATING...' : '+ CREATE_SITE' }}
+          </button>
+        </form>
+
+        <!-- Filter Sites -->
+        <input
+          v-if="sites.length > 3"
+          v-model="siteSearch"
+          type="text"
+          placeholder="Filter sites by name or ID..."
+          class="terminal-input text-xs !border-gridline focus:!border-neon-cyan"
+        />
+
+        <!-- Sites List -->
+        <div class="flex flex-col gap-2.5 overflow-y-auto max-h-[55vh] pr-0.5">
+          <div
+            v-for="site in filteredSites"
+            :key="site.id"
+            @click="jumpToSite(site.id)"
+            class="border border-neon-green/25 bg-black/45 p-3.5 hover:border-neon-green hover:bg-neon-green/5 transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3 group cursor-pointer clip-chamfer-sm"
+          >
+            <div class="min-w-0">
+              <div class="text-sm font-bold text-white group-hover:text-neon-green transition-colors truncate">
+                &gt; {{ site.name }}
+              </div>
+              <div class="text-[10px] text-muted tracking-widest mt-0.5 font-mono">
+                ID // {{ site.id.substring(0, 12) }}
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                @click.stop="jumpToSite(site.id)"
+                class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 border border-neon-green/50 text-neon-green hover:bg-neon-green hover:text-black transition-colors clip-chamfer-sm"
+              >
+                ENTER
+              </button>
+              <button
+                type="button"
+                @click.stop="handleDeleteSite(site)"
+                class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1.5 border border-neon-red/40 text-neon-red hover:bg-neon-red hover:text-black transition-colors clip-chamfer-sm"
+              >
+                DEL
+              </button>
             </div>
           </div>
-          <div v-if="sites.length === 0" class="text-neon-red glitch-anim text-sm py-4">>> EMPTY_DATASET</div>
+
+          <div v-if="!loading && filteredSites.length === 0" class="text-center py-8 border border-dashed border-gridline text-xs text-muted tracking-widest">
+            &gt;&gt; NO_SITES_MATCHING_QUERY
+          </div>
         </div>
-      </div>
+      </section>
 
       <!-- PENDING DEVICES PANEL -->
-      <div class="neon-panel flex flex-col gap-4">
-        <h2 class="text-xl neon-text-amber border-b border-neon-amber/50 pb-2">> PENDING_ADOPTION_QUEUE</h2>
-        
-        <div class="flex gap-2">
-          <select v-model="selectedSite" class="bg-black border border-neon-amber/50 text-neon-amber w-full p-2 font-mono outline-none clip-chamfer">
-            <option value="">[SELECT_TARGET_SITE]</option>
+      <section class="neon-panel border-neon-amber/35 flex flex-col gap-4">
+        <div class="flex flex-wrap items-center justify-between gap-2 border-b border-neon-amber/30 pb-2.5">
+          <h2 class="text-sm sm:text-base font-bold text-neon-amber tracking-[0.18em]">&gt; PENDING_ADOPTION_QUEUE</h2>
+          <span
+            class="text-[10px] px-2 py-0.5 border tracking-widest uppercase"
+            :class="pendingDevices.length > 0 ? 'border-neon-amber/50 text-neon-amber bg-neon-amber/10' : 'border-neon-green/40 text-neon-green bg-neon-green/10'"
+          >
+            {{ pendingDevices.length > 0 ? `${pendingDevices.length} WAITING` : 'CLEAR' }}
+          </span>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+          <label for="adopt-target-site" class="text-[10px] text-muted tracking-[0.2em] uppercase">TARGET_SITE_FOR_ADOPTION</label>
+          <select
+            id="adopt-target-site"
+            v-model="selectedSite"
+            class="terminal-input !border-neon-amber/40 focus:!border-neon-amber text-neon-amber bg-black w-full"
+          >
+            <option value="">[ SELECT_TARGET_SITE ]</option>
             <option v-for="site in sites" :key="site.id" :value="site.id">{{ site.name }}</option>
           </select>
         </div>
 
-        <div class="flex flex-col gap-2 overflow-y-auto mt-4">
-          <div v-for="device in pendingDevices" :key="device.id" class="border border-neon-amber/30 p-3 flex justify-between items-center">
-            <div class="flex flex-col">
-              <span class="text-neon-amber">{{ device.id }}</span>
-              <span class="text-xs font-mono text-muted">Model: {{ device.model || 'UNKNOWN' }} | Status: {{ device.status }}</span>
+        <div class="flex flex-col gap-2.5 overflow-y-auto max-h-[55vh] pr-0.5">
+          <div
+            v-for="device in pendingDevices"
+            :key="device.id"
+            class="border border-neon-amber/30 bg-black/45 p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 clip-chamfer-sm"
+          >
+            <div class="min-w-0">
+              <div class="text-sm font-bold text-neon-amber truncate">{{ device.name || device.id }}</div>
+              <div class="text-[11px] text-muted mt-0.5 truncate">
+                MODEL: {{ device.model || 'UNKNOWN' }} · STATUS: {{ device.status }}
+              </div>
             </div>
-            <div class="flex gap-2">
-              <button @click="handleAdopt(device.id)" class="bg-transparent text-neon-amber border border-neon-amber px-3 py-1 hover:bg-neon-amber hover:text-black font-bold uppercase transition-colors clip-chamfer text-sm">ADOPT</button>
-              <button @click="handleForget(device)" class="bg-transparent text-neon-red border border-neon-red px-3 py-1 hover:bg-neon-red hover:text-black font-bold uppercase transition-colors clip-chamfer text-sm">FORGET</button>
+            <div class="flex items-center gap-2 shrink-0 self-end sm:self-center">
+              <button
+                type="button"
+                @click="handleAdopt(device.id)"
+                class="text-[11px] font-bold tracking-widest uppercase px-3 py-1.5 border border-neon-amber text-neon-amber hover:bg-neon-amber hover:text-black transition-colors clip-chamfer-sm"
+              >
+                ADOPT
+              </button>
+              <button
+                type="button"
+                @click="handleForget(device)"
+                class="text-[11px] font-bold tracking-widest uppercase px-2.5 py-1.5 border border-neon-red/50 text-neon-red hover:bg-neon-red hover:text-black transition-colors clip-chamfer-sm"
+              >
+                FORGET
+              </button>
             </div>
           </div>
-          <div v-if="pendingDevices.length === 0" class="text-neon-green text-sm py-4">>> QUEUE_CLEAR</div>
+
+          <div v-if="!loading && pendingDevices.length === 0" class="text-center py-8 border border-dashed border-neon-green/25 text-xs text-neon-green/80 tracking-widest">
+            &gt;&gt; QUEUE_CLEAR // ALL NODES ADOPTED
+          </div>
         </div>
-      </div>
+      </section>
     </div>
   </div>
 </template>

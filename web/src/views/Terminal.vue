@@ -12,16 +12,16 @@ const { terminalContainer, connectionStatus } = useTerminal(
 </script>
 
 <template>
-  <div class="p-8 h-screen w-full flex flex-col gap-6 overflow-hidden max-w-6xl">
-    <div class="flex items-center justify-between shrink-0 border-b border-neon-green/30 pb-4">
-      <h2 class="text-3xl glitch-anim text-neon-green">&gt; MATRIX_SHELL</h2>
-      <div class="text-xs font-mono tracking-widest" :class="connectionStatus === 'CONNECTED' ? 'text-neon-green' : 'text-neon-red'">
+  <div class="p-4 sm:p-6 h-full min-h-[72dvh] w-full flex flex-col gap-4 overflow-hidden max-w-6xl mx-auto">
+    <div class="flex flex-wrap items-center justify-between gap-2 shrink-0 border-b border-neon-green/30 pb-3">
+      <h2 class="text-lg sm:text-2xl font-bold text-neon-green">&gt; MATRIX_SHELL</h2>
+      <div class="text-xs font-mono tracking-widest font-bold" :class="connectionStatus === 'CONNECTED' ? 'text-neon-green' : 'text-neon-red'">
         [STATUS: {{ connectionStatus }}]
       </div>
     </div>
 
-    <div class="flex-1 neon-panel overflow-hidden border border-neon-green shadow-[0_0_15px_rgba(0,255,65,0.1)] p-4 bg-[#050505] clip-chamfer relative">
-      <div class="absolute top-0 right-0 p-2 text-xs text-neon-green/30 tracking-widest pointer-events-none">XTERM.JS // VANTABLACK</div>
+    <div class="flex-1 min-h-[340px] neon-panel overflow-hidden border border-neon-green/60 p-3 sm:p-4 bg-[#050607] clip-chamfer relative">
+      <div class="hidden sm:block absolute top-1.5 right-3 text-[10px] text-neon-green/35 tracking-widest pointer-events-none">XTERM.JS // VANTABLACK</div>
       <div ref="terminalContainer" class="w-full h-full"></div>
     </div>
   </div>

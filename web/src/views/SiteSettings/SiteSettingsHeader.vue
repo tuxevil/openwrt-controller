@@ -1,9 +1,4 @@
 <script setup>
-// SiteSettingsHeader — the top bar with the "SAVE TEMPLATE" and
-// preview/apply draft control, plus the dirty-status badge
-// and the fleet-size counter. Extracted from the 1445-line
-// mega-component so each concern can be edited and tested in
-// isolation.
 defineProps({
   dirty: { type: Boolean, default: false },
   saving: { type: Boolean, default: false },
@@ -15,41 +10,45 @@ const emit = defineEmits(['save', 'preview', 'apply'])
 </script>
 
 <template>
-  <header class="shrink-0 border-b border-gray-800/70 bg-[#060608] px-6 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-4">
-      <h1 class="text-base font-bold tracking-[0.25em] flex items-center gap-3">
-        <span class="text-[#00ffff] drop-shadow-[0_0_8px_rgba(0,255,255,0.6)]">◈</span>
-        <span class="text-white">UNIFIED_SITE_SETTINGS</span>
-        <span class="text-gray-600 text-xs font-normal tracking-widest ml-1">GLOBAL CONFIGURATION MATRIX</span>
-      </h1>
+  <header class="shrink-0 border-b border-gridline bg-panel/95 px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
+    <div class="flex items-center gap-2.5 min-w-0">
+      <span class="text-neon-cyan drop-shadow-[0_0_8px_rgba(0,240,255,0.6)] shrink-0">◈</span>
+      <div class="min-w-0">
+        <h1 class="text-sm sm:text-base font-bold tracking-[0.2em] text-white truncate">UNIFIED_SITE_SETTINGS</h1>
+        <span class="text-[10px] text-muted tracking-widest uppercase hidden sm:inline">
+          CONFIGURATION MATRIX · {{ deviceCount }} DEVICE{{ deviceCount !== 1 ? 'S' : '' }} IN FLEET
+        </span>
+      </div>
     </div>
 
-    <div class="flex items-center gap-3">
-      <span v-if="dirty" class="text-xs text-amber-400 animate-pulse tracking-widest">● UNSAVED CHANGES</span>
-      <div class="text-xs text-gray-600 tracking-widest border border-gray-700/50 px-3 py-1 rounded">
-        {{ deviceCount }} DEVICE{{ deviceCount !== 1 ? 'S' : '' }} IN FLEET
+    <div class="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto">
+      <span v-if="dirty" class="text-[11px] text-neon-amber animate-pulse tracking-widest font-bold">● UNSAVED</span>
+      <div class="hidden xl:block text-[10px] text-muted tracking-widest border border-gridline px-2.5 py-1 clip-chamfer-sm">
+        {{ deviceCount }} DEVICE{{ deviceCount !== 1 ? 'S' : '' }}
       </div>
 
       <button
         id="save-template-btn"
+        type="button"
         @click="emit('save')"
         :disabled="saving || applying"
-        class="px-4 py-2 font-bold text-sm tracking-[0.15em] uppercase border rounded transition-all duration-200"
+        class="flex-1 sm:flex-none px-3.5 py-2 font-bold text-xs tracking-[0.14em] uppercase border clip-chamfer-sm transition-all duration-150"
         :class="saving
-          ? 'border-gray-600 text-gray-500 cursor-not-allowed'
-          : 'border-amber-500/60 text-amber-400 hover:bg-amber-500/10 hover:border-amber-400 active:scale-95'"
+          ? 'border-gridline text-muted cursor-not-allowed'
+          : 'border-neon-amber/70 text-neon-amber hover:bg-neon-amber hover:text-black active:scale-95'"
       >
         {{ saving ? 'SAVING...' : 'SAVE TEMPLATE' }}
       </button>
 
       <button
         id="apply-revision-btn"
+        type="button"
         @click="emit(draftReady ? 'apply' : 'preview')"
         :disabled="applying || saving"
-        class="px-5 py-2 font-bold text-sm tracking-[0.15em] uppercase border rounded transition-all duration-200"
+        class="flex-1 sm:flex-none px-4 py-2 font-bold text-xs tracking-[0.14em] uppercase border clip-chamfer-sm transition-all duration-150"
         :class="applying
-          ? 'border-gray-600 text-gray-500 cursor-not-allowed'
-          : 'border-[#00ffff] text-[#00ffff] hover:bg-[#00ffff]/10 hover:shadow-[0_0_20px_rgba(0,255,255,0.3)] active:scale-95'"
+          ? 'border-gridline text-muted cursor-not-allowed'
+          : 'border-neon-cyan text-neon-cyan hover:bg-neon-cyan hover:text-black hover:shadow-[0_0_16px_rgba(0,240,255,0.3)] active:scale-95'"
       >
         {{ applying ? (draftReady ? 'APPLYING...' : 'PREVIEWING...') : (draftReady ? 'APPLY IMMUTABLE DRAFT' : 'PREVIEW REVISION') }}
       </button>

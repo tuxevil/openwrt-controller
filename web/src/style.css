@@ -3,19 +3,52 @@
 @tailwind utilities;
 
 @layer base {
+  html,
   body {
-    @apply bg-vantablack text-white font-mono m-0 p-0 overflow-x-hidden;
-    background-image: repeating-linear-gradient(
-      transparent,
-      transparent 2px,
-      rgba(0, 255, 65, 0.05) 2px,
-      rgba(0, 255, 65, 0.05) 4px
-    );
+    @apply bg-vantablack text-gray-100 font-mono m-0 p-0 overflow-x-hidden antialiased;
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: #050607;
+    background-image:
+      radial-gradient(circle at 18% 0%, rgba(0, 255, 65, 0.045), transparent 42%),
+      radial-gradient(circle at 85% 100%, rgba(0, 240, 255, 0.035), transparent 45%),
+      repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 3px,
+        rgba(0, 255, 65, 0.022) 3px,
+        rgba(0, 255, 65, 0.022) 4px
+      );
     background-attachment: fixed;
   }
 
   h1, h2, h3, h4, h5, h6 {
     @apply uppercase tracking-widest font-mono text-neon-green;
+  }
+
+  /* Custom thin cyberpunk scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 255, 65, 0.28) #080a0c;
+  }
+
+  *::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  *::-webkit-scrollbar-track {
+    background: #080a0c;
+  }
+
+  *::-webkit-scrollbar-thumb {
+    background: rgba(0, 255, 65, 0.25);
+  }
+
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(0, 255, 65, 0.55);
   }
 }
 
@@ -24,28 +57,98 @@
     clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
   }
 
-  .neon-text-green {
-    text-shadow: 0 0 5px #00ff41, 0 0 10px #00ff41;
+  .clip-chamfer-sm {
+    clip-path: polygon(6px 0, 100% 0, 100% calc(100% - 6px), calc(100% - 6px) 100%, 0 100%, 0 6px);
   }
-  
+
+  .neon-text-green {
+    color: #00FF41;
+    text-shadow: 0 0 8px rgba(0, 255, 65, 0.45);
+  }
+
+  .neon-text-cyan {
+    color: #00F0FF;
+    text-shadow: 0 0 8px rgba(0, 240, 255, 0.45);
+  }
+
+  .neon-text-amber {
+    color: #FFB000;
+    text-shadow: 0 0 8px rgba(255, 176, 0, 0.45);
+  }
+
+  .neon-text-red {
+    color: #FF003C;
+    text-shadow: 0 0 8px rgba(255, 0, 60, 0.5);
+  }
+
   .glitch-anim {
-    animation: glitch 1s infinite alternate;
+    animation: glitch 4.5s infinite;
   }
 
   .neon-panel {
-    @apply bg-panel border-2 border-neon-green clip-chamfer p-4 shadow-lg shadow-neon-green/20;
+    @apply bg-panel/95 border border-neon-green/30 clip-chamfer p-4 shadow-[0_0_24px_rgba(0,0,0,0.65)];
     position: relative;
   }
 
+  .neon-panel::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 10px;
+    right: 0;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(0, 255, 65, 0.55), transparent 65%);
+    pointer-events: none;
+  }
+
   .neon-btn {
-    @apply bg-transparent text-neon-green border border-neon-green clip-chamfer px-4 py-2 hover:bg-neon-green hover:text-black hover:shadow-[0_0_15px_#00ff41] transition-all cursor-pointer font-bold tracking-widest uppercase outline-none;
+    @apply inline-flex items-center justify-center gap-2 bg-neon-green/5 text-neon-green border border-neon-green/70 clip-chamfer-sm px-3.5 py-2 text-xs hover:bg-neon-green hover:text-black hover:shadow-[0_0_14px_rgba(0,255,65,0.45)] focus-visible:ring-1 focus-visible:ring-neon-green active:scale-[0.98] transition-all cursor-pointer font-bold tracking-widest uppercase outline-none disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .terminal-input {
+    @apply bg-black/80 border border-neon-green/35 text-gray-100 placeholder-muted/70 px-3 py-2 font-mono text-xs sm:text-sm outline-none focus:border-neon-green focus:shadow-[0_0_10px_rgba(0,255,65,0.2)] transition-all clip-chamfer-sm;
+  }
+
+  .tactical-grid-bg {
+    background-image:
+      linear-gradient(rgba(0, 255, 65, 0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0, 255, 65, 0.03) 1px, transparent 1px);
+    background-size: 28px 28px;
+  }
+}
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom, 0px);
   }
 }
 
 @keyframes glitch {
-  0% { transform: skewX(0deg); }
-  1% { transform: skewX(2deg) translate(-2px, 1px); }
-  2% { transform: skewX(-2deg) translate(2px, -1px); }
-  3% { transform: skewX(0deg); }
-  100% { transform: skewX(0deg); }
+  0%, 94%, 100% {
+    transform: translate(0, 0) skewX(0deg);
+  }
+  95% {
+    transform: translate(-1px, 0) skewX(1.5deg);
+  }
+  97% {
+    transform: translate(1px, 0) skewX(-1.5deg);
+  }
+  98% {
+    transform: translate(0, 0) skewX(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .glitch-anim,
+  .animate-pulse,
+  .animate-ping {
+    animation: none !important;
+  }
 }

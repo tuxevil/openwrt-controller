@@ -46,7 +46,7 @@ async function handleDelete(id) {
 </script>
 
 <template>
-  <div class="p-8 h-screen flex flex-col gap-6 overflow-auto">
+  <div class="p-4 sm:p-6 min-h-full flex flex-col gap-5">
     <h2 class="text-3xl glitch-anim border-b border-neon-green/30 pb-4 w-fit">> WIRELESS_MATRIX</h2>
 
     <!-- Create Form -->

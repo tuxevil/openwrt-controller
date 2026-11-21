@@ -87,27 +87,27 @@ const runCommand = async () => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-8 overflow-auto gap-8 bg-vantablack text-white font-mono">
+  <div class="min-h-full flex flex-col p-4 sm:p-6 lg:p-8 gap-6 bg-vantablack text-white font-mono max-w-6xl mx-auto w-full">
 
     <!-- Header -->
-    <div class="flex items-center justify-between border-b border-neon-amber/50 pb-4 shrink-0">
-      <h1 class="text-3xl text-neon-amber" style="text-shadow: 0 0 10px #ffb700;">&gt; THE_ORCHESTRATOR</h1>
-      <span class="text-xs text-neon-amber/60">MASS_EXECUTION_ENGINE v1.0</span>
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-neon-amber/40 pb-3 shrink-0">
+      <h1 class="text-xl sm:text-2xl font-bold text-neon-amber">&gt; THE_ORCHESTRATOR</h1>
+      <span class="text-[11px] text-neon-amber/70">MASS_EXECUTION_ENGINE v1.0</span>
     </div>
 
     <!-- ── PROFILES ──────────────────────────────────────────────────────────── -->
     <section class="flex flex-col gap-4">
-      <div class="flex items-center justify-between">
-        <h2 class="text-neon-amber text-lg tracking-widest">/// GLOBAL_PROFILES</h2>
+      <div class="flex flex-wrap items-center justify-between gap-2">
+        <h2 class="text-neon-amber text-sm sm:text-base tracking-widest">/// GLOBAL_PROFILES</h2>
         <button @click="showNewProfile = !showNewProfile"
-          class="text-xs border border-neon-amber text-neon-amber hover:bg-neon-amber hover:text-black transition px-3 py-1 clip-chamfer">
+          class="text-xs border border-neon-amber text-neon-amber hover:bg-neon-amber hover:text-black transition px-3 py-1.5 clip-chamfer-sm font-bold">
           {{ showNewProfile ? 'CANCEL' : '+ NEW_PROFILE' }}
         </button>
       </div>
 
       <!-- Create Profile Form -->
-      <div v-if="showNewProfile" class="bg-[#0d0d0d] border border-neon-amber/30 p-4 flex flex-col gap-3">
-        <div class="flex gap-4">
+      <div v-if="showNewProfile" class="bg-panel border border-neon-amber/35 p-4 flex flex-col gap-3 clip-chamfer-sm">
+        <div class="flex flex-col sm:flex-row gap-3">
           <div class="flex flex-col gap-1 flex-1">
             <label class="text-xs text-neon-amber/60">PROFILE_NAME</label>
             <input v-model="newProfile.name" placeholder="e.g. CORPORATE_BASELINE"

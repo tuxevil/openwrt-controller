@@ -90,12 +90,12 @@ const strokeDasharray = computed(() => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-8 overflow-auto bg-vantablack text-white font-mono gap-6">
+  <div class="min-h-full flex flex-col p-4 sm:p-6 lg:p-8 bg-vantablack text-white font-mono gap-5">
 
     <!-- Header -->
-    <div class="flex items-center justify-between border-b border-neon-cyan/50 pb-4 shrink-0">
-      <h1 class="text-3xl text-neon-cyan" style="text-shadow: 0 0 10px #00ffff;">&gt; RF_INTELLIGENCE</h1>
-      <span class="text-xs text-neon-cyan/60">SPECTRAL ANALYSIS v2.0</span>
+    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-neon-cyan/40 pb-3 shrink-0">
+      <h1 class="text-xl sm:text-2xl font-bold text-neon-cyan">&gt; RF_INTELLIGENCE</h1>
+      <span class="text-[11px] text-neon-cyan/70">SPECTRAL ANALYSIS v2.0</span>
     </div>
 
     <!-- Empty State -->

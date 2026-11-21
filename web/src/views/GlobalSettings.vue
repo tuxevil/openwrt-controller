@@ -1,54 +1,54 @@
 <template>
-  <div class="p-8 h-screen w-full flex flex-col gap-6 max-w-5xl overflow-auto text-white">
-    <h2 class="text-3xl glitch-anim border-b border-neon-cyan/30 pb-4 inline-block w-fit text-neon-cyan">> PLATFORM_SETTINGS</h2>
+  <div class="p-4 sm:p-6 lg:p-8 min-h-full w-full flex flex-col gap-6 max-w-5xl mx-auto text-white">
+    <h2 class="text-xl sm:text-2xl font-bold border-b border-neon-cyan/30 pb-3 text-neon-cyan">&gt; PLATFORM_SETTINGS</h2>
 
-    <div v-if="loading" class="text-neon-cyan mt-10">
+    <div v-if="loading" class="text-neon-cyan mt-6 text-sm">
       Initializing connection...
     </div>
 
-    <div v-else class="flex flex-col gap-8 mt-4">
+    <div v-else class="flex flex-col gap-6">
       
       <!-- AI ENGINE -->
-      <div class="neon-panel border-neon-purple/50 flex flex-col gap-6 shadow-neon-purple/20">
-        <h3 class="text-xl text-neon-purple uppercase tracking-widest border-b border-neon-purple/30 pb-2">/ AI_ENGINE</h3>
+      <div class="neon-panel border-neon-cyan/45 flex flex-col gap-5">
+        <h3 class="text-sm sm:text-base text-neon-cyan uppercase tracking-widest border-b border-neon-cyan/25 pb-2">/ AI_ENGINE</h3>
         
-        <div class="flex flex-col md:flex-row gap-6">
-          <div class="flex-1 flex flex-col gap-2">
-            <label class="text-xs text-muted uppercase tracking-widest">OpenAI-Compatible Base URL</label>
-            <input v-model="settings.ai_engine_base_url" type="url" placeholder="https://api.openai.com/v1" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
+        <div class="flex flex-col md:flex-row gap-4">
+          <div class="flex-1 flex flex-col gap-1.5">
+            <label class="text-[10px] text-muted uppercase tracking-widest">OpenAI-Compatible Base URL</label>
+            <input v-model="settings.ai_engine_base_url" type="url" placeholder="https://api.openai.com/v1" class="terminal-input !border-neon-cyan/50 focus:!border-neon-cyan">
           </div>
           
-          <div class="flex-1 flex flex-col gap-2">
-            <label class="text-xs text-muted uppercase tracking-widest">Model</label>
-            <input v-model="settings.ai_engine_model" type="text" placeholder="gpt-4o-mini" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
+          <div class="flex-1 flex flex-col gap-1.5">
+            <label class="text-[10px] text-muted uppercase tracking-widest">Model</label>
+            <input v-model="settings.ai_engine_model" type="text" placeholder="gpt-4o-mini" class="terminal-input !border-neon-cyan/50 focus:!border-neon-cyan">
           </div>
         </div>
 
-        <div class="flex flex-col gap-2">
-          <label class="text-xs text-muted uppercase tracking-widest">Provider API Key</label>
-          <input v-model="settings.ai_engine_api_key" type="password" :placeholder="settings.ai_engine_configured ? 'Key configured; enter a new key to replace it' : 'sk-...'" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono focus:shadow-[0_0_15px_#bc13fe]">
-          <span class="text-xs text-muted">Stored encrypted. Compatible with OpenAI, Azure-compatible gateways, and local OpenAI-compatible servers.</span>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] text-muted uppercase tracking-widest">Provider API Key</label>
+          <input v-model="settings.ai_engine_api_key" type="password" :placeholder="settings.ai_engine_configured ? 'Key configured; enter a new key to replace it' : 'sk-...'" class="terminal-input !border-neon-cyan/50 focus:!border-neon-cyan">
+          <span class="text-[11px] text-muted">Stored encrypted. Compatible with OpenAI, Azure-compatible gateways, and local OpenAI-compatible servers.</span>
         </div>
 
-        <div class="flex flex-col gap-2">
-          <label class="text-xs text-muted uppercase tracking-widest">Sentinel System Prompt</label>
-          <textarea v-model="settings.sentinel_prompt" rows="8" class="bg-black border border-neon-purple text-neon-purple p-3 outline-none font-mono leading-relaxed focus:shadow-[0_0_15px_#bc13fe]"></textarea>
+        <div class="flex flex-col gap-1.5">
+          <label class="text-[10px] text-muted uppercase tracking-widest">Sentinel System Prompt</label>
+          <textarea v-model="settings.sentinel_prompt" rows="7" class="terminal-input !border-neon-cyan/50 focus:!border-neon-cyan leading-relaxed"></textarea>
         </div>
       </div>
 
       <!-- TELEGRAM ALERTING -->
-      <div class="neon-panel border-neon-blue/50 flex flex-col gap-6 shadow-neon-blue/20">
-        <h3 class="text-xl text-neon-blue uppercase tracking-widest border-b border-neon-blue/30 pb-2">/ COMMUNICATIONS (Telegram)</h3>
+      <div class="neon-panel border-neon-blue/45 flex flex-col gap-5">
+        <h3 class="text-sm sm:text-base text-neon-blue uppercase tracking-widest border-b border-neon-blue/25 pb-2">/ COMMUNICATIONS (Telegram)</h3>
 
-        <div class="flex flex-col md:flex-row gap-6">
-          <div class="flex-1 flex flex-col gap-2">
-            <label class="text-xs text-muted uppercase tracking-widest">Bot Token</label>
-            <input v-model="settings.telegram_bot_token" type="password" placeholder="123456:ABC-DEF123..." class="bg-black border border-neon-blue text-neon-blue p-3 outline-none font-mono focus:shadow-[0_0_15px_#00c8ff]">
+        <div class="flex flex-col md:flex-row gap-4">
+          <div class="flex-1 flex flex-col gap-1.5">
+            <label class="text-[10px] text-muted uppercase tracking-widest">Bot Token</label>
+            <input v-model="settings.telegram_bot_token" type="password" placeholder="123456:ABC-DEF123..." class="terminal-input !border-neon-blue/50 focus:!border-neon-blue">
           </div>
 
-          <div class="flex-1 flex flex-col gap-2">
-            <label class="text-xs text-muted uppercase tracking-widest">Chat ID</label>
-            <input v-model="settings.telegram_chat_id" type="text" class="bg-black border border-neon-blue text-neon-blue p-3 outline-none font-mono focus:shadow-[0_0_15px_#00c8ff]">
+          <div class="flex-1 flex flex-col gap-1.5">
+            <label class="text-[10px] text-muted uppercase tracking-widest">Chat ID</label>
+            <input v-model="settings.telegram_chat_id" type="text" class="terminal-input !border-neon-blue/50 focus:!border-neon-blue">
           </div>
         </div>
       </div>

@@ -76,14 +76,14 @@ const isEnabled = computed(() => shieldData.value?.enabled || false)
       bg-[repeating-linear-gradient(0deg,transparent,transparent_2px,rgba(255,255,255,0.07)_2px,rgba(255,255,255,0.07)_4px)]">
     </div>
 
-    <div class="relative z-10 flex flex-col gap-6 p-8">
+    <div class="relative z-10 flex flex-col gap-5 p-4 sm:p-6 lg:p-8">
 
       <!-- ── Header ─────────────────────────────────────────── -->
-      <div class="flex items-center justify-between border-b border-red-500/30 pb-5">
-        <div class="flex items-center gap-4">
+      <div class="flex flex-wrap items-center justify-between gap-4 border-b border-neon-red/30 pb-4">
+        <div class="flex items-center gap-3 min-w-0">
           <!-- Shield pulsing icon -->
-          <div class="relative">
-            <svg class="w-10 h-10" :class="isEnabled ? 'text-red-500' : 'text-gray-600'"
+          <div class="relative shrink-0">
+            <svg class="w-8 h-8 sm:w-10 sm:h-10" :class="isEnabled ? 'text-neon-red' : 'text-muted'"
               fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path stroke-linecap="square" stroke-width="1.5"
                 d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955
@@ -91,16 +91,16 @@ const isEnabled = computed(() => shieldData.value?.enabled || false)
                    10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
             </svg>
             <div v-if="isEnabled"
-              class="absolute inset-0 rounded-full animate-ping opacity-20 bg-red-500 scale-75">
+              class="absolute inset-0 rounded-full animate-ping opacity-20 bg-neon-red scale-75">
             </div>
           </div>
-          <div>
-            <h1 class="text-2xl tracking-[0.25em] font-bold"
-              :class="isEnabled ? 'text-red-400 drop-shadow-[0_0_12px_#ef4444]' : 'text-gray-500'">
+          <div class="min-w-0">
+            <h1 class="text-lg sm:text-2xl tracking-[0.2em] font-bold truncate"
+              :class="isEnabled ? 'text-neon-red' : 'text-muted'">
               [THREAT_SHIELD]
             </h1>
-            <p class="text-[10px] text-gray-600 tracking-widest mt-0.5">
-              INTRUSION PREVENTION SYSTEM · REPUTATION ENGINE v1.0
+            <p class="text-[10px] text-muted tracking-widest mt-0.5 truncate">
+              INTRUSION PREVENTION SYSTEM · REPUTATION ENGINE
             </p>
           </div>
         </div>

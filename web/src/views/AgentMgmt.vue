@@ -108,86 +108,77 @@ onUnmounted(() => clearInterval(pollInterval))
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-6 bg-vantablack text-white font-mono relative overflow-hidden">
-    <div class="absolute inset-0 pointer-events-none shadow-[inset_0_0_150px_rgba(255,255,0,0.03)] z-0"></div>
-
+  <div class="min-h-full flex flex-col p-4 sm:p-6 bg-vantablack text-white font-mono relative">
     <!-- HEADER -->
-    <div class="relative z-10 flex justify-between items-center mb-6 border-b border-[#ffff00]/30 pb-4">
+    <div class="relative z-10 flex flex-wrap justify-between items-start gap-3 mb-5 border-b border-neon-amber/35 pb-4">
       <div>
-        <h1 class="text-3xl text-[#ffff00] font-bold tracking-[0.2em] uppercase drop-shadow-[0_0_8px_rgba(255,255,0,0.5)]">
+        <h1 class="text-xl sm:text-2xl text-neon-amber font-bold tracking-[0.18em] uppercase">
           AGENT_UPDATE_SERVICE
         </h1>
-        <p class="text-muted mt-2 text-sm tracking-widest uppercase">Per-Site Agent Deployment & Rollback Protocol</p>
+        <p class="text-muted mt-1 text-xs tracking-widest uppercase">Per-Site Agent Deployment &amp; Rollback Protocol</p>
       </div>
-      <div class="text-right">
-        <div class="text-xs text-[#ffff00]/70 tracking-widest uppercase mb-1">Active Hash — {{ selectedSiteName }}</div>
-        <div class="font-mono text-sm bg-black p-2 border border-[#ffff00]/30 glow-border">
+      <div class="text-left sm:text-right">
+        <div class="text-[10px] text-neon-amber/70 tracking-widest uppercase mb-1">Active Hash — {{ selectedSiteName }}</div>
+        <div class="font-mono text-xs bg-black px-2.5 py-1.5 border border-neon-amber/35 clip-chamfer-sm break-all">
           {{ latestVersion?.version_hash || 'NO_ACTIVE_VERSION' }}
         </div>
       </div>
     </div>
 
     <!-- SITE SELECTOR -->
-    <div class="relative z-10 mb-6 flex items-center gap-4">
-      <span class="text-xs text-[#ffff00]/70 tracking-widest uppercase whitespace-nowrap">Target Site</span>
-      <div class="relative flex-1 max-w-xs">
+    <div class="relative z-10 mb-5 flex flex-wrap items-center gap-3">
+      <span class="text-xs text-neon-amber/80 tracking-widest uppercase whitespace-nowrap">Target Site</span>
+      <div class="relative flex-1 min-w-[200px] max-w-xs">
         <select
           v-model="selectedSiteId"
           @change="onSiteChange"
-          class="w-full bg-black border border-[#ffff00]/50 text-[#ffff00] px-4 py-2 text-sm font-mono tracking-widest appearance-none focus:outline-none focus:border-[#ffff00] glow-border cursor-pointer"
+          class="terminal-input w-full !border-neon-amber/50 text-neon-amber bg-black cursor-pointer"
         >
           <option v-if="sites.length === 0" value="">Sin sitios registrados</option>
           <option v-for="site in sites" :key="site.id" :value="site.id">
             {{ site.name }}
           </option>
         </select>
-        <div class="pointer-events-none absolute inset-y-0 right-3 flex items-center text-[#ffff00]/60 text-xs">▼</div>
       </div>
-      <div v-if="sites.length === 0" class="text-xs text-orange-400 uppercase tracking-widest">
+      <div v-if="sites.length === 0" class="text-xs text-neon-amber uppercase tracking-widest">
         ⚠ No hay sitios — crea un sitio primero
       </div>
     </div>
 
-    <div v-if="errorMsg" class="relative z-10 bg-red-500/20 border border-red-500 text-red-400 p-3 mb-4 rounded clip-chamfer font-bold">
+    <div v-if="errorMsg" class="relative z-10 bg-neon-red/15 border border-neon-red text-neon-red p-3 mb-4 clip-chamfer-sm font-bold text-xs">
       {{ errorMsg }}
     </div>
 
-    <div class="flex flex-1 gap-6 min-h-0 relative z-10">
+    <div class="flex flex-col lg:flex-row flex-1 gap-5 min-h-0 relative z-10">
 
       <!-- CODE EDITOR -->
-      <div class="flex-1 flex flex-col bg-black border border-[#ffff00]/50 glow-border clip-chamfer overflow-hidden">
-        <div class="bg-[#ffff00]/10 border-b border-[#ffff00]/50 p-2 flex justify-between items-center">
-          <span class="text-[#ffff00] text-xs font-bold tracking-widest uppercase">agent.sh → {{ selectedSiteName }}</span>
-          <span class="text-xs text-muted">Shell Script</span>
+      <div class="flex-1 flex flex-col bg-black border border-neon-amber/50 clip-chamfer overflow-hidden min-h-[320px]">
+        <div class="bg-neon-amber/10 border-b border-neon-amber/40 px-3 py-2 flex justify-between items-center gap-2">
+          <span class="text-neon-amber text-xs font-bold tracking-widest uppercase truncate">agent.sh → {{ selectedSiteName }}</span>
+          <span class="text-[10px] text-muted shrink-0">Shell Script</span>
         </div>
         <textarea
           v-model="scriptContent"
           :disabled="!selectedSiteId"
-          class="flex-1 bg-transparent w-full p-4 font-mono text-sm text-[#ffff00] focus:outline-none resize-none disabled:opacity-40"
+          class="flex-1 bg-transparent w-full p-3 sm:p-4 font-mono text-xs sm:text-sm text-neon-amber focus:outline-none resize-none disabled:opacity-40 min-h-[240px]"
           spellcheck="false"
         ></textarea>
-        <div class="p-4 border-t border-[#ffff00]/30 flex justify-between items-center bg-black">
+        <div class="p-3 sm:p-4 border-t border-neon-amber/30 flex flex-wrap justify-between items-center gap-3 bg-black">
           <div class="text-xs text-muted uppercase">
             Size: {{ scriptContent.length }} bytes
           </div>
           <button
             @click="deployToSite"
             :disabled="isDeploying || !selectedSiteId"
-            class="px-6 py-2 bg-[#ffff00] text-black font-bold tracking-[0.2em] uppercase hover:bg-white transition-all disabled:opacity-50 relative group clip-chamfer"
+            class="px-4 sm:px-5 py-2 bg-neon-amber text-black font-bold text-xs tracking-[0.16em] uppercase hover:bg-white transition-all disabled:opacity-40 clip-chamfer-sm"
           >
-            <span class="relative z-10 flex items-center gap-2">
-              <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="square" stroke-linejoin="miter" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
-              {{ isDeploying ? 'DEPLOYING...' : `DEPLOY → ${selectedSiteName}` }}
-            </span>
-            <div class="absolute inset-0 bg-white opacity-0 group-hover:opacity-20 transition-opacity"></div>
+            {{ isDeploying ? 'DEPLOYING...' : `DEPLOY → ${selectedSiteName}` }}
           </button>
         </div>
       </div>
 
       <!-- DEVICE STATUS MONITOR -->
-      <div class="w-1/3 flex flex-col bg-panel border border-[#ffff00]/30 clip-chamfer overflow-hidden">
+      <div class="w-full lg:w-80 xl:w-96 shrink-0 flex flex-col bg-panel border border-neon-amber/35 clip-chamfer overflow-hidden">
         <div class="p-3 border-b border-[#ffff00]/30 bg-[#ffff00]/5 flex justify-between items-center">
           <span class="text-white text-xs font-bold tracking-widest uppercase">Target Matrix — {{ selectedSiteName }}</span>
           <span class="text-[#ffff00] text-xs">{{ deviceStatuses.length }} nodes</span>

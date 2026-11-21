@@ -52,14 +52,13 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="p-6 h-screen w-full flex flex-col gap-4 bg-vantablack text-white font-mono overflow-auto">
+  <div class="p-4 sm:p-6 min-h-full w-full flex flex-col gap-4 bg-vantablack text-white font-mono">
 
     <!-- HEADER -->
-    <div class="flex justify-between items-center pb-3 border-b border-gray-700">
+    <div class="flex flex-wrap justify-between items-center gap-3 pb-3 border-b border-gridline">
       <div class="flex items-center gap-3">
-        <router-link :to="`/site/${site_id}`" class="text-gray-500 hover:text-white text-sm transition-colors">← BACK</router-link>
-        <h1 class="text-2xl tracking-[0.2em] text-white flex items-center gap-2">
-          <svg class="w-6 h-6 text-neon-green animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <h1 class="text-lg sm:text-2xl font-bold tracking-[0.18em] text-neon-green flex items-center gap-2">
+          <svg class="w-5 h-5 text-neon-green animate-pulse shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <circle cx="12" cy="12" r="10" stroke-width="1.5"/>
             <circle cx="12" cy="12" r="6" stroke-width="1.5" opacity="0.5"/>
             <circle cx="12" cy="12" r="2" stroke-width="1.5"/>
@@ -67,12 +66,12 @@ onUnmounted(() => {
           FLOW_RADAR
         </h1>
       </div>
-      <div class="flex items-center gap-6 text-xs tracking-widest">
-        <span class="text-gray-500">TOTAL_FLOWS: <span class="text-white">{{ totalConnections }}</span></span>
-        <span :class="flaggedCount > 0 ? 'text-neon-red' : 'text-gray-500'">
+      <div class="flex flex-wrap items-center gap-3 sm:gap-5 text-xs tracking-widest">
+        <span class="text-muted">FLOWS: <span class="text-white font-bold">{{ totalConnections }}</span></span>
+        <span :class="flaggedCount > 0 ? 'text-neon-red' : 'text-muted'">
           FLAGGED: <span class="font-bold">{{ flaggedCount }}</span>
         </span>
-        <span class="text-gray-600 text-[10px]">AUTO-REFRESH 15s</span>
+        <span class="text-muted text-[10px]">15s POLL</span>
       </div>
     </div>
 

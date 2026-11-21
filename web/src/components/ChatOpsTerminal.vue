@@ -81,9 +81,14 @@ function close() {
   command.value = ''
 }
 
-// Global toggle with ~ key
+// Global toggle with ~ key (ignore when user is typing in another input)
 function handleGlobalKeydown(e) {
-  if (e.key === '`' || e.key === '~') {
+  const tag = e.target?.tagName?.toLowerCase()
+  const isTypingElsewhere =
+    !props.modelValue &&
+    (tag === 'input' || tag === 'textarea' || tag === 'select' || e.target?.isContentEditable)
+
+  if ((e.key === '`' || e.key === '~') && !isTypingElsewhere) {
     e.preventDefault()
     if (props.modelValue) {
       close()
@@ -178,22 +183,22 @@ function renderTable(rows) {
 </script>
 
 <template>
-  <div v-show="modelValue" class="fixed inset-0 z-50 flex items-start justify-center pt-24 font-mono">
+  <div v-show="modelValue" class="fixed inset-0 z-50 flex items-start justify-center pt-4 sm:pt-16 px-2 sm:px-4 font-mono">
     <!-- Backdrop Blur -->
     <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" @click="close"></div>
     
     <!-- Terminal Window -->
-    <div class="relative w-full max-w-4xl bg-black border border-neon-cyan/50 shadow-[0_0_30px_rgba(0,255,255,0.15)] flex flex-col clip-chamfer min-h-[400px] max-h-[70vh]">
+    <div class="relative w-full max-w-4xl bg-panel border border-neon-cyan/50 shadow-[0_0_36px_rgba(0,240,255,0.18)] flex flex-col clip-chamfer min-h-[360px] max-h-[88dvh] sm:max-h-[75vh]">
       
       <!-- Top Bar -->
-      <div class="flex items-center justify-between px-4 py-2 border-b border-neon-cyan/30 bg-neon-cyan/10">
-        <div>
-          <div class="text-xs text-neon-cyan tracking-widest font-bold">/// SENTINEL_OPERATOR_CONSOLE</div>
-          <div class="text-[10px] text-neon-cyan/60 tracking-widest mt-1">
+      <div class="flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 border-b border-neon-cyan/30 bg-neon-cyan/10">
+        <div class="min-w-0">
+          <div class="text-xs text-neon-cyan tracking-widest font-bold truncate">/// SENTINEL_OPERATOR_CONSOLE</div>
+          <div class="text-[10px] text-neon-cyan/70 tracking-widest mt-0.5 truncate">
             SITE_CONTEXT: {{ activeSiteId || 'FLEET_SCOPE' }}
           </div>
         </div>
-        <button type="button" aria-label="Close Sentinel Operator chat" @click="close" class="text-gray-500 hover:text-red-400">
+        <button type="button" aria-label="Close Sentinel Operator chat" @click="close" class="p-1.5 text-muted hover:text-neon-red border border-transparent hover:border-neon-red/40 transition-colors shrink-0">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>
@@ -244,19 +249,25 @@ function renderTable(rows) {
       </div>
 
       <!-- Input Area -->
-      <form @submit.prevent="executeCommand" class="p-3 border-t border-neon-cyan/30 bg-black flex items-center gap-3">
-        <span class="text-neon-cyan">❯</span>
+      <form @submit.prevent="executeCommand" class="p-2.5 sm:p-3 border-t border-neon-cyan/30 bg-black flex items-center gap-2 sm:gap-3">
+        <span class="text-neon-cyan shrink-0">❯</span>
         <input 
           ref="inputEl"
           v-model="command"
           type="text"
-          class="flex-1 bg-transparent border-none outline-none text-white placeholder-gray-700 text-sm focus:ring-0 shadow-none appearance-none"
+          class="flex-1 min-w-0 bg-transparent border-none outline-none text-white placeholder-muted text-sm focus:ring-0 shadow-none appearance-none"
           placeholder="Ask Sentinel about your infrastructure..."
           :disabled="isProcessing"
           autocomplete="off"
           spellcheck="false"
         />
-        <div class="h-4 w-2 bg-neon-cyan animate-pulse" :class="{'opacity-0': !command}"></div>
+        <button
+          type="submit"
+          :disabled="isProcessing || !command.trim()"
+          class="px-3 py-1.5 border border-neon-cyan/60 text-neon-cyan hover:bg-neon-cyan hover:text-black disabled:opacity-35 text-[10px] font-bold tracking-widest uppercase clip-chamfer-sm transition-colors shrink-0"
+        >
+          SEND
+        </button>
       </form>
 
     </div>

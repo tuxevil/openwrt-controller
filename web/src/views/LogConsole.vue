@@ -121,53 +121,49 @@ const deviceColor = (name) => {
 </script>
 
 <template>
-  <div class="h-full flex flex-col p-8 bg-vantablack text-white font-mono gap-6 overflow-hidden">
+  <div class="h-full min-h-[72dvh] flex flex-col p-4 sm:p-6 bg-vantablack text-white font-mono gap-4 overflow-hidden">
     <!-- Header -->
-    <div class="flex items-center justify-between border-b border-neon-white pb-4 shrink-0">
-      <h1 class="text-3xl text-neon-white drop-shadow-[0_0_10px_#ffffff] tracking-widest">> LOG_EXPLORER</h1>
-      <div class="flex items-center gap-4 flex-wrap">
+    <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-neon-green/30 pb-3 shrink-0">
+      <h1 class="text-lg sm:text-2xl text-neon-green font-bold tracking-widest">&gt; LOG_EXPLORER</h1>
+      <div class="grid grid-cols-2 sm:flex sm:items-center gap-2 flex-wrap">
         <!-- Live Tail Switch -->
-        <label class="flex items-center gap-2 cursor-pointer border border-[#333] px-3 py-1 hover:border-neon-green transition-colors" :class="{'border-neon-green bg-neon-green/10': liveTail}">
+        <label class="flex items-center justify-center gap-2 cursor-pointer border border-gridline px-3 py-1.5 hover:border-neon-green transition-colors clip-chamfer-sm" :class="{'border-neon-green bg-neon-green/10': liveTail}">
           <input type="checkbox" v-model="liveTail" class="hidden" />
-          <span class="text-xs tracking-widest font-bold" :class="liveTail ? 'text-neon-green drop-shadow-[0_0_5px_#00ff00]' : 'text-gray-500'">[LIVE_TAIL]</span>
+          <span class="text-[11px] tracking-widest font-bold" :class="liveTail ? 'text-neon-green' : 'text-muted'">[LIVE_TAIL]</span>
         </label>
-        
+
         <!-- Device filter -->
-        <select v-model="deviceFilter" class="bg-black border border-neon-white/40 text-white px-3 py-1 font-mono text-sm focus:outline-none appearance-none cursor-pointer hover:border-neon-white transition">
-          <option value="ALL">>> ALL_DEVICES</option>
-          <option v-for="d in deviceList" :key="d" :value="d">>> {{ d }}</option>
+        <select v-model="deviceFilter" class="terminal-input text-xs py-1.5 bg-black">
+          <option value="ALL">ALL_DEVICES</option>
+          <option v-for="d in deviceList" :key="d" :value="d">{{ d }}</option>
+        </select>
+
+        <!-- Severity -->
+        <select v-model="severityFilter" class="terminal-input text-xs py-1.5 bg-black">
+          <option value="ALL">ALL_LEVELS</option>
+          <option value="INFO">INFO</option>
+          <option value="WARN">WARN</option>
+          <option value="ERROR">ERROR</option>
         </select>
 
         <!-- Search -->
-        <input v-model="searchQuery" type="text" placeholder="FILTER_BY_REGEX..." class="bg-black border border-neon-white/40 text-white px-3 py-1 font-mono text-sm focus:outline-none focus:border-neon-white transition w-64" />
-        
-        <!-- Severity -->
-        <select v-model="severityFilter" class="bg-black border border-neon-white/40 text-white px-3 py-1 font-mono text-sm focus:outline-none appearance-none cursor-pointer hover:border-neon-white transition">
-          <option value="ALL">>> ALL_LEVELS</option>
-          <option value="INFO">>> INFO</option>
-          <option value="WARN">>> WARN</option>
-          <option value="ERROR">>> ERROR</option>
-        </select>
+        <input v-model="searchQuery" type="text" placeholder="FILTER_BY_REGEX..." class="terminal-input text-xs py-1.5 col-span-2 sm:w-52" />
       </div>
     </div>
 
     <!-- Monospaced Log List -->
-    <div ref="logContainer" class="flex-1 overflow-auto bg-[#050505] border border-[#1a1a1a] p-4 text-xs font-mono leading-relaxed relative scroll-smooth">
-      <!-- Empty state -->
-      <div v-if="renderedLogs.length === 0" class="absolute inset-0 flex items-center justify-center text-neon-white/30 text-xs animate-pulse pointer-events-none">
+    <div ref="logContainer" class="flex-1 min-h-[320px] overflow-auto bg-[#040506] border border-gridline p-3 sm:p-4 text-[11px] sm:text-xs font-mono leading-relaxed relative scroll-smooth clip-chamfer-sm">
+      <div v-if="renderedLogs.length === 0" class="absolute inset-0 flex items-center justify-center text-muted text-xs animate-pulse pointer-events-none">
         NO_LOGS_DETECTED...
       </div>
-      
-      <div v-for="(l, idx) in renderedLogs" :key="idx" class="flex gap-3 mb-1 hover:bg-white/5 transition-colors px-2 py-1 items-baseline">
-        <!-- Device badge -->
+
+      <div v-for="(l, idx) in renderedLogs" :key="idx" class="flex flex-wrap sm:flex-nowrap gap-x-2.5 gap-y-1 mb-1.5 hover:bg-white/5 transition-colors px-2 py-1 items-baseline border-b border-white/[0.03] sm:border-none">
         <span
           class="shrink-0 px-2 py-0.5 text-[10px] font-bold tracking-widest border select-none whitespace-nowrap"
           :style="{ color: deviceColor(l.device_name), borderColor: deviceColor(l.device_name) + '55', backgroundColor: deviceColor(l.device_name) + '15' }"
         >{{ l.device_name || l.device_id || '?' }}</span>
-        <!-- Severity -->
-        <span class="shrink-0 w-14 select-none font-bold tracking-widest" :class="getSeverityColor(l.level)">{{ l.level }}</span>
-        <!-- Message -->
-        <span class="text-white/80 break-all" v-html="highlightIdentifiers(l.message)"></span>
+        <span class="shrink-0 w-12 select-none font-bold tracking-widest" :class="getSeverityColor(l.level)">{{ l.level }}</span>
+        <span class="text-gray-200 break-all w-full sm:w-auto" v-html="highlightIdentifiers(l.message)"></span>
       </div>
     </div>
   </div>

@@ -11,29 +11,32 @@ const { svgContainer, selectedNode, load, goTerminal } = useEchoLocation(
 </script>
 
 <template>
-  <div class="h-full w-full flex flex-col p-8 overflow-hidden gap-6 relative bg-black">
-    <div class="flex items-center justify-between border-b border-[#00ffff]/50 pb-4 shrink-0 z-10">
-      <h1 class="text-3xl glitch-anim text-[#00ffff] font-mono">&gt; ECHO_LOCATION [L2_MAP]</h1>
-      <button @click="load" class="text-xs text-[#b026ff] border border-[#b026ff] px-3 py-1 hover:bg-[#b026ff] hover:text-black transition-colors clip-chamfer">PING_SWEEP</button>
+  <div class="h-full min-h-[72dvh] w-full flex flex-col p-4 sm:p-6 overflow-hidden gap-4 relative bg-vantablack">
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-neon-cyan/40 pb-3 shrink-0 z-10">
+      <h1 class="text-lg sm:text-2xl font-bold text-neon-cyan font-mono">&gt; ECHO_LOCATION [L2_MAP]</h1>
+      <button @click="load" class="text-xs font-bold text-neon-cyan border border-neon-cyan/70 px-3 py-1.5 hover:bg-neon-cyan hover:text-black transition-colors clip-chamfer-sm">PING_SWEEP</button>
     </div>
 
-    <div class="flex-1 neon-panel flex bg-[#000000] border border-[#1a1a1a] relative overflow-hidden echogrid">
+    <div class="flex-1 min-h-[360px] neon-panel !p-0 flex bg-[#030406] border border-gridline relative overflow-hidden echogrid">
       <div ref="svgContainer" class="w-full h-full relative cursor-crosshair"></div>
 
       <div v-if="selectedNode"
-           class="absolute right-4 top-4 w-64 bg-[#0a0a0a] border border-[#00ffff]/50 p-4 neon-panel shadow-[0_0_15px_rgba(0,255,255,0.2)] z-20 flex flex-col gap-4 text-white">
-        <h3 class="text-[#00ffff] font-bold text-lg border-b border-[#00ffff]/30 pb-2">NODE_IDENTITY</h3>
-        <div class="font-mono text-sm space-y-2">
+           class="absolute inset-x-3 bottom-3 sm:inset-auto sm:right-4 sm:top-4 sm:w-64 bg-panel/95 backdrop-blur-md border border-neon-cyan/60 p-4 neon-panel shadow-[0_0_18px_rgba(0,240,255,0.2)] z-20 flex flex-col gap-3 text-white">
+        <div class="flex items-center justify-between border-b border-neon-cyan/30 pb-2">
+          <h3 class="text-neon-cyan font-bold text-sm">NODE_IDENTITY</h3>
+          <button type="button" @click="selectedNode = null" class="text-muted hover:text-white text-xs">[X]</button>
+        </div>
+        <div class="font-mono text-xs space-y-1.5">
            <p><span class="text-muted">NAME:</span> <span>{{ selectedNode.name }}</span></p>
-           <p><span class="text-muted">MAC:</span> <span>{{ selectedNode.id }}</span></p>
-           <p><span class="text-muted">ROLE:</span> <span>{{ selectedNode.type.toUpperCase() }}</span></p>
-           <p v-if="selectedNode.type !== 'client'"><span class="text-muted">CPU:</span> <span class="text-[#00ffff]">{{ selectedNode.cpu_load || 'N/A' }}</span></p>
-           <div v-if="selectedNode.has_alert" class="text-neon-red font-bold glitch-anim mt-4">
+           <p><span class="text-muted">MAC:</span> <span class="break-all">{{ selectedNode.id }}</span></p>
+           <p><span class="text-muted">ROLE:</span> <span class="text-neon-cyan">{{ selectedNode.type.toUpperCase() }}</span></p>
+           <p v-if="selectedNode.type !== 'client'"><span class="text-muted">CPU:</span> <span class="text-neon-green">{{ selectedNode.cpu_load || 'N/A' }}</span></p>
+           <div v-if="selectedNode.has_alert" class="text-neon-red font-bold glitch-anim mt-2">
               [!] BREACH_DETECTED
            </div>
         </div>
         <button v-if="selectedNode.type !== 'client'" @click="goTerminal(selectedNode.id)"
-                class="mt-4 bg-[#00ffff]/10 border border-[#00ffff] text-[#00ffff] px-4 py-2 text-sm hover:bg-[#00ffff] hover:text-black transition-colors clip-chamfer text-center w-full">
+                class="mt-1 bg-neon-cyan/10 border border-neon-cyan text-neon-cyan px-3 py-2 text-xs font-bold hover:bg-neon-cyan hover:text-black transition-colors clip-chamfer-sm text-center w-full">
           &gt; ESTABLISH_UPLINK
         </button>
       </div>
@@ -44,12 +47,9 @@ const { svgContainer, selectedNode, load, goTerminal } = useEchoLocation(
 <style scoped>
 .echogrid {
   background-image:
-    linear-gradient(rgba(0, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(176, 38, 255, 0.03) 1px, transparent 1px);
+    linear-gradient(rgba(0, 240, 255, 0.04) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 255, 65, 0.035) 1px, transparent 1px);
   background-size: 40px 40px;
   background-position: center center;
-}
-.text-muted {
-  color: #666;
 }
 </style>

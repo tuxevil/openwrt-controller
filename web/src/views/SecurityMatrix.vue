@@ -311,47 +311,53 @@ onUnmounted(() => {
 
 <style scoped>
 .matrix-container {
-  padding: 2rem;
-  background-color: #050510;
-  min-height: 100vh;
-  color: #fff;
-  font-family: 'Courier New', Courier, monospace;
+  padding: 1rem;
+  background-color: #050607;
+  min-height: 100%;
+  color: #e5e7eb;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+@media (min-width: 640px) {
+  .matrix-container {
+    padding: 1.5rem 2rem;
+  }
 }
 
 .header {
   text-align: center;
-  margin-bottom: 3rem;
-  border-bottom: 1px solid rgba(188, 19, 254, 0.3);
-  padding-bottom: 2rem;
+  margin-bottom: 1.75rem;
+  border-bottom: 1px solid rgba(0, 240, 255, 0.28);
+  padding-bottom: 1.25rem;
 }
 
 h1 {
-  font-size: 2.5rem;
+  font-size: clamp(1.35rem, 3.5vw, 2.15rem);
   margin: 0;
   letter-spacing: 2px;
 }
 
 .neon-purple {
-  color: #bc13fe;
-  text-shadow: 0 0 10px #bc13fe, 0 0 20px #bc13fe;
+  color: #00ff41;
+  text-shadow: 0 0 10px rgba(0, 255, 65, 0.45);
 }
 
 .neon-cyan {
-  color: #00ffff;
-  text-shadow: 0 0 10px #00ffff, 0 0 20px #00ffff;
+  color: #00f0ff;
+  text-shadow: 0 0 10px rgba(0, 240, 255, 0.45);
 }
 
 .neon-cyan-bg {
-  background-color: rgba(0, 255, 255, 0.1);
-  border: 1px solid #00ffff;
-  color: #00ffff;
-  box-shadow: 0 0 8px rgba(0, 255, 255, 0.5);
+  background-color: rgba(0, 240, 255, 0.1);
+  border: 1px solid #00f0ff;
+  color: #00f0ff;
+  box-shadow: 0 0 8px rgba(0, 240, 255, 0.35);
 }
 
 .subtitle {
-  color: #888;
-  margin-top: 0.5rem;
-  font-size: 1.1rem;
+  color: #7b8a97;
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
 }
 
 .loading, .empty {
