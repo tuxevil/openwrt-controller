@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -35,6 +36,8 @@ type sentinelNativeConversation struct {
 	messages []aiChatMessage
 	callIDs  map[string]bool
 	pending  []aiToolCall
+	requests int
+	retried  bool
 }
 
 func newSentinelNativeConversation(class SentinelReasoningClass, prompt string) *sentinelNativeConversation {
@@ -93,19 +96,34 @@ func sentinelNativeCatalog() []map[string]any {
 	return tools
 }
 
+var errSentinelTextualNativeCall = errors.New("native model returned textual tool calls")
+
 func (c *sentinelNativeConversation) next(ctx context.Context, remaining int) (sentinelAssistantTurn, string, int, error) {
 	payload := map[string]any{"model": c.route.Model, "messages": c.messages, "tools": sentinelNativeCatalog()}
 	if remaining <= 0 {
 		payload["tool_choice"] = "none"
 	}
-	start := time.Now()
-	reply, err := requestAICompletion(ctx, c.route.BaseURL, c.route.APIKey, payload)
-	if err != nil {
-		return sentinelAssistantTurn{}, c.route.Model, 0, fmt.Errorf("native model request failed: %w", err)
+	var tokens int
+	for {
+		start := time.Now()
+		c.requests++
+		reply, err := requestAICompletion(ctx, c.route.BaseURL, c.route.APIKey, payload)
+		if err != nil {
+			return sentinelAssistantTurn{}, c.route.Model, tokens, fmt.Errorf("native model request failed: %w", err)
+		}
+		tokens += reply.Usage.TotalTokens
+		turn, err := c.normalize(reply, remaining)
+		logSentinelNativeTurn(c.route, reply, time.Since(start), len(turn.ToolCalls), err != nil)
+		if !errors.Is(err, errSentinelTextualNativeCall) || c.retried || c.requests >= sentinelMaxRounds {
+			return turn, c.route.Model, tokens, err
+		}
+
+		// The rejected response never enters the transcript or reaches the registry.
+		c.retried = true
+		correction := aiChatMessage{Role: "user", Content: "Reformat the previous response. Request evidence through the native functions, or return only a final JSON object with message and no textual tool_calls."}
+		payload["messages"] = append(append([]aiChatMessage(nil), c.messages...), correction)
+		slog.Info("Sentinel retrying textual tool response", "route", c.route.Class, "request", c.requests)
 	}
-	turn, err := c.normalize(reply, remaining)
-	logSentinelNativeTurn(c.route, reply, time.Since(start), len(turn.ToolCalls), err != nil)
-	return turn, c.route.Model, reply.Usage.TotalTokens, err
 }
 
 func (c *sentinelNativeConversation) normalize(reply aiCompletion, remaining int) (sentinelAssistantTurn, error) {
@@ -116,7 +134,7 @@ func (c *sentinelNativeConversation) normalize(reply aiCompletion, remaining int
 	if len(choice.Message.ToolCalls) == 0 {
 		turn, err := parseSentinelEnvelope(choice.Message.Content)
 		if err == nil && len(turn.ToolCalls) != 0 {
-			return sentinelAssistantTurn{}, fmt.Errorf("native model returned textual tool calls")
+			return sentinelAssistantTurn{}, errSentinelTextualNativeCall
 		}
 		return turn, err
 	}

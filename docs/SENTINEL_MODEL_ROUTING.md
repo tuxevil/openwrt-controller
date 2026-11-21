@@ -133,3 +133,9 @@ muestra y cerró la investigación en 897 ms adicionales.
 La medición cubre el intercambio autenticado entre el harness y LiteLLM.
 Las comprobaciones de arranque del dashboard y de independencia de WAN
 del servidor de inferencia forman parte de una prueba de despliegue.
+
+Ante un turno nativo que devuelve llamadas en JSON textual, Sentinel
+descarta ese turno y solicita una reformulación una sola vez por
+investigación. La reformulación consume una de las ocho rondas y sus
+tokens se suman al total. Las llamadas rechazadas quedan fuera del
+historial del proveedor y del registro de ejecución de herramientas.

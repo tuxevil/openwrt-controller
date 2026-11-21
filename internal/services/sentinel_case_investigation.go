@@ -134,7 +134,7 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 	observedCalls := make(map[string]bool)
 	native := newSentinelNativeConversation(reasoningClass, prompt.String())
 
-	for round := 0; round < sentinelMaxRounds; round++ {
+	for round := 0; round < sentinelMaxRounds && result.Rounds < sentinelMaxRounds; round++ {
 		if err := ctx.Err(); err != nil {
 			result.Answer = "Investigation timed out before Sentinel could complete its evidence review."
 			return result, err
@@ -155,6 +155,9 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 			}
 		}
 		result.Rounds = round + 1
+		if native != nil {
+			result.Rounds = native.requests
+		}
 		result.LLMModel = model
 		result.TokensUsed += tokens
 		if err != nil {
