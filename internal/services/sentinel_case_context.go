@@ -591,11 +591,22 @@ func executeSentinelCaseRun(ctx context.Context, schema, runID string) (Sentinel
 		return SentinelInvestigationResult{}, nil, caseID, err
 	}
 	history = trimCurrentSentinelQuery(history, query)
-	result, err := runSentinelInvestigationForCase(ctx, schema, caseID, history, query, siteID)
-	if err != nil {
-		return result, nil, caseID, err
-	}
+	result, investigationErr := runSentinelInvestigationForCase(ctx, schema, caseID, history, query, siteID)
 	refs, err := PersistSentinelCaseEvidence(schema, caseID, runID, "operator_chat", result.Evidence)
+	runEvidence := sentinelJSONData(map[string]interface{}{
+		"case_id": caseID, "evidence_refs": refs, "evidence": result.Evidence,
+		"stop_reason": result.StopReason,
+	})
+	if investigationErr != nil {
+		if err != nil {
+			logSentinelInvestigationError(runID, err)
+		}
+		if _, evidenceErr := database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_runs SET evidence = $1
+			WHERE id = $2 AND status = 'RUNNING'`, safeSchema), runEvidence, runID); evidenceErr != nil {
+			logSentinelInvestigationError(runID, evidenceErr)
+		}
+		return result, nil, caseID, investigationErr
+	}
 	if err != nil {
 		return result, nil, caseID, err
 	}
@@ -605,7 +616,7 @@ func executeSentinelCaseRun(ctx context.Context, schema, runID string) (Sentinel
 	reasoningClass := ClassifySentinelReasoning(item, query)
 	metadata, _ := json.Marshal(map[string]interface{}{
 		"case_id": caseID, "evidence_refs": refs, "tool_calls": result.ToolCalls, "rounds": result.Rounds,
-		"llm_model": result.LLMModel, "tokens_used": result.TokensUsed, "reasoning_class": reasoningClass,
+		"llm_model": result.LLMModel, "tokens_used": result.TokensUsed, "reasoning_class": reasoningClass, "stop_reason": result.StopReason,
 	})
 	if err := appendSentinelMessage(schema, conversationID, "assistant", result.Answer, metadata); err != nil {
 		return result, nil, caseID, err
@@ -620,7 +631,6 @@ func executeSentinelCaseRun(ctx context.Context, schema, runID string) (Sentinel
 		proposal = &created
 		proposalID = created.ID
 	}
-	runEvidence := sentinelJSONData(map[string]interface{}{"case_id": caseID, "evidence_refs": refs, "evidence": result.Evidence})
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
 	if _, err := database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_runs SET status = 'COMPLETED', answer = $1,
 		evidence = $2, proposal_id = NULLIF($3,'')::uuid, updated_at = CURRENT_TIMESTAMP WHERE id = $4`, safeSchema),

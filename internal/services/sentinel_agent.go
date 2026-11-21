@@ -53,6 +53,7 @@ type SentinelEvidence struct {
 }
 
 type SentinelInvestigationResult struct {
+	StopReason string                 `json:"stop_reason,omitempty"`
 	Answer     string                 `json:"answer"`
 	Evidence   []SentinelEvidence     `json:"evidence,omitempty"`
 	Proposal   *SentinelProposalDraft `json:"proposal,omitempty"`

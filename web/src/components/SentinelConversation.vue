@@ -29,6 +29,9 @@
     <article v-for="turn in turns" :key="turn.id" class="mt-4 border-t border-slate-700 pt-3">
       <h3 class="font-semibold">{{ turn.query }}</h3>
       <p class="mt-2 whitespace-pre-wrap">{{ turn.answer }}</p>
+      <p v-if="stopReasons[turn.evidence?.stop_reason]" class="text-sm text-slate-300">
+        {{ stopReasons[turn.evidence.stop_reason] }}
+      </p>
       <p v-if="turn.case_id" class="mt-2 text-sm text-slate-300">Caso {{ turn.case_id }}</p>
       <details v-if="turn.evidence" class="mt-2">
         <summary>Evidencia</summary>
@@ -41,6 +44,15 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import api from '../services/api';
+
+const stopReasons = {
+  timeout: 'Tiempo de investigación agotado.',
+  canceled: 'Investigación cancelada.',
+  model_error: 'Falló el turno del modelo.',
+  context_error: 'No se pudo preparar el contexto del caso.',
+  tool_limit: 'Resultado parcial. Se agotó el presupuesto de herramientas.',
+  round_limit: 'Resultado parcial. Se alcanzó el límite de rondas.'
+};
 
 const query = ref('');
 const turns = ref([]);
@@ -125,6 +137,7 @@ async function ask() {
         return;
       }
       if (run.status !== 'QUEUED' && run.status !== 'RUNNING') {
+        turns.value.unshift({ ...run, query: question });
         error.value = `La investigación terminó con estado ${run.status}. Ejecución ${queued.id}.`;
         return;
       }

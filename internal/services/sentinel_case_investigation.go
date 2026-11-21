@@ -3,7 +3,9 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -82,8 +84,23 @@ func appendSentinelCaseEvidencePrompt(prompt *strings.Builder, toolName, encoded
 // The system prompt remains static and privileged. All dynamic Case data,
 // conversation history, prior evidence, telemetry, and tool results are
 // serialized as explicitly data-only JSON below that boundary.
-func runSentinelInvestigationForCase(parent context.Context, schema, caseID string, history []SentinelStoredMessage, query, siteID string) (SentinelInvestigationResult, error) {
-	result := SentinelInvestigationResult{}
+func runSentinelInvestigationForCase(parent context.Context, schema, caseID string, history []SentinelStoredMessage, query, siteID string) (result SentinelInvestigationResult, runErr error) {
+	started := time.Now()
+	defer func() {
+		switch {
+		case errors.Is(runErr, context.DeadlineExceeded):
+			result.StopReason = "timeout"
+		case errors.Is(runErr, context.Canceled):
+			result.StopReason = "canceled"
+		case result.StopReason == "" && runErr != nil:
+			result.StopReason = "context_error"
+		case result.StopReason == "":
+			result.StopReason = "conclusion"
+		}
+		slog.Info("Sentinel investigation ended", "case", caseID, "model", result.LLMModel,
+			"stop_reason", result.StopReason, "rounds", result.Rounds, "tool_calls", result.ToolCalls,
+			"tokens", result.TokensUsed, "duration_ms", time.Since(started).Milliseconds())
+	}()
 	ctx, cancel := context.WithTimeout(parent, 3*time.Minute)
 	defer cancel()
 	toolBudget := NewSentinelToolBudget()
@@ -141,6 +158,7 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 		result.LLMModel = model
 		result.TokensUsed += tokens
 		if err != nil {
+			result.StopReason = "model_error"
 			return result, err
 		}
 		if envelope.Message != "" {
@@ -204,6 +222,11 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 			}
 		}
 	}
+	result.StopReason = "round_limit"
+	if modelToolCalls >= modelToolLimit {
+		result.StopReason = "tool_limit"
+	}
+	result.Proposal = nil
 	if result.Answer == "" {
 		result.Answer = "Investigation reached its tool or round limit. Review the collected evidence and continue the Case for deeper analysis."
 	}
