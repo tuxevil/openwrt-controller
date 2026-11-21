@@ -21,6 +21,9 @@ const newSurveyorLabel = ref('')
 const newAccessMode = ref('authenticated')
 const sitePublicAllowed = ref(false)
 const newSurveyorMAC = ref('')
+const detectedMAC = ref('')
+const detectingMAC = ref(false)
+let detectionRequest = 0
 const newSurveyResponse = ref(null) // { id, survey_token, survey_url, ... }
 const showQrModal = ref(null) // survey with token + url + qr dataurl
 const mapEl = ref(null)
@@ -220,13 +223,39 @@ function drawPoints() {
 }
 
 // ─── New survey ─────────────────────────────────────────────────────────────
+watch(newAccessMode, (mode) => {
+  if (mode === 'public' && newSurveyorMAC.value === detectedMAC.value) {
+    newSurveyorMAC.value = ''
+  }
+})
+
+async function detectCurrentDevice() {
+  const request = ++detectionRequest
+  const site = siteId.value
+  detectingMAC.value = true
+  try {
+    const { data } = await api.detectSurveyDevice(site)
+    if (request !== detectionRequest || !showNewModal.value || site !== siteId.value) return
+    if (newAccessMode.value === 'authenticated' && !newSurveyorMAC.value.trim()) {
+      detectedMAC.value = data.surveyor_mac || ''
+      newSurveyorMAC.value = detectedMAC.value
+    }
+  } catch {
+    // Keep manual entry available when the device cannot be detected.
+  } finally {
+    if (request === detectionRequest) detectingMAC.value = false
+  }
+}
+
 function openNew() {
   newName.value = ''
   newSurveyorLabel.value = ''
   newSurveyorMAC.value = ''
+  detectedMAC.value = ''
   newAccessMode.value = 'authenticated'
   newSurveyResponse.value = null
   showNewModal.value = true
+  detectCurrentDevice()
 }
 
 async function createSurvey() {
@@ -543,7 +572,15 @@ function backToList() {
         <label v-if="!newSurveyResponse" class="block text-xs text-gray-400">
           ANDROID WI-FI MAC
           <input v-model="newSurveyorMAC" placeholder="aa:bb:cc:dd:ee:ff" class="mt-1 w-full bg-black border border-gray-700 text-white px-3 py-2" />
-          On Android, open Settings → Wi-Fi → your connected network and copy its MAC address.
+          <span v-if="newAccessMode === 'authenticated' && detectingMAC">Detecting this device…</span>
+          <span v-else-if="detectedMAC && newSurveyorMAC === detectedMAC">
+            Detected for this device. If another phone will walk the survey, open Nerve Center on that phone.
+          </span>
+          <span v-else>
+            On Android, open Settings → Wi-Fi → your connected network and copy its MAC address.
+          </span>
+          <button v-if="newAccessMode === 'authenticated' && !newSurveyorMAC && !detectingMAC"
+            type="button" @click="detectCurrentDevice" class="ml-2 underline text-cyan-400">Detect again</button>
         </label>
 
         <!-- Result with token (only shown once) -->
@@ -567,7 +604,7 @@ function backToList() {
 
         <div class="flex justify-end gap-2 pt-2">
           <button v-if="!newSurveyResponse" @click="showNewModal = false" class="px-4 py-2 border border-gray-600 text-gray-400 clip-chamfer">CANCEL</button>
-          <button v-if="!newSurveyResponse" @click="createSurvey" class="px-4 py-2 border-2 border-[#39FF14] text-[#39FF14] clip-chamfer font-bold hover:bg-[#39FF14] hover:text-black">CREATE</button>
+          <button v-if="!newSurveyResponse" :disabled="!newSurveyorMAC.trim()" @click="createSurvey" class="px-4 py-2 border-2 border-[#39FF14] text-[#39FF14] clip-chamfer font-bold hover:bg-[#39FF14] hover:text-black">CREATE</button>
           <button v-else @click="showNewModal = false" class="px-4 py-2 border-2 border-[#39FF14] text-[#39FF14] clip-chamfer font-bold hover:bg-[#39FF14] hover:text-black">DONE</button>
         </div>
       </div>

@@ -317,6 +317,9 @@ export default {
   listSurveys(siteId) {
     return apiClient.get(`/sites/${siteId}/surveys`)
   },
+  detectSurveyDevice(siteId) {
+    return apiClient.get(`/sites/${siteId}/surveys/detect-device`, { timeout: 5000 })
+  },
   createSurvey(siteId, payload) {
     return apiClient.post(`/sites/${siteId}/surveys`, payload)
   },

@@ -257,6 +257,7 @@ func SetupRoutes() *http.ServeMux {
 	// ── WIFI_SURVEY / site-scoped CRUD (admin) ──────────────────────────────
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys", middleware.WithAuth(handlers.CreateSurveyHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys", middleware.WithAuth(handlers.ListSiteSurveysHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/surveys/detect-device", middleware.WithAuth(handlers.DetectSurveyorHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}", middleware.WithAuth(handlers.GetSurveyHandler))
 	mux.HandleFunc("DELETE /api/sites/{site_id}/surveys/{survey_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteSurveyHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/start", middleware.WithAuth(handlers.StartSurveyHandler))
