@@ -103,7 +103,9 @@ verificó por API en la prueba anterior.
 
 La prueba de Chromium se repitió con LiteLLM y `gemma4:e2b` reales mediante
 el relé TLS dedicado. Chromium y el controlador compartieron un espacio
-de red sin rutas externas. Pasaron el login, ambos informes, el historial,
-una consulta nueva desde el navegador y la lectura del acuse persistido.
+de red sin rutas externas. Pasaron el login, ambos informes, el historial y la lectura del acuse
+persistido. Una consulta por API completó dos rondas. La consulta
+nueva iniciada desde Chromium se registró y terminó en error de
+protocolo: Gemma devolvió una llamada textual en modo nativo.
 La base y los nodos fueron sintéticos. El aislamiento del host de LiteLLM
 y el despliegue de uso diario permanecen pendientes de validación.
