@@ -116,3 +116,5 @@ La comprobación esperó la respuesta terminal de la API para la consulta
 enviada desde Chromium, exigió `COMPLETED` con texto y encontró ese
 mismo texto en el dashboard. También pasaron el login, ambos informes,
 la reapertura del historial y la lectura del acuse.
+
+Para conectar los asistentes de uso diario, consulta la [guía de clientes MCP](SENTINEL_MCP_CLIENTS.md).
