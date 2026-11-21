@@ -38,6 +38,49 @@ missing, malformed, or non-increasing update metadata. The running agent does
 not install or remove packages; optional capabilities must be provisioned
 explicitly by the image or a typed controller operation.
 
+## Preserve the agent through a firmware upgrade
+
+Preserving only the agent script leaves the node offline in Nerve Center if
+OpenWrt drops the procd service, device identity, token or runtime configuration.
+The durable state under `/etc/nerve` also prevents previously accepted wireless
+or WireGuard policy from being reapplied on the first pull after reboot.
+
+1. On the device, install [the agent retention template](../devices/nerve-agent.keep)
+   as `/lib/upgrade/keep.d/nerve-agent`. If the device uses non-default paths for
+   the agent, TLS CA, credentials or transaction state, add those paths. For
+   locally installed services and guards, include their scripts, configuration
+   and existing startup links in the backup.
+2. Check `sysupgrade -l` for the agent script, init script, startup link, identity,
+   token, runtime configuration and existing transaction files. Create a
+   configuration backup with `sysupgrade -b`, copy it off-device and inspect
+   the archive's file list. The archive contains credentials and must stay
+   private. If supplying a custom archive with `sysupgrade -f`, make sure it
+   also contains the retention rule for the next upgrade.
+3. Use an Attended Sysupgrade image for the exact device profile to retain
+   installed packages. With `owut`, run `check` for the target version, then
+   `download` to build and verify without flashing. Check the generated package
+   manifest for the active Wi-Fi stack, steering daemon, wired management and
+   agent dependencies. Run `sysupgrade -T` on the resulting image before applying.
+4. Verify the new firmware version and SSH access after reboot. Confirm fresh
+   telemetry and configuration pulls in Nerve Center, check that the agent is
+   enabled and running, and compare network and wireless configuration against
+   the pre-upgrade baseline. Verify that every intended radio is broadcasting
+   and that steering peers are visible. A DFS radio may need to finish its
+   channel availability check before it starts broadcasting.
+5. Compare both the running state and boot enablement of services against the
+   baseline. A package baked into the image can enable a service that was
+   previously disabled. During the UniFi AC Mesh test from OpenWrt 25.12.5 to
+   25.12.6, DAWN started automatically. Returning DAWN to its prior disabled
+   state preserved the device's deployment with usteer active.
+
+If a device responds over SSH but Nerve Center shows it offline after an
+upgrade, check `/etc/init.d/agent`, `/etc/nerve` and the device identity and token.
+Restore the files for that same device from a trusted backup. Before starting
+the agent with missing transaction state, compare the controller's wireless
+and WireGuard configuration with the live settings and check for pending
+operations. The first configuration pull can modify live settings when local
+state is missing.
+
 ## Enrollment Contract
 
 1. The device identifies itself by its bridge MAC address.

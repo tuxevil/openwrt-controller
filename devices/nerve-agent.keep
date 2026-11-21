@@ -1,0 +1,9 @@
+# Install as /lib/upgrade/keep.d/nerve-agent on the OpenWrt device.
+/lib/upgrade/keep.d/nerve-agent
+/usr/sbin/nerve-agent.sh
+/etc/init.d/agent
+/etc/rc.d/S99agent
+/etc/rc.d/K15agent
+/etc/nerve
+/etc/nerve-device-id
+/etc/nerve-device-token

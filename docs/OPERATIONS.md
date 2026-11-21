@@ -34,7 +34,7 @@ Start with preview and a small device subset.
 - `GET /api/devices/{device_id}/drift` performs a read-only UCI comparison.
 - `GET /api/sites/{site_id}/drift-summary` reports fleet-level desired/observed hashes.
 - Vault diff compares the contents of real `.tar.gz` backups.
-- Firmware sysupgrade is intentionally unavailable until a staged compatibility workflow exists.
+- The controller does not expose firmware sysupgrade. For a manual upgrade, follow [the agent retention and verification procedure](DEVICE_AGENT.md#preserve-the-agent-through-a-firmware-upgrade).
 
 If a rollout fails, keep the device online for inspection, review the audit event and Vault backup, and do not immediately retry the same command. Use the device terminal only with an approved recovery procedure.
 
