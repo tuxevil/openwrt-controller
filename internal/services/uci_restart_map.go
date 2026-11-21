@@ -9,6 +9,7 @@ package services
 var ServiceRestartMap = map[string]string{
 	"network":   "/etc/init.d/network restart",
 	"wireless":  "wifi",
+	"usteer":    "/etc/init.d/usteer restart",
 	"dhcp":      "/etc/init.d/dnsmasq restart",
 	"firewall":  "/etc/init.d/firewall restart",
 	"system":    "/etc/init.d/system restart",

@@ -93,6 +93,19 @@ func TestValidateDeviceOperationAcceptsTypedDHCPLease(t *testing.T) {
 	}
 }
 
+func TestValidateDeviceOperationAcceptsTypedUsteerChange(t *testing.T) {
+	commands := []UciCommand{{
+		Action:  "set",
+		Config:  "usteer",
+		Section: "@usteer[0]",
+		Option:  "assoc_steering",
+		Value:   "0",
+	}}
+	if err := ValidateDeviceOperation("usteer", commands, []string{"1.1.1.1"}); err != nil {
+		t.Fatalf("typed usteer operation was rejected: %v", err)
+	}
+}
+
 func TestValidateDeviceOperationRejectsInvalidDHCPLease(t *testing.T) {
 	invalid := []UciCommand{
 		{Action: "ensure_host", Config: "dhcp", Section: "lab", Option: "AA:BB:CC:DD:EE:FF;touch", Value: "192.0.2.10"},

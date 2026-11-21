@@ -29,6 +29,10 @@ PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation
 test "$(cat "$NERVE_TRANSACTION_ROOT/self-operation/state")" = "COMMITTED"
 test ! -e "$NERVE_TRANSACTION_ROOT/self-operation/backup"
 
+SELF_TEST_OPERATION_JSON='{"operation_id":"usteer-operation","plan_hash":"1111111111111111111111111111111111111111111111111111111111111111","config":"usteer","commands":[{"action":"set","config":"usteer","section":"@usteer[0]","option":"assoc_steering","value":"0"}],"auto_confirm":true}' \
+PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-operation
+test "$(cat "$NERVE_TRANSACTION_ROOT/usteer-operation/state")" = "COMMITTED"
+
 printf '%s\n' self-operation > "$NERVE_OPERATION_STATUS_FILE"
 printf '%s\n' self-test-operation > "$NERVE_TRANSACTION_ROOT/last"
 STATUS_JSON=$(PATH="$FIXTURE_DIR:$PATH" sh "$AGENT" --self-test-status)

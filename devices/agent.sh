@@ -113,7 +113,7 @@ transaction_valid_generation() {
 
 transaction_valid_config() {
     case "$1" in
-        wireless|network|dhcp|firewall|dropbear|system|sqm) return 0 ;;
+        wireless|usteer|network|dhcp|firewall|dropbear|system|sqm) return 0 ;;
     esac
     return 1
 }
@@ -295,6 +295,9 @@ transaction_restart_config() {
     case "$1" in
         wireless)
             if command -v wifi >/dev/null 2>&1; then wifi reload; fi
+            ;;
+        usteer)
+            if [ -x /etc/init.d/usteer ]; then /etc/init.d/usteer restart; fi
             ;;
         network)
             if [ -x /etc/init.d/network ]; then /etc/init.d/network reload; fi

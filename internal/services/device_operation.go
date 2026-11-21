@@ -59,6 +59,7 @@ func ValidateDeviceOperationPlan(plan DeviceOperationPlan) error {
 
 var deviceOperationConfigs = map[string]struct{}{
 	"wireless": {},
+	"usteer":   {},
 	"network":  {},
 	"dhcp":     {},
 	"firewall": {},
