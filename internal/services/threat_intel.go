@@ -108,6 +108,10 @@ var threatSources = []struct {
 
 // StartThreatIntelCron starts the 12-hour background threat intelligence worker.
 func StartThreatIntelCron() {
+	if sentinelBoolEnv(os.Getenv, "SENTINEL_OFFGRID", false) {
+		log.Println("[THREAT_SHIELD] External feed refresh disabled in off-grid mode.")
+		return
+	}
 	go func() {
 		log.Println("[THREAT_SHIELD] Starting initial blocklist download...")
 		fetchAndMergeLists()
