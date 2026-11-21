@@ -87,3 +87,9 @@ El cliente de Hermes también ejecutó ambas herramientas sobre PostgreSQL
 desechable con dos sitios. El informe contó únicamente el nodo y el
 incidente del sitio asignado. El caso de ese sitio se devolvió y la
 consulta del caso del segundo sitio devolvió `case unavailable`.
+
+El laboratorio aislado verificó también la vigilancia sin clientes de
+dashboard conectados por WebSocket. Un nodo sintético con 12 minutos sin
+telemetría generó un caso `NODE_DOWN`. Dos barridos conservaron el mismo
+identificador. Tras una petición válida a `POST /api/telemetry` que devolvió
+HTTP 202, el mismo caso pasó a `RESOLVED`.
