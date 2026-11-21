@@ -90,7 +90,7 @@ A stronger or remote model therefore has exactly the same Safety Kernel boundari
 
 ## Modo off-grid de Sentinel
 
-Configura `SENTINEL_OFFGRID=true`, `SENTINEL_ROUTINE_MODEL=gemma4:e2b` y `SENTINEL_ROUTINE_BASE_URL=http://127.0.0.1:11434/v1` si Ollama comparte el host. Para otro equipo de la LAN, usa su IP privada literal y valida su certificado si utilizas HTTPS. El transporte de inferencia descarta proxies y redirecciones HTTP en este modo. El monitor conserva incidentes y casos localmente y omite Telegram y los webhooks de creación de incidentes.
+Configura `SENTINEL_OFFGRID=true`, `SENTINEL_ROUTINE_MODEL=gemma4:e2b` y `SENTINEL_ROUTINE_BASE_URL=http://127.0.0.1:11434/v1` si Ollama comparte el host. Para un proveedor LAN con DNS y HTTPS, conserva su URL y configura `SENTINEL_ROUTINE_LOCAL=true` si el nombre tiene un dominio público. La conexión usa solo direcciones privadas o de loopback y TLS valida el hostname original. El transporte de inferencia descarta proxies y redirecciones HTTP en este modo. El monitor conserva incidentes y casos localmente y omite Telegram y los webhooks de creación de incidentes.
 
 La conversación aparece en **Sentinel AI** del dashboard. Usa las ejecuciones asíncronas existentes y muestra la respuesta, el identificador del caso y la evidencia devuelta. El monitor de alertas existente ejecuta el barrido aunque el navegador esté cerrado. El modo off-grid se aplica a la inferencia y a la entrega de incidentes. El aislamiento de red del despliegue completo sigue siendo una prueba independiente.
 

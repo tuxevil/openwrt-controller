@@ -157,7 +157,7 @@ func TestOpenAICompatibleTransportAllowsKeylessLocalEndpoint(t *testing.T) {
 func TestSentinelOffgridRejectsRemoteOptionalRoute(t *testing.T) {
 	env := map[string]string{
 		"SENTINEL_OFFGRID":           "true",
-		"SENTINEL_CURATION_BASE_URL": "https://example.com/v1",
+		"SENTINEL_CURATION_BASE_URL": "https://203.0.113.10/v1",
 		"SENTINEL_CURATION_MODEL":    "curation",
 		"SENTINEL_CURATION_API_KEY":  "example",
 		"SENTINEL_CURATION_LOCAL":    "true",
@@ -169,5 +169,32 @@ func TestSentinelOffgridRejectsRemoteOptionalRoute(t *testing.T) {
 	env["SENTINEL_CURATION_BASE_URL"] = "http://127.0.0.1:11434/v1"
 	if _, err := resolveSentinelModelRouteWithEnv(SentinelReasoningCuration, database.PlatformSettings{}, getenv); err != nil {
 		t.Fatalf("off-grid mode rejected loopback: %v", err)
+	}
+}
+
+func TestOffgridDialRejectsPublicAddress(t *testing.T) {
+	conn, err := dialSentinelPrivateEndpoint(context.Background(), "tcp", "203.0.113.10:443")
+	if conn != nil {
+		conn.Close()
+	}
+	if err == nil || conn != nil {
+		t.Fatalf("public address accepted: %v", err)
+	}
+}
+
+func TestOffgridNamedRouteRequiresLocalOverride(t *testing.T) {
+	env := map[string]string{
+		"SENTINEL_OFFGRID":          "true",
+		"SENTINEL_ROUTINE_BASE_URL": "https://litellm.example.com/v1",
+		"SENTINEL_ROUTINE_MODEL":    "gemma4:e2b",
+	}
+	getenv := func(key string) string { return env[key] }
+	if _, err := resolveSentinelModelRouteWithEnv(SentinelReasoningRoutine, database.PlatformSettings{}, getenv); err == nil {
+		t.Fatal("hostname admitted without local override")
+	}
+	env["SENTINEL_ROUTINE_LOCAL"] = "true"
+	route, err := resolveSentinelModelRouteWithEnv(SentinelReasoningRoutine, database.PlatformSettings{}, getenv)
+	if err != nil || !route.Local {
+		t.Fatalf("local route rejected: %+v %v", route, err)
 	}
 }

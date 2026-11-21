@@ -92,7 +92,11 @@ func sentinelOffgridEndpoint(raw string) bool {
 		return false
 	}
 	ip := net.ParseIP(endpoint.Hostname())
-	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
+	return endpoint.Hostname() != "" && (ip == nil || sentinelPrivateIP(ip))
+}
+
+func sentinelPrivateIP(ip net.IP) bool {
+	return ip.IsLoopback() || ip.IsPrivate()
 }
 
 func resolveSentinelModelRouteWithEnv(class SentinelReasoningClass, settings database.PlatformSettings, getenv func(string) string) (SentinelModelRoute, error) {
@@ -142,8 +146,8 @@ func resolveSentinelModelRouteWithEnv(class SentinelReasoningClass, settings dat
 	local := sentinelURLIsLocal(baseURL)
 	local = sentinelBoolEnv(getenv, prefix+"_LOCAL", local)
 	if sentinelBoolEnv(getenv, "SENTINEL_OFFGRID", false) {
-		if !sentinelOffgridEndpoint(baseURL) {
-			return SentinelModelRoute{}, fmt.Errorf("%s off-grid endpoint requires an HTTP(S) loopback or private IP", class)
+		if !sentinelOffgridEndpoint(baseURL) || (!sentinelURLIsLocal(baseURL) && !local) {
+			return SentinelModelRoute{}, fmt.Errorf("%s off-grid endpoint requires a configured local HTTP(S) endpoint", class)
 		}
 		local = true
 	}

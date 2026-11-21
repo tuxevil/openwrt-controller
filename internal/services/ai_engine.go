@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -91,9 +92,31 @@ func completeAIContext(ctx context.Context, systemPrompt, userPrompt string, jso
 // completeAIEndpointContext is the provider-agnostic OpenAI-compatible
 // transport primitive. It knows an endpoint/model/key, but no Sentinel
 // reasoning classes or provider names.
+func dialSentinelPrivateEndpoint(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	addresses, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	for _, candidate := range addresses {
+		if !sentinelPrivateIP(candidate.IP) {
+			continue
+		}
+		conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(candidate.String(), port))
+		if err == nil {
+			return conn, nil
+		}
+	}
+	return nil, fmt.Errorf("no reachable private address for off-grid AI endpoint")
+}
+
 var offgridAIClient = &http.Client{
 	Timeout:   300 * time.Second,
-	Transport: &http.Transport{ForceAttemptHTTP2: true},
+	Transport: &http.Transport{ForceAttemptHTTP2: true, DialContext: dialSentinelPrivateEndpoint},
 	CheckRedirect: func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
@@ -138,7 +161,7 @@ func requestAICompletion(ctx context.Context, baseURL, apiKey string, payload ma
 	client := &http.Client{Timeout: 300 * time.Second}
 	if sentinelBoolEnv(os.Getenv, "SENTINEL_OFFGRID", false) {
 		if !sentinelOffgridEndpoint(baseURL) {
-			return aiCompletion{}, fmt.Errorf("off-grid AI requires an HTTP(S) loopback or private IP")
+			return aiCompletion{}, fmt.Errorf("off-grid AI requires an HTTP(S) local endpoint")
 		}
 		client = offgridAIClient
 	}
