@@ -25,7 +25,7 @@ export async function resolveCartoApiKey() {
     cachedPromise = (async () => {
       const envKey = String(import.meta.env?.VITE_CARTO_API_KEY || '').trim()
       try {
-        const res = await api.client.get('/maps/config')
+        const res = await api.getMapsConfig()
         const runtimeKey = String(res?.data?.carto_api_key || '').trim()
         return runtimeKey || envKey
       } catch {

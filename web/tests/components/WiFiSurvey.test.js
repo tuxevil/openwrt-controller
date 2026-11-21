@@ -53,10 +53,12 @@ vi.mock('vue-router', async (importOriginal) => {
 
 import WiFiSurvey from '../../src/views/WiFiSurvey.vue'
 import api from '../../src/services/api'
+import { resetCartoKeyCache } from '../../src/services/cartoMaps'
 
 describe('WiFiSurvey stream quality view', () => {
   beforeEach(() => {
     circleMarkerCalls.length = 0
+    resetCartoKeyCache()
     vi.restoreAllMocks()
     vi.spyOn(api, 'getSiteConfig').mockResolvedValue({ data: { allow_public_surveys: false } })
     vi.spyOn(api, 'getSiteDevices').mockResolvedValue({ data: [] })
