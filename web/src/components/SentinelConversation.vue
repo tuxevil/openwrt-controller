@@ -15,6 +15,15 @@
           y se resolvieron {{ report.resolved_last_24_hours }}.</p>
       </div>
     </div>
+    <div v-if="dailyReport" class="mt-3 rounded border border-slate-700 p-3">
+      <h3 class="font-semibold">Resumen del {{ dailyReport.day_utc }} (UTC)</h3>
+      <p>{{ dailyReport.opened }} incidentes abiertos y {{ dailyReport.resolved }} resueltos durante el día.</p>
+      <p>Al generar el informe, {{ dailyReport.fresh_devices }} de {{ dailyReport.devices }}
+        nodos habían reportado en los últimos dos minutos.</p>
+    </div>
+    <p v-else-if="dailyReportError" class="mt-3 text-slate-300" role="status">
+      {{ dailyReportError }}
+    </p>
     <div class="mt-3 flex flex-wrap items-center gap-2">
       <label for="sentinel-history">Conversaciones recientes</label>
       <select id="sentinel-history" :value="conversationID || ''" :disabled="busy"
@@ -80,6 +89,17 @@ const messages = ref([]);
 const loading = ref(false);
 const busy = computed(() => running.value || loading.value);
 const report = ref(null);
+const dailyReport = ref(null);
+const dailyReportError = ref('');
+
+async function loadDailyReport() {
+  try {
+    const { data } = await api.client.get('/sentinel/daily-report', requestOptions);
+    dailyReport.value = data;
+  } catch {
+    if (!lifetime.signal.aborted) dailyReportError.value = 'No se pudo consultar el resumen diario.';
+  }
+}
 const reportError = ref('');
 const loadingReport = ref(false);
 
@@ -136,6 +156,7 @@ async function openConversation(id) {
 }
 
 onMounted(refreshHistory);
+onMounted(loadDailyReport);
 
 async function ask() {
   if (!query.value || busy.value) return;

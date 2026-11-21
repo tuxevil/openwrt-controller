@@ -118,6 +118,7 @@ func main() {
 	services.StartSentinelCaseContextRecovery(sentinelStopCh)
 	services.StartSentinelOptionalModelTaskWorker(sentinelStopCh)
 	services.StartSentinelLearningMaintenance(sentinelStopCh)
+	services.StartSentinelDailyReports(sentinelStopCh)
 	defer close(sentinelStopCh)
 
 	// Build the route mux and wrap it with the metrics middleware.

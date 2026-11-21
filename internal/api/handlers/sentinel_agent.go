@@ -389,3 +389,30 @@ func AcknowledgeSentinelCaseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	writeSentinelJSON(w, http.StatusOK, map[string]interface{}{"acknowledged_at": at, "acknowledged_by": by})
 }
+
+func GetSentinelDailyReportHandler(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	var report struct {
+		Day          string    `json:"day_utc"`
+		GeneratedAt  time.Time `json:"generated_at"`
+		Opened       int       `json:"opened"`
+		Resolved     int       `json:"resolved"`
+		Devices      int       `json:"devices"`
+		FreshDevices int       `json:"fresh_devices"`
+	}
+	err := database.Tx(ctx).QueryRowContext(ctx, `
+		SELECT to_char(report_day, 'YYYY-MM-DD'), generated_at, opened, resolved, devices, fresh_devices
+		FROM sentinel_daily_reports ORDER BY report_day DESC LIMIT 1
+	`).Scan(&report.Day, &report.GeneratedAt, &report.Opened, &report.Resolved, &report.Devices, &report.FreshDevices)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeSentinelJSON(w, http.StatusOK, nil)
+		return
+	}
+	if err != nil {
+		writeSentinelError(w, http.StatusServiceUnavailable, "REPORT_UNAVAILABLE", "Sentinel daily report unavailable")
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeSentinelJSON(w, http.StatusOK, report)
+}
