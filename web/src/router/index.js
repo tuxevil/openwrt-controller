@@ -116,6 +116,12 @@ const router = createRouter({
       props: true
     },
     {
+      path: '/site/:site_id/node-map',
+      name: 'site-node-map',
+      component: () => import('../views/NodeMap.vue'),
+      props: true
+    },
+    {
       path: '/site/:site_id/echolocation',
       name: 'site-echolocation',
       component: EchoLocation,

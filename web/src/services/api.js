@@ -88,6 +88,9 @@ export default {
   getSiteDevices(siteId) {
     return apiClient.get(`/sites/${siteId}/devices`)
   },
+  updateDeviceLocation(siteId, deviceId, payload) {
+    return apiClient.put(`/sites/${siteId}/devices/${encodeURIComponent(deviceId)}/location`, payload)
+  },
   getDeviceMetrics(deviceId) {
     return apiClient.get(`/devices/${deviceId}/metrics`)
   },

@@ -9,6 +9,7 @@ export const SITE_NAV_SECTIONS = [
     items: [
       { id: 'site-dashboard', label: 'OVERVIEW', path: (id) => `/site/${id}`, exact: true, icon: 'home', tone: 'green', keywords: ['dashboard', 'nodes', 'home', 'devices', 'starlink'] },
       { id: 'site-topology', label: 'TOPOLOGY', path: (id) => `/site/${id}/topology`, icon: 'grid', tone: 'green', keywords: ['grid', 'map', 'tree', 'mesh', 'links'] },
+      { id: 'site-node-map', label: 'NODE MAP', path: (id) => `/site/${id}/node-map`, icon: 'pin', tone: 'cyan', keywords: ['ap', 'locations', 'nodes', 'kmz', 'drone', 'placement', 'map'] },
       { id: 'site-echolocation', label: 'L2 RADAR', path: (id) => `/site/${id}/echolocation`, icon: 'radar', tone: 'cyan', keywords: ['echolocation', 'force', 'layer2', 'neighbors'] },
       { id: 'site-clients', label: 'CLIENTS', path: (id) => `/site/${id}/clients`, icon: 'users', tone: 'green', keywords: ['stations', 'arp', 'devices', 'mac', 'wifi'] },
       { id: 'site-telemetry', label: 'ANALYTICS', path: (id) => `/site/${id}/advanced-telemetry`, icon: 'chart', tone: 'cyan', keywords: ['matrix', 'metrics', 'telemetry', 'performance'] },

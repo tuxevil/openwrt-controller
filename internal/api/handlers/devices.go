@@ -79,7 +79,7 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json, last_rollout_status, last_rollout_at, last_health_check_at, desired_generation, observed_generation, last_successful_generation, capabilities FROM devices WHERE site_id = $1`
+	query := `SELECT id, site_id, name, model, status, last_seen_at, last_config_pulled_at, last_ip, agent_version, state_json, last_rollout_status, last_rollout_at, last_health_check_at, desired_generation, observed_generation, last_successful_generation, capabilities, location_lat, location_lon, COALESCE(location_note, ''), location_updated_at FROM devices WHERE site_id = $1`
 	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -103,12 +103,14 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id string
 		var sID, name, model, status, lastIP, agentVersion sql.NullString
-		var lastSeen, lastPulled, rolloutAt, healthCheckAt sql.NullTime
+		var lastSeen, lastPulled, rolloutAt, healthCheckAt, locUpdatedAt sql.NullTime
 		var rolloutStatus sql.NullString
 		var desiredGeneration, observedGeneration, lastSuccessfulGeneration int64
 		var capabilities []byte
 		var stateJSON []byte
-		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON, &rolloutStatus, &rolloutAt, &healthCheckAt, &desiredGeneration, &observedGeneration, &lastSuccessfulGeneration, &capabilities); err == nil {
+		var locLat, locLon sql.NullFloat64
+		var locNote string
+		if err := rows.Scan(&id, &sID, &name, &model, &status, &lastSeen, &lastPulled, &lastIP, &agentVersion, &stateJSON, &rolloutStatus, &rolloutAt, &healthCheckAt, &desiredGeneration, &observedGeneration, &lastSuccessfulGeneration, &capabilities, &locLat, &locLon, &locNote, &locUpdatedAt); err == nil {
 			var lastSeenStr, lastPulledStr string
 			if lastSeen.Valid {
 				lastSeenStr = lastSeen.Time.Format(time.RFC3339)
@@ -137,6 +139,12 @@ func GetSiteDevicesHandler(w http.ResponseWriter, r *http.Request) {
 				"desired_generation":         desiredGeneration,
 				"observed_generation":        observedGeneration,
 				"last_successful_generation": lastSuccessfulGeneration,
+				"location_note":              locNote,
+				"location_updated_at":        formatNullTime(locUpdatedAt),
+			}
+			if locLat.Valid && locLon.Valid {
+				dev["location_lat"] = locLat.Float64
+				dev["location_lon"] = locLon.Float64
 			}
 			if len(capabilities) > 0 {
 				var parsedCapabilities map[string]interface{}
@@ -409,6 +417,88 @@ func incidentsToMap(in []services.IncidentSummary) []map[string]string {
 		})
 	}
 	return out
+}
+
+func validateDeviceLocation(lat, lon *float64, note string) error {
+	if (lat == nil) != (lon == nil) {
+		return fmt.Errorf("both lat and lon must be provided together (or both null to clear)")
+	}
+	if lat != nil {
+		if *lat < -90 || *lat > 90 || *lon < -180 || *lon > 180 {
+			return fmt.Errorf("invalid geographic coordinates")
+		}
+	}
+	if len(note) > 200 {
+		return fmt.Errorf("location note must be 200 characters or fewer")
+	}
+	return nil
+}
+
+// UpdateDeviceLocationHandler — PUT /api/sites/{site_id}/devices/{device_id}/location
+// Body: { lat: number|null, lon: number|null, note?: string }
+func UpdateDeviceLocationHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	deviceID := r.PathValue("device_id")
+	if siteID == "" || deviceID == "" {
+		http.Error(w, `{"error":"site_id and device_id are required"}`, http.StatusBadRequest)
+		return
+	}
+	username, role := surveyClaims(r)
+	if !roleAtLeast(role, "OPERATOR") {
+		http.Error(w, `{"error":"FORBIDDEN: OPERATOR+ required"}`, http.StatusForbidden)
+		return
+	}
+	schema := middleware.GetTenantSchema(r)
+	if schema == "" {
+		http.Error(w, `{"error":"tenant schema unresolved"}`, http.StatusInternalServerError)
+		return
+	}
+
+	var req struct {
+		Lat  *float64 `json:"lat"`
+		Lon  *float64 `json:"lon"`
+		Note string   `json:"note"`
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, `{"error":"invalid JSON payload"}`, http.StatusBadRequest)
+		return
+	}
+	req.Note = strings.TrimSpace(req.Note)
+	if err := validateDeviceLocation(req.Lat, req.Lon, req.Note); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	if req.Lat == nil {
+		req.Note = ""
+	}
+
+	updated, err := database.UpdateDeviceLocation(r.Context(), schema, siteID, deviceID, req.Lat, req.Lon, req.Note)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "failed to update device location", err)
+		return
+	}
+	if !updated {
+		http.Error(w, `{"error":"device not found in site"}`, http.StatusNotFound)
+		return
+	}
+
+	detail := "cleared"
+	if req.Lat != nil && req.Lon != nil {
+		detail = fmt.Sprintf("%.6f,%.6f (%s)", *req.Lat, *req.Lon, req.Note)
+	}
+	go database.InsertAuditLog(username, "DEVICE_LOCATION_UPDATE", "DEVICE", deviceID, detail, r.RemoteAddr)
+
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"data": map[string]interface{}{
+			"id":                  deviceID,
+			"site_id":             siteID,
+			"location_lat":        req.Lat,
+			"location_lon":        req.Lon,
+			"location_note":       req.Note,
+			"location_updated_at": time.Now().UTC().Format(time.RFC3339),
+		},
+	})
 }
 
 func ForgetDeviceHandler(w http.ResponseWriter, r *http.Request) {

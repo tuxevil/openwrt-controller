@@ -18,6 +18,7 @@ import {
   interpolateBoundedIDW,
   defaultFloorplanBounds,
   adjustFloorplanBounds,
+  createApMarkerIcon,
 } from '../utils/surveyMap'
 
 const BASEMAP_PREF_KEY = 'nerve_survey_basemap'
@@ -47,6 +48,7 @@ const showQrModal = ref(null)
 const mapEl = ref(null)
 let map = null
 let pointLayer = null
+let apLayer = null
 let accuracyLayer = null
 let neighborLayer = null
 let heatLayer = null
@@ -61,6 +63,7 @@ const displayMetric = ref('signal') // signal | stream
 const showHeatmap = ref(false)
 const heatRadiusM = ref(15)
 const showAccuracy = ref(false)
+const showApLocations = ref(true)
 const showNeighbors = ref(false)
 const timeSlider = ref(100)
 
@@ -108,6 +111,7 @@ watch(selectedSurvey, async (s) => {
     map.remove()
     map = null
     pointLayer = null
+    apLayer = null
     accuracyLayer = null
     neighborLayer = null
     heatLayer = null
@@ -118,7 +122,7 @@ watch(selectedSurvey, async (s) => {
 })
 
 watch(
-  [apFilter, displayMetric, timeSlider, showHeatmap, heatRadiusM, showAccuracy, showNeighbors],
+  [apFilter, displayMetric, timeSlider, showHeatmap, heatRadiusM, showAccuracy, showApLocations, showNeighbors],
   () => {
     if (selectedSurvey.value) drawPoints()
   }
@@ -288,6 +292,7 @@ function initMap(cartoApiKey = '') {
   L.control.scale({ imperial: false }).addTo(map)
   accuracyLayer = L.layerGroup().addTo(map)
   pointLayer = L.layerGroup().addTo(map)
+  apLayer = L.layerGroup().addTo(map)
   neighborLayer = L.layerGroup()
   if (showNeighbors.value) neighborLayer.addTo(map)
 }
@@ -362,10 +367,55 @@ function parseSilentAps(raw) {
   }
 }
 
+function resolveSurveyApPositions() {
+  const snap = selectedSurvey.value?.ap_positions_snapshot
+  if (Array.isArray(snap) && snap.length > 0) {
+    return { items: snap, isSnapshot: true }
+  }
+  const current = siteDevices.value
+    .filter((d) => d && d.location_lat != null && d.location_lon != null)
+    .map((d) => ({
+      id: d.id,
+      name: d.name || '',
+      last_ip: d.last_ip || '',
+      label: apLabel(d.id),
+      lat: d.location_lat,
+      lon: d.location_lon,
+      note: d.location_note || '',
+    }))
+  return { items: current, isSnapshot: false }
+}
+
+function drawApMarkers() {
+  if (!apLayer) return
+  apLayer.clearLayers()
+  if (!showApLocations.value) return
+  const { items, isSnapshot } = resolveSurveyApPositions()
+  for (const ap of items) {
+    if (ap.lat == null || ap.lon == null) continue
+    L.marker([ap.lat, ap.lon], {
+      icon: createApMarkerIcon(L, ap, { legacy: !isSnapshot }),
+      zIndexOffset: 600,
+    })
+      .bindPopup(
+        `<div style="background:#000;color:#0ff;padding:6px;font-family:monospace;font-size:11px;line-height:1.45">
+          <b>${escapeHtml(ap.label || apLabel(ap.id))}</b><br/>
+          ${ap.note ? `Note: ${escapeHtml(ap.note)}<br/>` : ''}
+          ${ap.lat.toFixed(6)}, ${ap.lon.toFixed(6)}<br/>
+          <span style="color:${isSnapshot ? '#39FF14' : '#f59e0b'}">
+            ${isSnapshot ? 'Recorded position during this survey' : 'Current AP position (no snapshot in legacy survey)'}
+          </span>
+        </div>`
+      )
+      .addTo(apLayer)
+  }
+}
+
 function drawPoints() {
   if (!map) return
   pointLayer.clearLayers()
   accuracyLayer.clearLayers()
+  drawApMarkers()
   if (neighborLayer) {
     neighborLayer.clearLayers()
     if (showNeighbors.value && !map.hasLayer(neighborLayer)) neighborLayer.addTo(map)
@@ -948,6 +998,12 @@ function backToList() {
           <button @click="refreshSelectedSamples" class="px-3 py-1.5 border border-gray-600 text-gray-300 text-xs hover:bg-gray-800">
             ↻ REFRESH
           </button>
+          <router-link
+            :to="`/site/${siteId}/node-map`"
+            class="px-3 py-1.5 border border-cyan-500/70 text-cyan-300 text-xs tracking-widest hover:bg-cyan-400 hover:text-black"
+          >
+            AP LOCATIONS
+          </router-link>
           <button
             @click="showFloorplanPanel = !showFloorplanPanel"
             :class="[
@@ -1008,6 +1064,10 @@ function backToList() {
         <label class="flex items-center gap-1.5">
           <input type="checkbox" v-model="showAccuracy" class="accent-sky-400" />
           <span>GPS accuracy</span>
+        </label>
+        <label class="flex items-center gap-1.5">
+          <input type="checkbox" v-model="showApLocations" class="accent-cyan-400" />
+          <span>AP locations</span>
         </label>
         <label class="flex items-center gap-1.5">
           <input type="checkbox" v-model="showNeighbors" class="accent-cyan-400" />

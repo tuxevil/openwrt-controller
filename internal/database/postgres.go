@@ -807,6 +807,11 @@ func createTenantTables(schema string) error {
 		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS probe_jitter_ms REAL", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS probe_loss_pct REAL", quotedSchema),
 		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS survey_floorplan JSONB NOT NULL DEFAULT '{}'", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS location_lat DOUBLE PRECISION", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS location_lon DOUBLE PRECISION", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS location_note TEXT NOT NULL DEFAULT ''", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.devices ADD COLUMN IF NOT EXISTS location_updated_at TIMESTAMP WITH TIME ZONE", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_surveys ADD COLUMN IF NOT EXISTS ap_positions_snapshot JSONB NOT NULL DEFAULT '[]'", quotedSchema),
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {

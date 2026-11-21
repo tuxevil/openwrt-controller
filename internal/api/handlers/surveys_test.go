@@ -135,8 +135,8 @@ func TestSurveySamplePersistsGPSWithAndWithoutSignal(t *testing.T) {
 			mock.ExpectQuery("survey_token_hash.*FROM tenant_demo.wifi_surveys").WithArgs(surveyID).WillReturnRows(
 				sqlmock.NewRows([]string{"id", "site_id", "name", "status", "access_mode", "started_at", "ended_at", "created_at", "updated_at",
 					"surveyor_mac", "surveyor_label", "token_first_used_at", "token_first_ip", "token_first_ua",
-					"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash"}).
-					AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "already used", nil, nil, nil, nil, nil, database.HashToken(token)))
+					"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash", "ap_positions_snapshot"}).
+					AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "already used", nil, nil, nil, nil, nil, database.HashToken(token), "[]"))
 			mock.ExpectQuery("allow_public_surveys").WithArgs("site").WillReturnRows(sqlmock.NewRows([]string{"allowed"}).AddRow(true))
 			mock.ExpectQuery("surveys_public_lockdown").WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(false))
 			if !matched {
@@ -267,8 +267,8 @@ func TestSurveySampleDiagnosesMissingSignalAndDeduplicates(t *testing.T) {
 			mock.ExpectQuery("survey_token_hash.*FROM tenant_demo.wifi_surveys").WithArgs(surveyID).WillReturnRows(
 				sqlmock.NewRows([]string{"id", "site_id", "name", "status", "access_mode", "started_at", "ended_at", "created_at", "updated_at",
 					"surveyor_mac", "surveyor_label", "token_first_used_at", "token_first_ip", "token_first_ua",
-					"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash"}).
-					AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "already used", nil, nil, nil, nil, nil, database.HashToken(token)))
+					"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash", "ap_positions_snapshot"}).
+					AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "already used", nil, nil, nil, nil, nil, database.HashToken(token), "[]"))
 			mock.ExpectQuery("allow_public_surveys").WithArgs("site").WillReturnRows(sqlmock.NewRows([]string{"allowed"}).AddRow(true))
 			mock.ExpectQuery("surveys_public_lockdown").WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(false))
 			mock.ExpectQuery("FROM tenant_demo.devices").WithArgs("site").WillReturnRows(
@@ -364,8 +364,8 @@ func TestPublicSurveyStatusAndPing(t *testing.T) {
 	mock.ExpectQuery("survey_token_hash.*FROM tenant_demo.wifi_surveys").WithArgs(surveyID).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "site_id", "name", "status", "access_mode", "started_at", "ended_at", "created_at", "updated_at",
 			"surveyor_mac", "surveyor_label", "token_first_used_at", "token_first_ip", "token_first_ua",
-			"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash"}).
-			AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "used", nil, nil, nil, nil, nil, database.HashToken(token)))
+			"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash", "ap_positions_snapshot"}).
+			AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "used", nil, nil, nil, nil, nil, database.HashToken(token), `[{"id":"ap-1","label":"MR8300","lat":-2.0237,"lon":-78.9474}]`))
 	mock.ExpectQuery("allow_public_surveys").WithArgs("site").WillReturnRows(sqlmock.NewRows([]string{"allowed"}).AddRow(true))
 	mock.ExpectQuery("surveys_public_lockdown").WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(false))
 	mock.ExpectQuery("FROM tenant_demo.devices").WithArgs("site").WillReturnRows(
@@ -401,8 +401,8 @@ func TestPublicSurveyStatusAndPing(t *testing.T) {
 	mock.ExpectQuery("survey_token_hash.*FROM tenant_demo.wifi_surveys").WithArgs(surveyID).WillReturnRows(
 		sqlmock.NewRows([]string{"id", "site_id", "name", "status", "access_mode", "started_at", "ended_at", "created_at", "updated_at",
 			"surveyor_mac", "surveyor_label", "token_first_used_at", "token_first_ip", "token_first_ua",
-			"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash"}).
-			AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "used", nil, nil, nil, nil, nil, database.HashToken(token)))
+			"token_revoked_at", "token_rotated_at", "created_by", "survey_token_hash", "ap_positions_snapshot"}).
+			AddRow(surveyID, "site", "Walk", "active", "public", nil, nil, nil, nil, mac, nil, "used", nil, nil, nil, nil, nil, database.HashToken(token), `[{"id":"ap-1","label":"MR8300","lat":-2.0237,"lon":-78.9474}]`))
 	mock.ExpectQuery("allow_public_surveys").WithArgs("site").WillReturnRows(sqlmock.NewRows([]string{"allowed"}).AddRow(true))
 	mock.ExpectQuery("surveys_public_lockdown").WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(false))
 

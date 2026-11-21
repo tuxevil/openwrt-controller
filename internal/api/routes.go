@@ -116,6 +116,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/devices/{device_id}/pcap", middleware.WithAuth(handlers.CapturePacketHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/iperf", middleware.WithAuth(handlers.RunIperfHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/devices", middleware.WithAuth(handlers.GetSiteDevicesHandler))
+	mux.HandleFunc("PUT /api/sites/{site_id}/devices/{device_id}/location", middleware.WithAuth(handlers.UpdateDeviceLocationHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/adopt", middleware.WithAuth(handlers.AdoptDeviceHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/migrate", middleware.WithAuth(handlers.MigrateDeviceHandler))
 	mux.HandleFunc("POST /api/devices/{device_id}/import-config", middleware.WithAuth(middleware.RequireAdmin(handlers.ImportDeviceConfigHandler)))

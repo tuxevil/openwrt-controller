@@ -16,6 +16,7 @@ import {
   classifyMissingReason,
   colorForSignalDbm,
   colorForStreamQuality,
+  createApMarkerIcon,
 } from '../utils/surveyMap'
 import { createKmzLayer } from '../utils/kmzLayer'
 
@@ -44,9 +45,11 @@ const confirmedPoints = ref([])
 let map = null
 let confirmedLayer = null
 let queuedLayer = null
+let apLayer = null
 let userMarker = null
 let userAccCircle = null
 let hasCenteredOnce = false
+let lastApPositionsKey = ''
 
 // Live AP telemetry health
 const apStatus = ref(null) // { reporting_count, total_count, surveyor_seen, surveyor_ap, surveyor_dbm, aps }
@@ -199,9 +202,26 @@ function initLiveMap(kmzMeta = null) {
 
   confirmedLayer = L.layerGroup().addTo(map)
   queuedLayer = L.layerGroup().addTo(map)
+  apLayer = L.layerGroup().addTo(map)
 
   if (kmzMeta && Array.isArray(kmzMeta.bounds) && !hasCenteredOnce) {
     map.fitBounds(kmzMeta.bounds, { padding: [15, 15] })
+  }
+}
+
+function redrawApPositions(positions) {
+  if (!apLayer || !Array.isArray(positions)) return
+  const key = JSON.stringify(positions.map((p) => [p.id, p.lat, p.lon]))
+  if (key === lastApPositionsKey) return
+  lastApPositionsKey = key
+  apLayer.clearLayers()
+  for (const ap of positions) {
+    if (ap.lat == null || ap.lon == null) continue
+    L.marker([ap.lat, ap.lon], {
+      icon: createApMarkerIcon(L, ap),
+      interactive: false,
+      zIndexOffset: 500,
+    }).addTo(apLayer)
   }
 }
 
@@ -393,6 +413,9 @@ async function fetchApStatus() {
         })
     apStatus.value = data
     apStatusError.value = false
+    if (Array.isArray(data?.ap_positions)) {
+      redrawApPositions(data.ap_positions)
+    }
   } catch {
     apStatusError.value = true
   }

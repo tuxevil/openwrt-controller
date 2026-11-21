@@ -41,6 +41,19 @@ type Survey struct {
 	// Returned only on POST/rotate so the admin can hand the URL to the phone
 	SurveyToken string `json:"survey_token,omitempty"`
 	SurveyURL   string `json:"survey_url,omitempty"`
+	// Immutable snapshot of placed AP positions at the time this survey ran
+	APPositionsSnapshot []SurveyAPPosition `json:"ap_positions_snapshot,omitempty"`
+}
+
+type SurveyAPPosition struct {
+	ID         string  `json:"id"`
+	Name       string  `json:"name,omitempty"`
+	LastIP     string  `json:"last_ip,omitempty"`
+	Label      string  `json:"label"`
+	Lat        float64 `json:"lat"`
+	Lon        float64 `json:"lon"`
+	Note       string  `json:"note,omitempty"`
+	CapturedAt string  `json:"captured_at,omitempty"`
 }
 
 type SurveyPoint struct {
@@ -114,7 +127,8 @@ func GetSiteSurveys(ctx context.Context, schema, siteID string) ([]Survey, error
 		       s.started_at, s.ended_at, s.created_at,
 		       COALESCE(p.cnt, 0),
 		       COALESCE(p.probe_cnt, 0),
-		       p.min_dbm, p.max_dbm, p.avg_dbm
+		       p.min_dbm, p.max_dbm, p.avg_dbm,
+		       COALESCE(s.ap_positions_snapshot::text, '[]')
 		FROM %[1]s.wifi_surveys s
 		LEFT JOIN (
 			SELECT survey_id,
@@ -138,8 +152,9 @@ func GetSiteSurveys(ctx context.Context, schema, siteID string) ([]Survey, error
 	for rows.Next() {
 		var s Survey
 		var started, ended, created *string
+		var apSnapRaw string
 		if err := rows.Scan(&s.ID, &s.SiteID, &s.Name, &s.Status, &s.AccessMode,
-			&started, &ended, &created, &s.PointCount, &s.ProbeCount, &s.MinDBM, &s.MaxDBM, &s.AvgDBM); err != nil {
+			&started, &ended, &created, &s.PointCount, &s.ProbeCount, &s.MinDBM, &s.MaxDBM, &s.AvgDBM, &apSnapRaw); err != nil {
 			return nil, err
 		}
 		if started != nil {
@@ -150,6 +165,9 @@ func GetSiteSurveys(ctx context.Context, schema, siteID string) ([]Survey, error
 		}
 		if created != nil {
 			s.CreatedAt = *created
+		}
+		if apSnapRaw != "" && apSnapRaw != "[]" {
+			_ = json.Unmarshal([]byte(apSnapRaw), &s.APPositionsSnapshot)
 		}
 		out = append(out, s)
 	}
@@ -163,16 +181,18 @@ func GetSurvey(ctx context.Context, schema, surveyID string) (*Survey, error) {
 		       surveyor_mac, surveyor_label,
 		       token_first_used_at, token_first_ip, token_first_ua,
 		       token_revoked_at, token_rotated_at,
-		       created_by, survey_token_hash
+		       created_by, survey_token_hash,
+		       COALESCE(ap_positions_snapshot::text, '[]')
 		FROM %s.wifi_surveys WHERE id = $1
 	`, schema), surveyID)
 
 	var s Survey
 	var started, ended, created, updated *string
 	var smac, slabel, tfu, tfip, tfua, trev, trot, cby *string
+	var apSnapRaw string
 	if err := row.Scan(&s.ID, &s.SiteID, &s.Name, &s.Status, &s.AccessMode,
 		&started, &ended, &created, &updated,
-		&smac, &slabel, &tfu, &tfip, &tfua, &trev, &trot, &cby, &s.SurveyTokenHash); err != nil {
+		&smac, &slabel, &tfu, &tfip, &tfua, &trev, &trot, &cby, &s.SurveyTokenHash, &apSnapRaw); err != nil {
 		return nil, err
 	}
 	if started != nil {
@@ -186,6 +206,9 @@ func GetSurvey(ctx context.Context, schema, surveyID string) (*Survey, error) {
 	}
 	if updated != nil {
 		s.UpdatedAt = *updated
+	}
+	if apSnapRaw != "" && apSnapRaw != "[]" {
+		_ = json.Unmarshal([]byte(apSnapRaw), &s.APPositionsSnapshot)
 	}
 	s.SurveyorMAC = smac
 	s.SurveyorLabel = slabel
@@ -490,6 +513,79 @@ func SaveSiteSurveyFloorplan(ctx context.Context, schema, siteID string, fp *Sur
 		 WHERE site_id = $1
 	`, schema), siteID, payload)
 	return err
+}
+
+// GetSitePlacedAPPositions returns all devices in the site that currently have
+// geographic coordinates placed on the site map.
+func GetSitePlacedAPPositions(ctx context.Context, schema, siteID string) ([]SurveyAPPosition, error) {
+	rows, err := Tx(ctx).Query(fmt.Sprintf(`
+		SELECT id, COALESCE(name, ''), COALESCE(last_ip, ''),
+		       location_lat, location_lon, COALESCE(location_note, ''),
+		       COALESCE(to_char(location_updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '')
+		FROM %s.devices
+		WHERE site_id = $1
+		  AND location_lat IS NOT NULL
+		  AND location_lon IS NOT NULL
+		ORDER BY last_ip, id
+	`, schema), siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SurveyAPPosition
+	for rows.Next() {
+		var p SurveyAPPosition
+		if err := rows.Scan(&p.ID, &p.Name, &p.LastIP, &p.Lat, &p.Lon, &p.Note, &p.CapturedAt); err != nil {
+			return nil, err
+		}
+		p.Label = SiteAPRef{ID: p.ID, Name: p.Name, LastIP: p.LastIP}.DisplayLabel()
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// SnapshotSurveyAPPositions freezes the site's current placed AP positions onto
+// a survey record so moving an AP later preserves historical survey layouts.
+func SnapshotSurveyAPPositions(ctx context.Context, schema, surveyID, siteID string) ([]SurveyAPPosition, error) {
+	positions, err := GetSitePlacedAPPositions(ctx, schema, siteID)
+	if err != nil {
+		return nil, err
+	}
+	if positions == nil {
+		positions = []SurveyAPPosition{}
+	}
+	b, err := json.Marshal(positions)
+	if err != nil {
+		return nil, err
+	}
+	_, err = Tx(ctx).Exec(fmt.Sprintf(`
+		UPDATE %s.wifi_surveys
+		   SET ap_positions_snapshot = $2::jsonb,
+		       updated_at = CURRENT_TIMESTAMP
+		 WHERE id = $1
+	`, schema), surveyID, string(b))
+	return positions, err
+}
+
+// UpdateDeviceLocation sets or clears a device's geographic coordinates on the site map.
+func UpdateDeviceLocation(ctx context.Context, schema, siteID, deviceID string, lat, lon *float64, note string) (bool, error) {
+	res, err := Tx(ctx).Exec(fmt.Sprintf(`
+		UPDATE %s.devices
+		   SET location_lat = $1,
+		       location_lon = $2,
+		       location_note = $3,
+		       location_updated_at = CASE WHEN $1 IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END
+		 WHERE lower(id) = lower($4) AND site_id = $5
+	`, schema), lat, lon, note, deviceID, siteID)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return true, nil
+	}
+	return affected > 0, nil
 }
 
 // GetActiveSurveyForSite returns the currently 'active' survey for a site, if any.

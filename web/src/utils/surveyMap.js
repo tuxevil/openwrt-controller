@@ -287,3 +287,36 @@ export function adjustFloorplanBounds(bounds, { dLat = 0, dLon = 0, scale = 1 } 
     [Number((cLat + halfLat).toFixed(6)), Number((cLon + halfLon).toFixed(6))],
   ]
 }
+
+export function formatShortApTag(ap) {
+  const ip = String(ap?.last_ip || '').trim()
+  const lastOctet = ip.includes('.') ? '.' + ip.split('.').pop() : ''
+  const name = String(ap?.name || '').trim()
+  if (name && lastOctet) return `${name} ${lastOctet}`
+  if (name) return name
+  if (ip) return ip
+  return String(ap?.label || ap?.id || 'AP').slice(0, 14)
+}
+
+function escapeAttr(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+export function createApMarkerIcon(L, ap, { selected = false, legacy = false } = {}) {
+  const tag = escapeAttr(formatShortApTag(ap))
+  const border = selected ? '#39FF14' : legacy ? '#f59e0b' : '#00f0ff'
+  const glow = selected ? '0 0 12px rgba(57,255,20,0.9)' : '0 0 8px rgba(0,240,255,0.75)'
+  return L.divIcon({
+    className: 'ap-pin-icon',
+    iconSize: [14, 14],
+    iconAnchor: [7, 7],
+    html: `<div style="position:relative;width:14px;height:14px;">
+      <div style="width:14px;height:14px;background:#000;border:2.5px solid ${border};transform:rotate(45deg);box-shadow:${glow};box-sizing:border-box;"></div>
+      <div style="position:absolute;left:18px;top:-4px;white-space:nowrap;background:rgba(0,0,0,0.86);color:${border};border:1px solid ${border};padding:1px 5px;font-family:monospace;font-size:10px;font-weight:bold;line-height:1.3;">${tag}</div>
+    </div>`,
+  })
+}

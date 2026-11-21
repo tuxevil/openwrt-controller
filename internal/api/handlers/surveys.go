@@ -204,6 +204,10 @@ func CreateSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		surveyURL = fmt.Sprintf("%s/survey/%s?token=%s", surveyBaseURL(r), surveyID, t)
 	}
 
+	// Capture current placed AP positions onto the survey so future AP relocations
+	// never alter historical survey maps.
+	_, _ = database.SnapshotSurveyAPPositions(r.Context(), schema, surveyID, siteID)
+
 	s, err := database.GetSurvey(r.Context(), schema, surveyID)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "failed to load survey", err)
@@ -311,6 +315,8 @@ func StartSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Survey already ended", http.StatusGone)
 		return
 	}
+	// Refresh AP position snapshot right at walk start (frozen once active).
+	_, _ = database.SnapshotSurveyAPPositions(r.Context(), schema, surveyID, s.SiteID)
 	if err := database.SetSurveyStatus(r.Context(), schema, surveyID, "active"); err != nil {
 		RespondError(w, http.StatusInternalServerError, "failed to set status", err)
 		return
@@ -710,6 +716,15 @@ func writeSurveyStatus(w http.ResponseWriter, r *http.Request, schema string, su
 			surveyorDBM = ap.SurveyorDBM
 		}
 	}
+	apPositions := survey.APPositionsSnapshot
+	if len(apPositions) == 0 {
+		if placed, pErr := database.GetSitePlacedAPPositions(r.Context(), schema, survey.SiteID); pErr == nil {
+			apPositions = placed
+		}
+	}
+	if apPositions == nil {
+		apPositions = []database.SurveyAPPosition{}
+	}
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"survey_id":       survey.ID,
 		"status":          survey.Status,
@@ -719,6 +734,7 @@ func writeSurveyStatus(w http.ResponseWriter, r *http.Request, schema string, su
 		"surveyor_ap":     surveyorAP,
 		"surveyor_dbm":    surveyorDBM,
 		"aps":             aps,
+		"ap_positions":    apPositions,
 	})
 }
 
