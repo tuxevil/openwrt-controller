@@ -153,3 +153,21 @@ func TestOpenAICompatibleTransportAllowsKeylessLocalEndpoint(t *testing.T) {
 		t.Fatalf("content=%q model=%q tokens=%d", content, model, tokens)
 	}
 }
+
+func TestSentinelOffgridRejectsRemoteOptionalRoute(t *testing.T) {
+	env := map[string]string{
+		"SENTINEL_OFFGRID":           "true",
+		"SENTINEL_CURATION_BASE_URL": "https://example.com/v1",
+		"SENTINEL_CURATION_MODEL":    "curation",
+		"SENTINEL_CURATION_API_KEY":  "example",
+		"SENTINEL_CURATION_LOCAL":    "true",
+	}
+	getenv := func(key string) string { return env[key] }
+	if _, err := resolveSentinelModelRouteWithEnv(SentinelReasoningCuration, database.PlatformSettings{}, getenv); err == nil {
+		t.Fatal("off-grid mode accepted a public endpoint marked local")
+	}
+	env["SENTINEL_CURATION_BASE_URL"] = "http://127.0.0.1:11434/v1"
+	if _, err := resolveSentinelModelRouteWithEnv(SentinelReasoningCuration, database.PlatformSettings{}, getenv); err != nil {
+		t.Fatalf("off-grid mode rejected loopback: %v", err)
+	}
+}

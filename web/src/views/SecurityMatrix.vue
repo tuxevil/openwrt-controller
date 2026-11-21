@@ -5,6 +5,8 @@
       <p class="subtitle">Automated Multi-Device Anomaly Correlation</p>
     </div>
 
+    <SentinelConversation />
+
     <div class="manual-trigger-panel">
       <div class="trigger-controls">
         <label for="log-limit">Log Review Limit:</label>
@@ -101,6 +103,7 @@ import { ref, onMounted, onUnmounted } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import api from '../services/api';
+import SentinelConversation from '../components/SentinelConversation.vue';
 
 const renderMarkdown = (text) => {
   if (!text) return '';

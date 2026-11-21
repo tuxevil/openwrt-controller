@@ -90,6 +90,14 @@ func completeAIContext(ctx context.Context, systemPrompt, userPrompt string, jso
 // completeAIEndpointContext is the provider-agnostic OpenAI-compatible
 // transport primitive. It knows an endpoint/model/key, but no Sentinel
 // reasoning classes or provider names.
+var offgridAIClient = &http.Client{
+	Timeout:   300 * time.Second,
+	Transport: &http.Transport{ForceAttemptHTTP2: true},
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
 func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, systemPrompt, userPrompt string, jsonMode bool) (string, string, int, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	model = strings.TrimSpace(model)
@@ -118,7 +126,14 @@ func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, syst
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}
-	resp, err := (&http.Client{Timeout: 300 * time.Second}).Do(req)
+	client := &http.Client{Timeout: 300 * time.Second}
+	if sentinelBoolEnv(os.Getenv, "SENTINEL_OFFGRID", false) {
+		if !sentinelOffgridEndpoint(baseURL) {
+			return "", "", 0, fmt.Errorf("off-grid AI requires an HTTP(S) loopback or private IP")
+		}
+		client = offgridAIClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("AI engine request failed: %w", err)
 	}

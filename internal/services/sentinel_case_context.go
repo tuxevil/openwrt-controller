@@ -667,7 +667,14 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 		return
 	}
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; caseID is parameterized.
-	_, _ = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'INVESTIGATING', updated_at = CURRENT_TIMESTAMP WHERE id = $1", safeSchema), caseID)
+	claim, err := database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'INVESTIGATING', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status IN ('OPEN','INVESTIGATING')", safeSchema), caseID)
+	if err != nil {
+		logSentinelInvestigationError(caseID, err)
+		return
+	}
+	if count, err := claim.RowsAffected(); err != nil || count == 0 {
+		return
+	}
 	item, err := GetSentinelCase(schema, caseID)
 	if err != nil {
 		logSentinelInvestigationError(caseID, err)
@@ -677,7 +684,7 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 	result, err := runSentinelInvestigationForCase(context.Background(), schema, caseID, nil, query, item.SiteID)
 	if err != nil {
 		// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
-		_, _ = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", safeSchema), "Investigation failed: "+err.Error(), caseID)
+		_, _ = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'INVESTIGATING'", safeSchema), "Investigation failed: "+err.Error(), caseID)
 		logSentinelInvestigationError(caseID, err)
 		return
 	}
@@ -690,7 +697,7 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 	MaybeQueueSentinelLearningCuration(schema, caseID)
 	MaybeQueueSentinelFrontierEscalation(schema, caseID, result)
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
-	_, err = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2", safeSchema), result.Answer, caseID)
+	_, err = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', summary = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 AND status = 'INVESTIGATING'", safeSchema), result.Answer, caseID)
 	if err != nil {
 		logSentinelInvestigationError(caseID, err)
 	}

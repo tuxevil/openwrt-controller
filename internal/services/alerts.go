@@ -138,7 +138,6 @@ func OpenIncident(schema, incidentType, deviceID, siteID, severity string) {
 
 	msg := fmt.Sprintf("[!] ALERT: %s | Device: %s", incidentType, deviceID)
 	log.Printf("\x1b[31m%s\x1b[0m", msg) // Red in terminal
-	notifyTelegram(msg)
 
 	// Keep the deterministic incident alert, then let Sentinel investigate it
 	// asynchronously with read-only tools. The investigation can produce an
@@ -149,11 +148,15 @@ func OpenIncident(schema, incidentType, deviceID, siteID, severity string) {
 			"severity":      severity,
 			"device_id":     deviceID,
 		}); caseErr == nil {
-		QueueSentinelCaseInvestigation(schema, caseID)
+		QueueSentinelCaseContextInvestigation(schema, caseID)
 	} else {
 		log.Printf("[SENTINEL_AI] failed to persist incident case: %v", caseErr)
 	}
 
+	if sentinelBoolEnv(os.Getenv, "SENTINEL_OFFGRID", false) {
+		return
+	}
+	go notifyTelegram(msg)
 	go DispatchWebhook(schema, "incident_created", map[string]interface{}{
 		"device_id":     deviceID,
 		"site_id":       siteID,
