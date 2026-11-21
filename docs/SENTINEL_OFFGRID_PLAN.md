@@ -109,3 +109,10 @@ nueva iniciada desde Chromium se registró y terminó en error de
 protocolo: Gemma devolvió una llamada textual en modo nativo.
 La base y los nodos fueron sintéticos. El aislamiento del host de LiteLLM
 y el despliegue de uso diario permanecen pendientes de validación.
+
+Tras añadir la reformulación acotada, se repitió la prueba conjunta
+de Chromium, Nerve Center y LiteLLM real en el mismo laboratorio.
+La comprobación esperó la respuesta terminal de la API para la consulta
+enviada desde Chromium, exigió `COMPLETED` con texto y encontró ese
+mismo texto en el dashboard. También pasaron el login, ambos informes,
+la reapertura del historial y la lectura del acuse.
