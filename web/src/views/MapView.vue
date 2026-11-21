@@ -23,27 +23,80 @@ import { onMounted, onUnmounted } from 'vue'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import api from '../services/api'
+import { createCartoLayer, resolveCartoApiKey } from '../services/cartoMaps'
+import { createKmzLayer } from '../utils/kmzLayer'
+
+const MAPVIEW_BASEMAP_PREF_KEY = 'nerve_mapview_basemap'
 
 let map = null
 
 onMounted(async () => {
-  const { data } = await api.getSites()
+  const [{ data }, cartoApiKey] = await Promise.all([
+    api.getSites(),
+    resolveCartoApiKey(),
+  ])
   const sites = data.data || []
 
-  // We import Leaflet as a real npm dependency (rather than relying on
-  // a globally-injected window.L) so the bundle is self-contained and
-  // does not silently break if a future maintainer forgets to add the
-  // <script> tag.
   map = L.map('map', {
-    zoomControl: false,
-    attributionControl: false
+    zoomControl: true,
+    attributionControl: true,
+    maxZoom: 22,
   }).setView([0, 0], 2)
 
-  L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19
-  }).addTo(map)
+  const baseLayers = {}
+  const cartoDark = createCartoLayer(L, 'dark', cartoApiKey)
+  baseLayers['CARTO Dark'] = cartoDark
+  baseLayers['Satellite (internet)'] = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 22, maxNativeZoom: 19, attribution: 'Esri' }
+  )
+  baseLayers['Offline'] = L.layerGroup()
 
-  const bounds = []
+  // Load any uploaded drone KMZ orthophoto overlays for sites in this tenant
+  const kmzOverlays = {}
+  const kmzBounds = []
+  await Promise.all(
+    sites.map(async (s) => {
+      try {
+        const res = await api.getSiteKmzMap(s.id)
+        const meta = res.data?.data
+        if (meta && Array.isArray(meta.bounds)) {
+          const layer = createKmzLayer(L, meta, {
+            fetchTileBlob: (z, x, y) => api.fetchSiteKmzTileBlob(s.id, z, x, y),
+            fetchSingleBlob: () => api.fetchSiteKmzImageBlob(s.id),
+            maxZoom: 22,
+          })
+          const label = `Drone KMZ: ${s.name || meta.filename || s.id.slice(0, 8)}`
+          kmzOverlays[label] = layer
+          baseLayers[label] = layer
+          kmzBounds.push(meta.bounds[0], meta.bounds[1])
+        }
+      } catch {
+        // ignore missing KMZ
+      }
+    })
+  )
+
+  const kmzLabels = Object.keys(kmzOverlays)
+  let savedPref = ''
+  try {
+    savedPref = window.localStorage.getItem(MAPVIEW_BASEMAP_PREF_KEY) || ''
+  } catch {
+    savedPref = ''
+  }
+  const defaultKey = kmzLabels.length ? kmzLabels[0] : 'CARTO Dark'
+  const initialLayer = baseLayers[savedPref] || baseLayers[defaultKey]
+  initialLayer.addTo(map)
+  L.control.layers(baseLayers).addTo(map)
+  map.on('baselayerchange', (e) => {
+    try {
+      if (e?.name) window.localStorage.setItem(MAPVIEW_BASEMAP_PREF_KEY, e.name)
+    } catch {
+      // ignore storage errors
+    }
+  })
+
+  const bounds = [...kmzBounds]
 
   sites.forEach(s => {
     if (s.latitude && s.longitude) {

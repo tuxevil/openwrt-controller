@@ -279,6 +279,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}/status", middleware.WithAuth(handlers.GetSurveyStatusHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}/ping", middleware.WithAuth(handlers.SurveyPingHandler))
 	mux.HandleFunc("PUT /api/global/surveys/lockdown", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.SetGlobalSurveyLockdownHandler)))
+	mux.HandleFunc("GET /api/maps/config", middleware.WithAuth(handlers.GetMapsConfigHandler))
 
 	// ── Agent Management ─────────────────────────────────────────────────────
 	// Device-facing: authenticated by enrollment or device token (no JWT)

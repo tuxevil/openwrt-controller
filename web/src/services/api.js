@@ -389,5 +389,10 @@ export default {
       timeout: 30000,
     })
     return res.data
+  },
+
+  // ── MAPS / Basemap runtime config ─────────────────────────────────────────
+  getMapsConfig() {
+    return apiClient.get('/maps/config')
   }
 }
