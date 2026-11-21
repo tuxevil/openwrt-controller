@@ -16,12 +16,18 @@ describe('ChatOpsTerminal', () => {
     vi.restoreAllMocks()
   })
 
-  it('identifies the conversation as Sentinel Operator', () => {
+  it('identifies the conversation as Sentinel Operator and uses full-screen mobile layout', () => {
     const wrapper = mount(ChatOpsTerminal, { props: { modelValue: true } })
 
     expect(wrapper.text()).toContain('SENTINEL_OPERATOR_CONSOLE')
     expect(wrapper.text()).not.toMatch(/oracle/i)
     expect(wrapper.get('button[aria-label="Close Sentinel Operator chat"]')).toBeTruthy()
+
+    const overlay = wrapper.get('[data-testid="sentinel-chat-overlay"]')
+    const win = wrapper.get('[data-testid="sentinel-chat-window"]')
+    expect(overlay.classes()).toContain('p-0')
+    expect(win.classes()).toContain('h-[100dvh]')
+    expect(win.classes()).toContain('w-full')
 
     wrapper.unmount()
   })

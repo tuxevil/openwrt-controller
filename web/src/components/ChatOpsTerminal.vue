@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref, onMounted, onUnmounted, nextTick } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import api from '../services/api'
 
@@ -80,6 +80,16 @@ function close() {
   emit('update:modelValue', false)
   command.value = ''
 }
+
+watch(
+  () => props.modelValue,
+  async (open) => {
+    if (!open) return
+    await nextTick()
+    scrollBottom()
+    inputEl.value?.focus()
+  }
+)
 
 // Global toggle with ~ key (ignore when user is typing in another input)
 function handleGlobalKeydown(e) {
@@ -183,28 +193,39 @@ function renderTable(rows) {
 </script>
 
 <template>
-  <div v-show="modelValue" class="fixed inset-0 z-50 flex items-start justify-center pt-4 sm:pt-16 px-2 sm:px-4 font-mono">
-    <!-- Backdrop Blur -->
-    <div class="absolute inset-0 bg-black/80 backdrop-blur-sm" @click="close"></div>
-    
-    <!-- Terminal Window -->
-    <div class="relative w-full max-w-4xl bg-panel border border-neon-cyan/50 shadow-[0_0_36px_rgba(0,240,255,0.18)] flex flex-col clip-chamfer min-h-[360px] max-h-[88dvh] sm:max-h-[75vh]">
-      
+  <div
+    v-show="modelValue"
+    data-testid="sentinel-chat-overlay"
+    class="fixed inset-0 z-50 flex items-stretch sm:items-start justify-center p-0 sm:pt-16 sm:px-4 font-mono"
+  >
+    <!-- Backdrop Blur (visible on sm+ around floating modal) -->
+    <div class="hidden sm:block absolute inset-0 bg-black/80 backdrop-blur-sm" @click="close"></div>
+
+    <!-- Terminal Window: full-screen on mobile, chamfered floating console on sm+ -->
+    <div
+      data-testid="sentinel-chat-window"
+      class="sentinel-window relative w-full h-[100dvh] sm:h-auto sm:max-w-4xl bg-vantablack sm:bg-panel border-0 sm:border sm:border-neon-cyan/50 sm:shadow-[0_0_36px_rgba(0,240,255,0.18)] flex flex-col sm:min-h-[420px] sm:max-h-[76vh]"
+    >
       <!-- Top Bar -->
-      <div class="flex items-center justify-between gap-2 px-3 sm:px-4 py-2.5 border-b border-neon-cyan/30 bg-neon-cyan/10">
+      <div class="shrink-0 flex items-center justify-between gap-2 px-4 py-3 sm:py-2.5 border-b border-neon-cyan/30 bg-neon-cyan/10 pt-[max(0.75rem,env(safe-area-inset-top))] sm:pt-2.5">
         <div class="min-w-0">
           <div class="text-xs text-neon-cyan tracking-widest font-bold truncate">/// SENTINEL_OPERATOR_CONSOLE</div>
           <div class="text-[10px] text-neon-cyan/70 tracking-widest mt-0.5 truncate">
             SITE_CONTEXT: {{ activeSiteId || 'FLEET_SCOPE' }}
           </div>
         </div>
-        <button type="button" aria-label="Close Sentinel Operator chat" @click="close" class="p-1.5 text-muted hover:text-neon-red border border-transparent hover:border-neon-red/40 transition-colors shrink-0">
+        <button
+          type="button"
+          aria-label="Close Sentinel Operator chat"
+          @click="close"
+          class="p-2 sm:p-1.5 text-muted hover:text-neon-red border border-gridline sm:border-transparent hover:border-neon-red/40 transition-colors shrink-0 clip-chamfer-sm"
+        >
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
         </button>
       </div>
 
       <!-- History Area -->
-      <div id="chatops-history" class="flex-1 overflow-auto p-4 space-y-4">
+      <div id="chatops-history" class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
         <div v-for="(item, idx) in history" :key="idx">
           
           <!-- System Alert -->
@@ -213,31 +234,31 @@ function renderTable(rows) {
           </div>
           
           <!-- User Query -->
-          <div v-else-if="item.type === 'user'" class="text-white text-sm">
-            <span class="text-gray-500">operator@nexus:~$</span> {{ item.text }}
+          <div v-else-if="item.type === 'user'" class="text-white text-sm break-words">
+            <span class="text-muted">operator@nexus:~$</span> {{ item.text }}
           </div>
           
           <!-- Sentinel Summary -->
-          <div v-else-if="item.type === 'sentinel_summary'" class="text-neon-green text-sm flex gap-2">
-            <span class="opacity-70">[SENTINEL]</span> <span>{{ item.text }}</span>
+          <div v-else-if="item.type === 'sentinel_summary'" class="text-neon-green text-sm flex gap-2 break-words">
+            <span class="opacity-70 shrink-0">[SENTINEL]</span> <span class="min-w-0 whitespace-pre-wrap">{{ item.text }}</span>
           </div>
 
           <!-- Sentinel Data Render (ASCII Grid) -->
-          <div v-else-if="item.type === 'sentinel_data'" class="text-neon-cyan text-xs mt-2 overflow-x-auto bg-neon-cyan/5 p-3 clip-chamfer border border-neon-cyan/20">
+          <div v-else-if="item.type === 'sentinel_data'" class="text-neon-cyan text-xs mt-2 overflow-x-auto bg-neon-cyan/5 p-3 clip-chamfer-sm border border-neon-cyan/20">
             <pre class="m-0 leading-tight whitespace-pre">{{ renderTable(item.data) }}</pre>
           </div>
 
           <!-- Approval-gated proposal -->
-          <div v-else-if="item.type === 'sentinel_proposal'" class="text-yellow-300 text-xs mt-2 bg-yellow-300/5 p-3 border border-yellow-300/30 clip-chamfer">
+          <div v-else-if="item.type === 'sentinel_proposal'" class="text-neon-amber text-xs mt-2 bg-neon-amber/5 p-3 border border-neon-amber/30 clip-chamfer-sm">
             <div class="font-bold tracking-widest">[ACTION PROPOSAL: {{ item.proposal.status }}]</div>
             <div class="mt-1">{{ item.proposal.summary }}</div>
             <div class="opacity-80 mt-1">Device: {{ item.proposal.device_id }} · Config: {{ item.proposal.config }}</div>
-            <div v-if="item.proposal.blocked_reason" class="text-red-400 mt-1">Blocked: {{ item.proposal.blocked_reason }}</div>
+            <div v-if="item.proposal.blocked_reason" class="text-neon-red mt-1">Blocked: {{ item.proposal.blocked_reason }}</div>
             <div v-else class="opacity-80 mt-1">Review and approve from Sentinel proposals before execution.</div>
           </div>
 
           <!-- Error -->
-          <div v-else-if="item.type === 'error'" class="text-red-500 text-sm">
+          <div v-else-if="item.type === 'error'" class="text-neon-red text-sm break-words">
             {{ item.text }}
           </div>
 
@@ -249,7 +270,10 @@ function renderTable(rows) {
       </div>
 
       <!-- Input Area -->
-      <form @submit.prevent="executeCommand" class="p-2.5 sm:p-3 border-t border-neon-cyan/30 bg-black flex items-center gap-2 sm:gap-3">
+      <form
+        @submit.prevent="executeCommand"
+        class="shrink-0 p-3 border-t border-neon-cyan/30 bg-black flex items-center gap-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:pb-3"
+      >
         <span class="text-neon-cyan shrink-0">❯</span>
         <input 
           ref="inputEl"
@@ -264,7 +288,7 @@ function renderTable(rows) {
         <button
           type="submit"
           :disabled="isProcessing || !command.trim()"
-          class="px-3 py-1.5 border border-neon-cyan/60 text-neon-cyan hover:bg-neon-cyan hover:text-black disabled:opacity-35 text-[10px] font-bold tracking-widest uppercase clip-chamfer-sm transition-colors shrink-0"
+          class="px-3.5 py-2 sm:py-1.5 border border-neon-cyan/60 text-neon-cyan hover:bg-neon-cyan hover:text-black disabled:opacity-35 text-[10px] font-bold tracking-widest uppercase clip-chamfer-sm transition-colors shrink-0"
         >
           SEND
         </button>
@@ -275,7 +299,9 @@ function renderTable(rows) {
 </template>
 
 <style scoped>
-.clip-chamfer {
-  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+@media (min-width: 640px) {
+  .sentinel-window {
+    clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  }
 }
 </style>

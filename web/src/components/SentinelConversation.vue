@@ -1,5 +1,5 @@
 <template>
-  <section class="mb-6 rounded border border-purple-800 bg-slate-950 p-4 text-slate-100">
+  <section class="mb-6 border border-neon-cyan/40 bg-panel p-4 text-gray-100 clip-chamfer-sm">
     <h2 class="text-lg font-semibold">Conversación con Sentinel</h2>
     <div class="mt-3">
       <button type="button" class="underline" :disabled="loadingReport" @click="loadReport">
@@ -52,7 +52,7 @@
       <textarea id="sentinel-query" v-model.trim="query" maxlength="2000" required
         class="rounded border border-slate-600 bg-slate-900 p-2"
         placeholder="¿Cuándo reportó por última vez cada nodo?" />
-      <button class="justify-self-start rounded bg-purple-800 px-4 py-2 disabled:opacity-50"
+      <button class="justify-self-start border border-neon-cyan bg-neon-cyan/15 text-neon-cyan hover:bg-neon-cyan hover:text-black px-4 py-2 text-xs font-bold uppercase tracking-widest clip-chamfer-sm transition-colors disabled:opacity-50"
         :disabled="busy || !query">Enviar</button>
     </form>
     <p v-if="running" class="mt-3" role="status">Sentinel está investigando…</p>
