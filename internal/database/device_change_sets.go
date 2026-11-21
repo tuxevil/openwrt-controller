@@ -171,6 +171,13 @@ func validDeviceChangeSetCommand(command deviceChangeSetCommand) bool {
 		return deviceChangeSetSectionPattern.MatchString(command.Section) && deviceChangeSetNamePattern.MatchString(command.Option)
 	case "add":
 		return deviceChangeSetNamePattern.MatchString(command.Value)
+	case "ensure_host":
+		// Mirrors services.ValidateDeviceOperation + agent operation_apply_ensure_host:
+		// DHCP-only idempotent static-lease primitive (Section=name, Option=MACs, Value=IPv4).
+		return command.Config == "dhcp" && command.Section != "" && command.Option != "" && command.Value != ""
+	case "delete_all":
+		// Mirrors services.ValidateDeviceOperation + agent: firewall redirects only.
+		return command.Config == "firewall" && command.Section == "redirect" && command.Option == "" && command.Value == ""
 	default:
 		return false
 	}
@@ -452,13 +459,13 @@ func RecordDeviceChangeSetStatus(ctx context.Context, schema, deviceID string, s
 	generationText := strconv.FormatInt(identity.Generation, 10)
 	pendingMatch := `(pending_operation IS NULL
 	    AND pending_change_set->>'change_set_id' = $3::text
-	    AND pending_change_set->>'device_id' = $5::text
+	    AND LOWER(pending_change_set->>'device_id') = LOWER($5::text)
 	    AND pending_change_set->>'plan_hash' = $6::text
 	    AND pending_change_set->>'generation' = $7::text)`
 	lastMatch := `(pending_operation IS NULL
 	    AND pending_change_set IS NULL
 	    AND last_change_set->>'change_set_id' = $3::text
-	    AND last_change_set->>'device_id' = $5::text
+	    AND LOWER(last_change_set->>'device_id') = LOWER($5::text)
 	    AND last_change_set->>'plan_hash' = $6::text
 	    AND last_change_set->>'generation' = $7::text
 	    AND (COALESCE(last_change_set->>'state', '') NOT IN ('COMMITTED', 'RESTORED', 'RECOVERY_REQUIRED', 'REJECTED')
