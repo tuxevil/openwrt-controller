@@ -82,3 +82,8 @@ También pasaron la respuesta HTML, ambos informes y el acuse idempotente.
 El relé mantuvo el certificado de LiteLLM y no dio salida general al
 controlador. La salida a Internet del host de LiteLLM se debe verificar
 por separado.
+
+El cliente de Hermes también ejecutó ambas herramientas sobre PostgreSQL
+desechable con dos sitios. El informe contó únicamente el nodo y el
+incidente del sitio asignado. El caso de ese sitio se devolvió y la
+consulta del caso del segundo sitio devolvió `case unavailable`.
