@@ -24,13 +24,13 @@ jobs:
     name: Go Backend
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # The new-code lint compares against origin/main. A PR checkout
           # otherwise only fetches the synthetic merge ref.
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: "1.26"
           cache: true
@@ -70,7 +70,7 @@ jobs:
           echo "::notice::Total coverage: ${COV}%"
 
       - name: Upload coverage artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-report
           path: coverage.out
@@ -83,20 +83,18 @@ jobs:
       # in this PR, so the existing ~50 errcheck/gosec findings don't
       # block merge. New issues are caught as they appear.
       - name: golangci-lint (new code only)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
-          install-mode: goinstall
           args: --timeout=5m --new-from-rev=origin/main
 
       # Full-repo lint, info-only, so we can track the existing
       # tech-debt count over time without blocking merges.
       - name: golangci-lint (full repo, info only)
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           version: latest
-          install-mode: goinstall
-          args: --timeout=5m --out-format=line-number
+          args: --timeout=5m
         continue-on-error: true
 
       # govulncheck: scan for known CVEs in the Go module graph.
@@ -121,9 +119,9 @@ jobs:
       run:
         working-directory: web
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22.13.0"
           cache: "npm"
@@ -150,11 +148,19 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Upload dist
+        uses: actions/upload-artifact@v7
+        with:
+          name: web-dist
+          path: web/dist
+          retention-days: 7
+          if-no-files-found: ignore
+
   contracts:
     name: Device and Compose Contracts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Validate Compose file
         env:
           POSTGRES_PASSWORD: ci-postgres-password
@@ -173,14 +179,6 @@ jobs:
           devices/agent_change_set_test.sh
           devices/agent_transaction_test.sh
 
-      - name: Upload dist
-        uses: actions/upload-artifact@v4
-        with:
-          name: web-dist
-          path: web/dist
-          retention-days: 7
-          if-no-files-found: ignore
-
   # ────────────────────────────────────────────────────────────────────
   # Docker image build (no push by default; tag-and-push lives in the
   # release workflow).
@@ -190,12 +188,12 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend, frontend]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
 
       - name: Build image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -214,7 +212,7 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 

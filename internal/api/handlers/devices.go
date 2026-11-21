@@ -487,7 +487,7 @@ func UpdateDeviceLocationHandler(w http.ResponseWriter, r *http.Request) {
 	if req.Lat != nil && req.Lon != nil {
 		detail = fmt.Sprintf("%.6f,%.6f (%s)", *req.Lat, *req.Lon, req.Note)
 	}
-	go database.InsertAuditLog(username, "DEVICE_LOCATION_UPDATE", "DEVICE", deviceID, detail, r.RemoteAddr)
+	_ = database.InsertAuditLogContext(r.Context(), username, "DEVICE_LOCATION_UPDATE", "DEVICE", deviceID, detail, r.RemoteAddr)
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"data": map[string]interface{}{

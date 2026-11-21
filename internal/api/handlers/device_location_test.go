@@ -74,6 +74,9 @@ func TestUpdateDeviceLocationHandlerEndToEnd(t *testing.T) {
 	mock.ExpectExec("UPDATE tenant_demo.devices").
 		WithArgs(lat, lon, "Poste sur 3m", "78:8a:20:2c:c1:12", "site-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectExec("INSERT INTO audit_logs").
+		WithArgs("admin", "DEVICE_LOCATION_UPDATE", "DEVICE", "78:8a:20:2c:c1:12", "-2.023712,-78.947345 (Poste sur 3m)", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
 	req := httptest.NewRequest(http.MethodPut, "/api/sites/site-1/devices/78:8a:20:2c:c1:12/location",

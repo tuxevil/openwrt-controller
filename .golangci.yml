@@ -1,5 +1,7 @@
-# golangci-lint configuration for openwrt-controller.
+# golangci-lint v2 configuration for openwrt-controller.
 # See https://golangci-lint.run/usage/configuration/ for all options.
+version: "2"
+
 run:
   timeout: 5m
   tests: true
@@ -8,7 +10,7 @@ linters:
   # Default + a curated set focused on catching the kind of issues the
   # audit found: error wrapping, static analysis, security smells,
   # performance, and style.
-  disable-all: true
+  default: none
   enable:
     - errcheck       # Unchecked errors.
     - gosec          # Security issues (SQL injection, weak crypto, etc.).
@@ -16,39 +18,42 @@ linters:
     - ineffassign    # Unused assignments.
     - staticcheck    # Static analysis: bug, unused, performance.
     - unused         # Unused variables / functions.
-    - gofmt          # Formatting.
-    - goimports      # Import grouping.
     - gocritic       # Style + performance nits.
     - bodyclose      # http.ResponseWriter not closed.
     - contextcheck   # Missing context propagation.
     - nilerr         # Returning nil after handling err.
     - prealloc       # Slice pre-allocation hints.
+  exclusions:
+    # Skip generated files and the vendor tree.
+    paths:
+      - vendor
+      - node_modules
+      - ".*\\.pb\\.go$"
+      - ".*_mock\\.go$"
+    # We have a lot of pre-existing errcheck noise from the original
+    # codebase (handler stubs, `_, _ = ...` patterns, http w.Write
+    # returns). We don't want to fail CI on every line; instead the
+    # `--new-from-rev=origin/main` flag in CI makes golangci-lint report only
+    # issues introduced in the current PR, letting the existing tech
+    # debt be paid down gradually.
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+      - path: internal/orchestrator/executor\.go
+        text: "G404"  # Insecure random — not used for crypto.
+      # errcheck is informational for handler stub patterns; only flag
+      # on new code.
+      - linters:
+          - errcheck
+        text: "Error return value of `w\\.Write` is not checked"
+
+formatters:
+  enable:
+    - gofmt          # Formatting.
+    - goimports      # Import grouping.
 
 issues:
-  # Skip generated files and the vendor tree (lives in issues.* in v1.61+).
-  exclude-dirs:
-    - vendor
-    - node_modules
-  exclude-files:
-    - ".*\\.pb\\.go$"
-    - ".*_mock\\.go$"
-  # We have a lot of pre-existing errcheck noise from the original
-  # codebase (handler stubs, `_, _ = ...` patterns, http w.Write
-  # returns). We don't want to fail CI on every line; instead the
-  # `--new-from-rev=main` flag in CI makes golangci-lint report only
-  # issues introduced in the current PR, letting the existing tech
-  # debt be paid down gradually.
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gosec
-    - path: internal/orchestrator/executor\.go
-      text: "G404"  # Insecure random — not used for crypto.
-    # errcheck is informational for handler stub patterns; only flag
-    # on new code.
-    - linters:
-        - errcheck
-      text: "Error return value of `w\\.Write` is not checked"
   max-issues-per-linter: 50
   max-same-issues: 10
 
