@@ -58,3 +58,17 @@ herramientas contra el endpoint TLS de laboratorio. Su función de
 diagnóstico usó `url` y `headers.Authorization` de la configuración
 de `mcp_servers` y el certificado de prueba en el almacén de confianza
 de su proceso. En la LAN, usa la CA que firmó el certificado del controlador.
+
+### Arranque de laboratorio sin conectividad externa
+
+El 2026-11-21 se compiló y arrancó Nerve Center en un espacio de red Linux
+con solo loopback y sin rutas externas. El laboratorio usó PostgreSQL
+desechable, un tenant sintético y un proveedor HTTP de prueba. Se
+verificaron la respuesta HTML de `/global/sentinel`, el login, ambos
+informes, dos solicitudes de acuse con el mismo resultado y una
+conversación asíncrona completada y consultable por su identificador.
+
+La prueba cubre el arranque y las APIs del controlador con aislamiento de
+red. La prueba de LiteLLM real se realizó por separado en la LAN. Queda
+por comprobar el recorrido en navegador y los clientes MCP con el
+controlador y LiteLLM activos en una LAN sin salida a Internet.
