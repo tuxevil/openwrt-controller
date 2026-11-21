@@ -362,3 +362,30 @@ func GetSentinelHealthReportHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	writeSentinelJSON(w, http.StatusOK, report)
 }
+
+func AcknowledgeSentinelCaseHandler(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("case_id")
+	if !parseSentinelID(w, id) {
+		return
+	}
+	var at time.Time
+	var by string
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	err := database.Tx(ctx).QueryRowContext(ctx, `
+		UPDATE sentinel_cases
+		SET acknowledged_at = COALESCE(acknowledged_at, CURRENT_TIMESTAMP),
+		    acknowledged_by = COALESCE(acknowledged_by, $2)
+		WHERE id = $1 AND source <> 'operator_chat'
+		RETURNING acknowledged_at, acknowledged_by
+	`, id, GetUsernameFromReq(r)).Scan(&at, &by)
+	if errors.Is(err, sql.ErrNoRows) {
+		writeSentinelError(w, http.StatusNotFound, "NOT_FOUND", "Sentinel alert not found")
+		return
+	}
+	if err != nil || database.CommitRequestTx(ctx) != nil {
+		writeSentinelError(w, http.StatusInternalServerError, "ACK_FAILED", "Could not acknowledge Sentinel alert")
+		return
+	}
+	writeSentinelJSON(w, http.StatusOK, map[string]interface{}{"acknowledged_at": at, "acknowledged_by": by})
+}

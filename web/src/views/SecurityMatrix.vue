@@ -26,6 +26,12 @@
         <span class="operator-case-title">{{ item.title }}</span>
         <span class="operator-case-status">{{ item.status }}</span>
         <p>{{ item.summary }}</p>
+        <p v-if="item.acknowledged_at">
+          Revisado por {{ item.acknowledged_by }} · {{ new Date(item.acknowledged_at).toLocaleString() }}
+        </p>
+        <button v-else-if="item.source !== 'operator_chat'" type="button"
+          class="action-btn neon-btn" :disabled="acknowledging"
+          @click="acknowledgeCase(item)">Marcar como revisado</button>
       </div>
       <div v-for="proposal in proposals" :key="proposal.id" class="operator-proposal">
         <div><strong>ACTION PROPOSAL</strong> · {{ proposal.device_id }} · {{ proposal.config }}</div>
@@ -118,6 +124,7 @@ const triggerLimit = ref(100);
 const triggering = ref(false);
 const triggerError = ref('');
 const operatorCases = ref([]);
+const acknowledging = ref(false);
 const proposals = ref([]);
 const operatorNotes = ref([]);
 const savingNote = ref(false);
@@ -200,6 +207,20 @@ const deleteNote = async (note) => {
     await fetchOperatorState();
   } catch (e) {
     triggerError.value = e.response?.data?.error?.message || e.message;
+  }
+};
+
+const acknowledgeCase = async (item) => {
+  acknowledging.value = true;
+  triggerError.value = '';
+  try {
+    const { data } = await api.client.post(`/sentinel/cases/${item.id}/acknowledge`);
+    operatorCases.value = operatorCases.value.map(current =>
+      current.id === item.id ? { ...current, ...data } : current);
+  } catch (error) {
+    triggerError.value = error.response?.data?.error?.message || 'No se pudo registrar el acuse.';
+  } finally {
+    acknowledging.value = false;
   }
 };
 

@@ -451,6 +451,8 @@ func createTenantTables(schema string) error {
 		updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 		resolved_at TIMESTAMP WITH TIME ZONE
 	);
+	ALTER TABLE sentinel_cases ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ;
+	ALTER TABLE sentinel_cases ADD COLUMN IF NOT EXISTS acknowledged_by TEXT;
 	CREATE INDEX IF NOT EXISTS idx_sentinel_cases_status_updated ON sentinel_cases(status, updated_at DESC);
 	CREATE INDEX IF NOT EXISTS idx_sentinel_cases_fingerprint ON sentinel_cases(fingerprint);
 
@@ -761,6 +763,8 @@ func createTenantTables(schema string) error {
 			severity VARCHAR(20) NOT NULL DEFAULT 'MEDIUM', status VARCHAR(32) NOT NULL DEFAULT 'OPEN', title VARCHAR(255) NOT NULL,
 			summary TEXT NOT NULL DEFAULT '', evidence JSONB NOT NULL DEFAULT '[]', created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
 			updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, resolved_at TIMESTAMP WITH TIME ZONE)`, quotedSchema, quotedSchema, quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.sentinel_cases ADD COLUMN IF NOT EXISTS acknowledged_at TIMESTAMPTZ", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.sentinel_cases ADD COLUMN IF NOT EXISTS acknowledged_by TEXT", quotedSchema),
 		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_cases_status_updated ON %s.sentinel_cases(status, updated_at DESC)", quotedSchema),
 		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_cases_fingerprint ON %s.sentinel_cases(fingerprint)", quotedSchema),
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_notes (

@@ -36,19 +36,21 @@ type SentinelMessageView struct {
 }
 
 type SentinelCase struct {
-	ID          string          `json:"id"`
-	Fingerprint string          `json:"fingerprint"`
-	Source      string          `json:"source"`
-	SiteID      string          `json:"site_id,omitempty"`
-	DeviceID    string          `json:"device_id,omitempty"`
-	Severity    string          `json:"severity"`
-	Status      string          `json:"status"`
-	Title       string          `json:"title"`
-	Summary     string          `json:"summary"`
-	Evidence    json.RawMessage `json:"evidence,omitempty"`
-	CreatedAt   time.Time       `json:"created_at"`
-	UpdatedAt   time.Time       `json:"updated_at"`
-	ResolvedAt  *time.Time      `json:"resolved_at,omitempty"`
+	ID             string          `json:"id"`
+	Fingerprint    string          `json:"fingerprint"`
+	Source         string          `json:"source"`
+	SiteID         string          `json:"site_id,omitempty"`
+	DeviceID       string          `json:"device_id,omitempty"`
+	Severity       string          `json:"severity"`
+	Status         string          `json:"status"`
+	Title          string          `json:"title"`
+	Summary        string          `json:"summary"`
+	Evidence       json.RawMessage `json:"evidence,omitempty"`
+	CreatedAt      time.Time       `json:"created_at"`
+	UpdatedAt      time.Time       `json:"updated_at"`
+	ResolvedAt     *time.Time      `json:"resolved_at,omitempty"`
+	AcknowledgedAt *time.Time      `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy string          `json:"acknowledged_by,omitempty"`
 }
 
 type SentinelNote struct {
@@ -539,7 +541,7 @@ func ListSentinelCases(schema string, limit int) ([]SentinelCase, error) {
 		limit = 50
 	}
 	rows, err := database.DB.Query(fmt.Sprintf(`SELECT id::text, fingerprint, source, COALESCE(site_id::text,''),
-        COALESCE(device_id,''), severity, status, title, summary, evidence, created_at, updated_at, resolved_at
+        COALESCE(device_id,''), severity, status, title, summary, evidence, created_at, updated_at, resolved_at, acknowledged_at, COALESCE(acknowledged_by,'')
         FROM %s.sentinel_cases ORDER BY updated_at DESC LIMIT $1`, safeSchema), limit)
 	if err != nil {
 		return nil, err
@@ -548,7 +550,7 @@ func ListSentinelCases(schema string, limit int) ([]SentinelCase, error) {
 	result := []SentinelCase{}
 	for rows.Next() {
 		var item SentinelCase
-		if err := rows.Scan(&item.ID, &item.Fingerprint, &item.Source, &item.SiteID, &item.DeviceID, &item.Severity, &item.Status, &item.Title, &item.Summary, &item.Evidence, &item.CreatedAt, &item.UpdatedAt, &item.ResolvedAt); err != nil {
+		if err := rows.Scan(&item.ID, &item.Fingerprint, &item.Source, &item.SiteID, &item.DeviceID, &item.Severity, &item.Status, &item.Title, &item.Summary, &item.Evidence, &item.CreatedAt, &item.UpdatedAt, &item.ResolvedAt, &item.AcknowledgedAt, &item.AcknowledgedBy); err != nil {
 			return nil, err
 		}
 		item.Summary = redactSentinelSecrets(item.Summary)
