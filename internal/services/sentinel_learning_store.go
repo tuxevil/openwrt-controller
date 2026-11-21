@@ -26,11 +26,23 @@ func ensureSentinelLearningTables(schema string) error {
 	if _, ok := sentinelLearningSchemaReady.Load(safeSchema); ok {
 		return nil
 	}
+	tx, err := database.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	// Serialize first-use DDL per tenant, including across controller processes.
+	if _, err := tx.Exec("SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))", "sentinel_learning", safeSchema); err != nil {
+		return err
+	}
+	if _, ready := sentinelLearningSchemaReady.Load(safeSchema); ready {
+		return nil
+	}
 	// Learning state is deliberately separate from sentinel_cases (episodic
 	// memory) and from all authoritative OMEGA/controller state. None of these
 	// tables are consulted as World State.
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; no data values are interpolated.
-	_, err = database.DB.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_learned_memories (
+	_, err = tx.Exec(fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s.sentinel_learned_memories (
 		id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 		source_case_id UUID NOT NULL REFERENCES %s.sentinel_cases(id) ON DELETE CASCADE,
 		statement TEXT NOT NULL,
@@ -98,10 +110,14 @@ func ensureSentinelLearningTables(schema string) error {
 		safeSchema, safeSchema, safeSchema, safeSchema, safeSchema, safeSchema,
 		safeSchema, safeSchema, safeSchema, safeSchema, safeSchema, safeSchema,
 		safeSchema, safeSchema, safeSchema, safeSchema))
-	if err == nil {
-		sentinelLearningSchemaReady.Store(safeSchema, true)
+	if err != nil {
+		return err
 	}
-	return err
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	sentinelLearningSchemaReady.Store(safeSchema, true)
+	return nil
 }
 
 func encodeLearningRefs(refs []SentinelLearningEvidenceRef) ([]byte, error) {
