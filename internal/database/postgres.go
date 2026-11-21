@@ -640,8 +640,6 @@ func createTenantTables(schema string) error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_wifi_survey_points_survey_captured
 		ON wifi_survey_points(survey_id, captured_at);
-	CREATE UNIQUE INDEX IF NOT EXISTS uq_wifi_survey_points_client_sample
-		ON wifi_survey_points(survey_id, client_sample_id) WHERE client_sample_id IS NOT NULL;
 	`
 
 	tx, err := DB.Begin()
