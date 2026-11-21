@@ -358,5 +358,33 @@ export default {
   },
   saveSurveyFloorplan(siteId, payload) {
     return apiClient.put(`/sites/${siteId}/surveys/floorplan`, payload, { timeout: 20000 })
+  },
+  getSiteKmzMap(siteId) {
+    return apiClient.get(`/sites/${siteId}/maps/kmz`)
+  },
+  uploadSiteKmzMap(siteId, file) {
+    const form = new FormData()
+    form.append('file', file)
+    return apiClient.post(`/sites/${siteId}/maps/kmz`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+      timeout: 120000,
+    })
+  },
+  deleteSiteKmzMap(siteId) {
+    return apiClient.delete(`/sites/${siteId}/maps/kmz`)
+  },
+  async fetchSiteKmzTileBlob(siteId, z, x, y) {
+    const res = await apiClient.get(`/sites/${siteId}/maps/kmz/tile/${z}/${x}/${y}`, {
+      responseType: 'blob',
+      timeout: 15000,
+    })
+    return res.status === 204 ? null : res.data
+  },
+  async fetchSiteKmzImageBlob(siteId) {
+    const res = await apiClient.get(`/sites/${siteId}/maps/kmz/image`, {
+      responseType: 'blob',
+      timeout: 30000,
+    })
+    return res.data
   }
 }

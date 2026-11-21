@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css'
 import QRCode from 'qrcode'
 import api from '../services/api'
 import { createCartoLayer, resolveCartoApiKey } from '../services/cartoMaps'
+import { createKmzLayer } from '../utils/kmzLayer'
 import {
   classifyMissingReason,
   colorForSignalDbm,
@@ -50,6 +51,8 @@ let accuracyLayer = null
 let neighborLayer = null
 let heatLayer = null
 let floorplanOverlay = null
+let kmzLayer = null
+let layerControl = null
 let didInitialFit = false
 
 // Filters / display
@@ -61,7 +64,7 @@ const showAccuracy = ref(false)
 const showNeighbors = ref(false)
 const timeSlider = ref(100)
 
-// Local offline floorplan
+// Local offline floorplan & Drone KMZ orthophoto
 const floorplan = ref(null) // { image_data_url, filename, bounds: [[swLat,swLon],[neLat,neLon]], opacity }
 const showFloorplan = ref(true)
 const showFloorplanPanel = ref(false)
@@ -69,12 +72,18 @@ const floorplanSaving = ref(false)
 const floorplanError = ref('')
 const floorplanFileInput = ref(null)
 
+const kmzMeta = ref(null) // { name, filename, mode, bounds, min_level, max_level, tile_count, size_bytes }
+const kmzUploading = ref(false)
+const kmzError = ref('')
+const kmzFileInput = ref(null)
+
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(async () => {
   await Promise.all([
     loadSitePublicFlag(),
     loadSiteDevices(),
     loadFloorplan(),
+    loadKmzMeta(),
     loadSurveys(),
   ])
 })
@@ -103,6 +112,8 @@ watch(selectedSurvey, async (s) => {
     neighborLayer = null
     heatLayer = null
     floorplanOverlay = null
+    kmzLayer = null
+    layerControl = null
   }
 })
 
@@ -142,6 +153,15 @@ async function loadFloorplan() {
     floorplan.value = res.data?.data || null
   } catch {
     floorplan.value = null
+  }
+}
+
+async function loadKmzMeta() {
+  try {
+    const res = await api.getSiteKmzMap(siteId.value)
+    kmzMeta.value = res.data?.data || null
+  } catch {
+    kmzMeta.value = null
   }
 }
 
@@ -222,22 +242,35 @@ function saveBasemapPref(name) {
   }
 }
 
+function buildSiteKmzLayer(meta) {
+  return createKmzLayer(L, meta, {
+    fetchTileBlob: (z, x, y) => api.fetchSiteKmzTileBlob(siteId.value, z, x, y),
+    fetchSingleBlob: () => api.fetchSiteKmzImageBlob(siteId.value),
+    maxZoom: 22,
+  })
+}
+
 function initMap(cartoApiKey = '') {
   if (map || !mapEl.value) return
-  map = L.map(mapEl.value, { zoomControl: true, attributionControl: true }).setView([0, 0], 18)
+  map = L.map(mapEl.value, { zoomControl: true, attributionControl: true, maxZoom: 22 }).setView([0, 0], 18)
 
   const offlineLayer = L.layerGroup()
   const satellite = L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 19, attribution: 'Esri' }
+    { maxZoom: 22, maxNativeZoom: 19, attribution: 'Esri' }
   )
 
   const baseLayers = {}
   let defaultLayerName = 'Offline'
+  if (kmzMeta.value) {
+    kmzLayer = buildSiteKmzLayer(kmzMeta.value)
+    baseLayers['Drone Orthophoto (KMZ)'] = kmzLayer
+    defaultLayerName = 'Drone Orthophoto (KMZ)'
+  }
   if (cartoApiKey) {
     baseLayers['CARTO Dark'] = createCartoLayer(L, 'dark', cartoApiKey)
     baseLayers['CARTO Voyager'] = createCartoLayer(L, 'voyager', cartoApiKey)
-    defaultLayerName = 'CARTO Dark'
+    if (!kmzMeta.value) defaultLayerName = 'CARTO Dark'
   }
   baseLayers['Satellite (internet)'] = satellite
   baseLayers['Offline'] = offlineLayer
@@ -246,7 +279,7 @@ function initMap(cartoApiKey = '') {
   const initialLayer = baseLayers[preferred] || baseLayers[defaultLayerName]
   initialLayer.addTo(map)
 
-  L.control.layers(baseLayers).addTo(map)
+  layerControl = L.control.layers(baseLayers).addTo(map)
 
   map.on('baselayerchange', (e) => {
     if (e?.name) saveBasemapPref(e.name)
@@ -574,6 +607,61 @@ async function removeFloorplan() {
   }
 }
 
+async function onKmzFileSelected(event) {
+  kmzError.value = ''
+  const file = event.target?.files?.[0]
+  if (!file) return
+  kmzUploading.value = true
+  try {
+    const res = await api.uploadSiteKmzMap(siteId.value, file)
+    const meta = res.data?.data || null
+    kmzMeta.value = meta
+    if (map && meta) {
+      if (kmzLayer) {
+        layerControl?.removeLayer(kmzLayer)
+        map.removeLayer(kmzLayer)
+      }
+      kmzLayer = buildSiteKmzLayer(meta)
+      layerControl?.addBaseLayer(kmzLayer, 'Drone Orthophoto (KMZ)')
+      kmzLayer.addTo(map)
+      saveBasemapPref('Drone Orthophoto (KMZ)')
+      if (Array.isArray(meta.bounds)) {
+        map.fitBounds(meta.bounds, { padding: [20, 20] })
+      }
+    }
+  } catch (e) {
+    kmzError.value = e.response?.data?.error || e.message || 'Failed to upload KMZ'
+  } finally {
+    kmzUploading.value = false
+    if (event.target) event.target.value = ''
+  }
+}
+
+function zoomToKmz() {
+  if (map && Array.isArray(kmzMeta.value?.bounds)) {
+    map.fitBounds(kmzMeta.value.bounds, { padding: [20, 20] })
+  }
+}
+
+async function removeKmz() {
+  if (!confirm('Remove the drone KMZ orthophoto for this site?')) return
+  kmzUploading.value = true
+  kmzError.value = ''
+  try {
+    await api.deleteSiteKmzMap(siteId.value)
+    if (map && kmzLayer) {
+      layerControl?.removeLayer(kmzLayer)
+      map.removeLayer(kmzLayer)
+      kmzLayer = null
+    }
+    kmzMeta.value = null
+  } catch (e) {
+    kmzError.value = e.response?.data?.error || e.message || 'Failed to remove KMZ'
+  } finally {
+    kmzUploading.value = false
+  }
+}
+
 // ─── New survey ─────────────────────────────────────────────────────────────
 watch(newAccessMode, (mode) => {
   if (mode === 'public' && newSurveyorMAC.value === detectedMAC.value) {
@@ -864,10 +952,10 @@ function backToList() {
             @click="showFloorplanPanel = !showFloorplanPanel"
             :class="[
               'px-3 py-1.5 border text-xs tracking-widest',
-              floorplan ? 'border-cyan-400 text-cyan-300' : 'border-gray-600 text-gray-300 hover:border-cyan-400',
+              kmzMeta || floorplan ? 'border-cyan-400 text-cyan-300' : 'border-gray-600 text-gray-300 hover:border-cyan-400',
             ]"
           >
-            {{ floorplan ? 'FLOORPLAN ✓' : '+ FLOORPLAN' }}
+            {{ kmzMeta ? 'KMZ / MAP ✓' : floorplan ? 'FLOORPLAN ✓' : '+ KMZ / PLAN' }}
           </button>
           <router-link
             v-if="selectedSurvey.access_mode === 'authenticated' && ['pending', 'active'].includes(selectedSurvey.status)"
@@ -974,62 +1062,106 @@ function backToList() {
         </template>
       </div>
 
-      <!-- Local Offline Floorplan Drawer -->
-      <div v-if="showFloorplanPanel" class="px-6 py-3 border-b border-cyan-500/40 bg-cyan-950/20 flex flex-wrap items-center gap-3 text-[11px]">
-        <input
-          ref="floorplanFileInput"
-          type="file"
-          accept="image/png,image/jpeg,image/webp"
-          class="hidden"
-          @change="onFloorplanFileSelected"
-        />
-        <button
-          @click="floorplanFileInput?.click()"
-          class="px-3 py-1 border border-cyan-400 text-cyan-300 hover:bg-cyan-400 hover:text-black"
-        >
-          {{ floorplan ? 'REPLACE IMAGE' : 'UPLOAD LOCAL IMAGE' }}
-        </button>
-
-        <template v-if="floorplan">
-          <label class="flex items-center gap-1.5">
-            <input type="checkbox" v-model="showFloorplan" class="accent-cyan-400" />
-            <span>Show</span>
-          </label>
-          <label class="flex items-center gap-1.5">
-            <span class="text-gray-400">Opacity</span>
-            <input type="range" v-model.number="floorplan.opacity" min="0.1" max="1" step="0.05" class="w-20 accent-cyan-400" />
-          </label>
-          <button @click="fitFloorplanToTrack" class="px-2 py-1 border border-gray-600 text-gray-200 hover:border-cyan-400">
-            FIT TO TRACK
-          </button>
-          <div class="flex items-center gap-1">
-            <span class="text-gray-400">Align:</span>
-            <button @click="nudgeFloorplan(0.00004, 0)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">↑</button>
-            <button @click="nudgeFloorplan(-0.00004, 0)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">↓</button>
-            <button @click="nudgeFloorplan(0, -0.00004)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">←</button>
-            <button @click="nudgeFloorplan(0, 0.00004)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">→</button>
-            <button @click="nudgeFloorplan(0, 0, 1.08)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">+</button>
-            <button @click="nudgeFloorplan(0, 0, 0.92)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">−</button>
-          </div>
+      <!-- Local Offline Floorplan & Drone KMZ Drawer -->
+      <div v-if="showFloorplanPanel" class="px-6 py-3 border-b border-cyan-500/40 bg-cyan-950/20 space-y-2 text-[11px]">
+        <!-- Drone KMZ Orthophoto row -->
+        <div class="flex flex-wrap items-center gap-3 pb-2 border-b border-cyan-500/20">
+          <span class="text-cyan-300 font-bold tracking-widest">DRONE KMZ:</span>
+          <input
+            ref="kmzFileInput"
+            type="file"
+            accept=".kmz,application/vnd.google-earth.kmz"
+            class="hidden"
+            @change="onKmzFileSelected"
+          />
           <button
-            @click="saveFloorplanToServer"
-            :disabled="floorplanSaving"
+            @click="kmzFileInput?.click()"
+            :disabled="kmzUploading"
             class="px-3 py-1 border border-[#39FF14] text-[#39FF14] hover:bg-[#39FF14] hover:text-black disabled:opacity-50"
           >
-            {{ floorplanSaving ? 'SAVING…' : 'SAVE OFFLINE PLAN' }}
+            {{ kmzUploading ? 'UPLOADING KMZ…' : kmzMeta ? 'REPLACE KMZ' : 'UPLOAD DRONE KMZ' }}
           </button>
+          <template v-if="kmzMeta">
+            <span class="text-gray-200">
+              <b>{{ kmzMeta.filename || kmzMeta.name }}</b>
+              · {{ kmzMeta.tile_count }} tiles
+              <template v-if="kmzMeta.mode === 'superoverlay'">(z{{ kmzMeta.min_level }}–{{ kmzMeta.max_level }})</template>
+            </span>
+            <button @click="zoomToKmz" class="px-2 py-1 border border-cyan-400 text-cyan-300 hover:bg-cyan-400 hover:text-black">
+              ZOOM TO ORTHO
+            </button>
+            <button
+              @click="removeKmz"
+              :disabled="kmzUploading"
+              class="px-2 py-1 border border-[#ff0055] text-[#ff0055] hover:bg-[#ff0055] hover:text-black"
+            >
+              REMOVE KMZ
+            </button>
+          </template>
+          <span v-else class="text-gray-400">
+            Upload a georeferenced .kmz drone orthophoto (SuperOverlay or GroundOverlay) to use as an offline high-res basemap.
+          </span>
+          <span v-if="kmzError" class="text-[#ff0055]">{{ kmzError }}</span>
+        </div>
+
+        <!-- Custom PNG/JPG Floorplan overlay row -->
+        <div class="flex flex-wrap items-center gap-3">
+          <span class="text-gray-400 font-bold tracking-widest">IMAGE PLAN:</span>
+          <input
+            ref="floorplanFileInput"
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            class="hidden"
+            @change="onFloorplanFileSelected"
+          />
           <button
-            @click="removeFloorplan"
-            :disabled="floorplanSaving"
-            class="px-2 py-1 border border-[#ff0055] text-[#ff0055] hover:bg-[#ff0055] hover:text-black"
+            @click="floorplanFileInput?.click()"
+            class="px-3 py-1 border border-cyan-400 text-cyan-300 hover:bg-cyan-400 hover:text-black"
           >
-            REMOVE
+            {{ floorplan ? 'REPLACE IMAGE' : 'UPLOAD LOCAL IMAGE' }}
           </button>
-        </template>
-        <span v-else class="text-gray-400">
-          Upload a PNG/JPG sketch or screenshot of your property to view walks 100% offline.
-        </span>
-        <span v-if="floorplanError" class="text-[#ff0055]">{{ floorplanError }}</span>
+
+          <template v-if="floorplan">
+            <label class="flex items-center gap-1.5">
+              <input type="checkbox" v-model="showFloorplan" class="accent-cyan-400" />
+              <span>Show</span>
+            </label>
+            <label class="flex items-center gap-1.5">
+              <span class="text-gray-400">Opacity</span>
+              <input type="range" v-model.number="floorplan.opacity" min="0.1" max="1" step="0.05" class="w-20 accent-cyan-400" />
+            </label>
+            <button @click="fitFloorplanToTrack" class="px-2 py-1 border border-gray-600 text-gray-200 hover:border-cyan-400">
+              FIT TO TRACK
+            </button>
+            <div class="flex items-center gap-1">
+              <span class="text-gray-400">Align:</span>
+              <button @click="nudgeFloorplan(0.00004, 0)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">↑</button>
+              <button @click="nudgeFloorplan(-0.00004, 0)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">↓</button>
+              <button @click="nudgeFloorplan(0, -0.00004)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">←</button>
+              <button @click="nudgeFloorplan(0, 0.00004)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">→</button>
+              <button @click="nudgeFloorplan(0, 0, 1.08)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">+</button>
+              <button @click="nudgeFloorplan(0, 0, 0.92)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">−</button>
+            </div>
+            <button
+              @click="saveFloorplanToServer"
+              :disabled="floorplanSaving"
+              class="px-3 py-1 border border-[#39FF14] text-[#39FF14] hover:bg-[#39FF14] hover:text-black disabled:opacity-50"
+            >
+              {{ floorplanSaving ? 'SAVING…' : 'SAVE OFFLINE PLAN' }}
+            </button>
+            <button
+              @click="removeFloorplan"
+              :disabled="floorplanSaving"
+              class="px-2 py-1 border border-[#ff0055] text-[#ff0055] hover:bg-[#ff0055] hover:text-black"
+            >
+              REMOVE
+            </button>
+          </template>
+          <span v-else class="text-gray-400">
+            Optional PNG/JPG sketch overlay with manual bounds alignment.
+          </span>
+          <span v-if="floorplanError" class="text-[#ff0055]">{{ floorplanError }}</span>
+        </div>
       </div>
 
       <!-- Map -->

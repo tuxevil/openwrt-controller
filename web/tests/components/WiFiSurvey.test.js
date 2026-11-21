@@ -61,6 +61,7 @@ describe('WiFiSurvey stream quality view', () => {
     vi.spyOn(api, 'getSiteConfig').mockResolvedValue({ data: { allow_public_surveys: false } })
     vi.spyOn(api, 'getSiteDevices').mockResolvedValue({ data: [] })
     vi.spyOn(api, 'getSurveyFloorplan').mockResolvedValue({ data: { data: null } })
+    vi.spyOn(api, 'getSiteKmzMap').mockResolvedValue({ data: { data: null } })
     vi.spyOn(api, 'getMapsConfig').mockResolvedValue({ data: {} })
   })
 

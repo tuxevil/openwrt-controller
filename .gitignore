@@ -98,3 +98,5 @@ clean-repo.sh
 docs/*
 !docs/*.md
 openwrt-controller.old
+data/site-maps/
+*.kmz
