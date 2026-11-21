@@ -246,3 +246,24 @@ func TestApproveSentinelProposalReturnsQueuedOperationIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestSentinelEnvelopeRejectsMalformedTurns(t *testing.T) {
+	for _, raw := range []string{
+		"null", "{}", "[]", "texto libre",
+		"prefijo {\"message\":\"aparentemente válido\"}",
+		"{\"message\":\"ok\"}{\"message\":\"otro\"}",
+		"{\"tool_calls\":[{\"name\":\"get_device_status\",\"arguments\":{}}]} texto",
+		"{\"message\":\"sin cierre\"",
+	} {
+		if _, err := parseSentinelEnvelope(raw); err == nil {
+			t.Errorf("accepted malformed turn %q", raw)
+		}
+	}
+}
+
+func TestSentinelEnvelopeAcceptsFencedFinalAnswer(t *testing.T) {
+	turn, err := parseSentinelEnvelope("\n```json\n{\"message\":\"Telemetry is current.\"}\n```\n")
+	if err != nil || turn.Message != "Telemetry is current." || len(turn.ToolCalls) != 0 {
+		t.Fatalf("got %+v, %v", turn, err)
+	}
+}

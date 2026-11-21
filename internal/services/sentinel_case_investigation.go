@@ -129,10 +129,7 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 		}
 		envelope, err := parseSentinelEnvelope(content)
 		if err != nil {
-			if result.Answer == "" {
-				result.Answer = redactSentinelSecrets(strings.TrimSpace(content))
-			}
-			return result, nil
+			return result, err
 		}
 		if envelope.Message != "" {
 			result.Answer = redactSentinelSecrets(strings.TrimSpace(envelope.Message))

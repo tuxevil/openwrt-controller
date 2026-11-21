@@ -35,7 +35,7 @@ type SentinelProposalDraft struct {
 	BlockedReason string       `json:"blocked_reason,omitempty"`
 }
 
-type sentinelEnvelope struct {
+type sentinelAssistantTurn struct {
 	Message   string                 `json:"message"`
 	ToolCalls []SentinelToolCall     `json:"tool_calls"`
 	Proposal  *SentinelProposalDraft `json:"proposal,omitempty"`
@@ -66,20 +66,19 @@ var sentinelIdentifierPattern = regexp.MustCompile(`^[A-Za-z0-9_.:@/-]{1,128}$`)
 var sentinelSecretPattern = regexp.MustCompile(`(?i)(["']?(?:[a-z0-9_-]*_)?(?:password|passphrase|secret|token|api[_-]?key|private[_-]?key|privkey|auth[_-]?secret)["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,}]+)`)
 var sentinelWireGuardSecretPattern = regexp.MustCompile(`(?i)(["']?wg[_-]priv[_-]?key["']?\s*[:=]\s*)("[^"]*"|'[^']*'|[^\s,}]+)`)
 
-func parseSentinelEnvelope(raw string) (sentinelEnvelope, error) {
-	var envelope sentinelEnvelope
-	raw = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(raw, "```json"), "```"))
-	if err := json.Unmarshal([]byte(raw), &envelope); err == nil {
-		return envelope, nil
+func parseSentinelEnvelope(raw string) (sentinelAssistantTurn, error) {
+	raw = strings.TrimSpace(raw)
+	if strings.HasPrefix(raw, "```json\n") && strings.HasSuffix(raw, "\n```") {
+		raw = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(raw, "```json\n"), "\n```"))
 	}
-	start, end := strings.Index(raw, "{"), strings.LastIndex(raw, "}")
-	if start < 0 || end <= start {
-		return sentinelEnvelope{}, fmt.Errorf("sentinel response is not valid JSON")
+	var turn sentinelAssistantTurn
+	if err := json.Unmarshal([]byte(raw), &turn); err != nil {
+		return sentinelAssistantTurn{}, fmt.Errorf("invalid Sentinel JSON turn at the model boundary")
 	}
-	if err := json.Unmarshal([]byte(raw[start:end+1]), &envelope); err != nil {
-		return sentinelEnvelope{}, fmt.Errorf("decode sentinel response: %w", err)
+	if strings.TrimSpace(turn.Message) == "" && len(turn.ToolCalls) == 0 && turn.Proposal == nil {
+		return sentinelAssistantTurn{}, fmt.Errorf("empty Sentinel JSON turn at the model boundary")
 	}
-	return envelope, nil
+	return turn, nil
 }
 
 func redactSentinelSecrets(value string) string {
@@ -174,10 +173,7 @@ func runSentinelInvestigationForSite(schema string, history []SentinelStoredMess
 		}
 		envelope, err := parseSentinelEnvelope(content)
 		if err != nil {
-			if result.Answer == "" {
-				result.Answer = redactSentinelSecrets(strings.TrimSpace(content))
-			}
-			return result, nil
+			return result, err
 		}
 		if envelope.Message != "" {
 			result.Answer = redactSentinelSecrets(strings.TrimSpace(envelope.Message))

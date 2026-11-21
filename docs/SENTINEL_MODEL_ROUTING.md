@@ -93,3 +93,12 @@ A stronger or remote model therefore has exactly the same Safety Kernel boundari
 Configura `SENTINEL_OFFGRID=true`, `SENTINEL_ROUTINE_MODEL=gemma4:e2b` y `SENTINEL_ROUTINE_BASE_URL=http://127.0.0.1:11434/v1` si Ollama comparte el host. Para otro equipo de la LAN, usa su IP privada literal y valida su certificado si utilizas HTTPS. El transporte de inferencia descarta proxies y redirecciones HTTP en este modo. El monitor conserva incidentes y casos localmente y omite Telegram y los webhooks de creación de incidentes.
 
 La conversación aparece en **Sentinel AI** del dashboard. Usa las ejecuciones asíncronas existentes y muestra la respuesta, el identificador del caso y la evidencia devuelta. El monitor de alertas existente ejecuta el barrido aunque el navegador esté cerrado. El modo off-grid se aplica a la inferencia y a la entrega de incidentes. El aislamiento de red del despliegue completo sigue siendo una prueba independiente.
+
+## Contrato de respuesta para investigaciones
+
+El modelo devuelve un objeto JSON con `message`, `tool_calls` y una
+`proposal` opcional. Sentinel acepta el objeto directamente o dentro de
+un único bloque Markdown `json`. Una respuesta vacía, truncada o con texto
+fuera del objeto produce un error de investigación. Sentinel valida el
+turno antes de enviar llamadas al Tool Registry. Conserva la evidencia
+recopilada hasta ese punto en el resultado de la investigación.
