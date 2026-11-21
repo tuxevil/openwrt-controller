@@ -114,6 +114,7 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 	// bounded even when a prefetch attempt fails and produces no evidence row.
 	modelToolLimit := sentinelMaxToolCalls - sentinelCaseContextToolReserve
 	modelToolCalls := 0
+	observedCalls := make(map[string]bool)
 	native := newSentinelNativeConversation(reasoningClass, prompt.String())
 
 	for round := 0; round < sentinelMaxRounds; round++ {
@@ -177,17 +178,23 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 				reportFailure("REJECTED", err)
 				continue
 			}
+			originalArguments := append(json.RawMessage(nil), call.Arguments...)
+			call.Arguments = sentinelToolArgumentsForCaseCall(call, schema, compiled)
+			callKey := call.Name + "\x00" + string(call.Arguments)
+			if observedCalls[callKey] {
+				reportFailure("ALREADY_OBSERVED", fmt.Errorf("use the evidence already returned for this tool and scope"))
+				continue
+			}
 			if err := toolBudget.Reserve(call.Name); err != nil {
 				reportFailure("REJECTED", err)
 				continue
 			}
-			originalArguments := append(json.RawMessage(nil), call.Arguments...)
-			call.Arguments = sentinelToolArgumentsForCaseCall(call, schema, compiled)
 			toolResult, err := executeSentinelToolContext(ctx, call)
 			if err != nil {
 				reportFailure("ERROR", err)
 				continue
 			}
+			observedCalls[callKey] = true
 			encodedText := encodeSentinelToolResult(toolResult)
 			result.Evidence = append(result.Evidence, SentinelEvidence{Tool: call.Name, Args: originalArguments, Result: json.RawMessage(encodedText)})
 			if native != nil {
