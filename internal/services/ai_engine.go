@@ -86,7 +86,7 @@ func completeAIContext(ctx context.Context, systemPrompt, userPrompt string, jso
 	if apiKey == "" && !sentinelURLIsLocal(baseURL) {
 		return "", "", 0, fmt.Errorf("AI engine API key is not configured")
 	}
-	return completeAIEndpointContext(ctx, baseURL, model, apiKey, systemPrompt, userPrompt, jsonMode)
+	return completeAIEndpointContext(ctx, baseURL, model, apiKey, systemPrompt, userPrompt, jsonMode, nil)
 }
 
 // completeAIEndpointContext is the provider-agnostic OpenAI-compatible
@@ -122,7 +122,7 @@ var offgridAIClient = &http.Client{
 	},
 }
 
-func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, systemPrompt, userPrompt string, jsonMode bool) (string, string, int, error) {
+func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, systemPrompt, userPrompt string, jsonMode bool, thinking *bool) (string, string, int, error) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	model = strings.TrimSpace(model)
 	if baseURL == "" || model == "" {
@@ -137,6 +137,10 @@ func completeAIEndpointContext(ctx context.Context, baseURL, model, apiKey, syst
 	}
 	if jsonMode {
 		payload["response_format"] = map[string]string{"type": "json_object"}
+	}
+	if thinking != nil {
+		payload["enable_thinking"] = *thinking
+		payload["caching"] = false
 	}
 	result, err := requestAICompletion(ctx, baseURL, apiKey, payload)
 	if err != nil {
@@ -155,6 +159,9 @@ func requestAICompletion(ctx context.Context, baseURL, apiKey string, payload ma
 		return aiCompletion{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if _, explicit := payload["enable_thinking"]; explicit {
+		req.Header.Set("Cache-Control", "no-cache, no-store")
+	}
 	if apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+apiKey)
 	}

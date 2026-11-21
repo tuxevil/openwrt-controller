@@ -100,6 +100,10 @@ var errSentinelTextualNativeCall = errors.New("native model returned textual too
 
 func (c *sentinelNativeConversation) next(ctx context.Context, remaining int) (sentinelAssistantTurn, string, int, error) {
 	payload := map[string]any{"model": c.route.Model, "messages": c.messages, "tools": sentinelNativeCatalog()}
+	if c.route.EnableThinking != nil {
+		payload["enable_thinking"] = *c.route.EnableThinking
+		payload["caching"] = false
+	}
 	if remaining <= 0 {
 		payload["tool_choice"] = "none"
 	}

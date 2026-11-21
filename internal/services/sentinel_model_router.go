@@ -25,12 +25,13 @@ const (
 )
 
 type SentinelModelRoute struct {
-	ToolMode string                 `json:"tool_mode"`
-	Class    SentinelReasoningClass `json:"class"`
-	BaseURL  string                 `json:"-"`
-	Model    string                 `json:"model"`
-	APIKey   string                 `json:"-"`
-	Local    bool                   `json:"local"`
+	EnableThinking *bool                  `json:"enable_thinking,omitempty"`
+	ToolMode       string                 `json:"tool_mode"`
+	Class          SentinelReasoningClass `json:"class"`
+	BaseURL        string                 `json:"-"`
+	Model          string                 `json:"model"`
+	APIKey         string                 `json:"-"`
+	Local          bool                   `json:"local"`
 }
 
 type SentinelModelExecution struct {
@@ -164,7 +165,15 @@ func resolveSentinelModelRouteWithEnv(class SentinelReasoningClass, settings dat
 	if mode != "legacy_json" && mode != "native_tools" {
 		return SentinelModelRoute{}, fmt.Errorf("%s has an invalid Sentinel tool mode", class)
 	}
-	return SentinelModelRoute{ToolMode: mode, Class: class, BaseURL: baseURL, Model: model, APIKey: apiKey, Local: local}, nil
+	var thinking *bool
+	if raw := strings.TrimSpace(getenv(prefix + "_ENABLE_THINKING")); raw != "" {
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return SentinelModelRoute{}, fmt.Errorf("%s has an invalid enable_thinking value", class)
+		}
+		thinking = &value
+	}
+	return SentinelModelRoute{EnableThinking: thinking, ToolMode: mode, Class: class, BaseURL: baseURL, Model: model, APIKey: apiKey, Local: local}, nil
 }
 
 func ResolveSentinelModelRoute(class SentinelReasoningClass) (SentinelModelRoute, error) {
@@ -194,7 +203,7 @@ func completeSentinelTextReasoning(ctx context.Context, class SentinelReasoningC
 		if legacyOnly && route.ToolMode != "legacy_json" {
 			continue
 		}
-		content, model, tokens, err := completeAIEndpointContext(ctx, route.BaseURL, route.Model, route.APIKey, systemPrompt, userPrompt, jsonMode)
+		content, model, tokens, err := completeAIEndpointContext(ctx, route.BaseURL, route.Model, route.APIKey, systemPrompt, userPrompt, jsonMode, route.EnableThinking)
 		if err != nil {
 			failures = append(failures, fmt.Sprintf("%s: %v", candidate, err))
 			continue

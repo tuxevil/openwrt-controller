@@ -139,7 +139,7 @@ func TestOpenAICompatibleTransportAllowsKeylessLocalEndpoint(t *testing.T) {
 	}))
 	defer server.Close()
 
-	content, model, tokens, err := completeAIEndpointContext(context.Background(), server.URL, "local-alias", "", "system", "user", false)
+	content, model, tokens, err := completeAIEndpointContext(context.Background(), server.URL, "local-alias", "", "system", "user", false, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,5 +196,38 @@ func TestOffgridNamedRouteRequiresLocalOverride(t *testing.T) {
 	route, err := resolveSentinelModelRouteWithEnv(SentinelReasoningRoutine, database.PlatformSettings{}, getenv)
 	if err != nil || !route.Local {
 		t.Fatalf("local route rejected: %+v %v", route, err)
+	}
+}
+
+func TestSentinelThinkingRouteAndTransport(t *testing.T) {
+	for _, value := range []string{"true", "false"} {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var payload map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			if payload["enable_thinking"] != (value == "true") || payload["caching"] != false || r.Header.Get("Cache-Control") != "no-cache, no-store" {
+				t.Errorf("thinking and cache controls missing or incorrect")
+			}
+			w.Write([]byte(`{"choices":[{"message":{"content":"{\"message\":\"ok\"}","reasoning_content":"private"}}]}`))
+		}))
+		env := map[string]string{"SENTINEL_DEEP_RCA_ENABLE_THINKING": value}
+		route, err := resolveSentinelModelRouteWithEnv(SentinelReasoningDeepRCA, database.PlatformSettings{
+			AIEngineBaseURL: server.URL, AIEngineModel: "gemma4:e2b",
+		}, func(key string) string { return env[key] })
+		if err != nil {
+			server.Close()
+			t.Fatal(err)
+		}
+		c := sentinelNativeConversation{route: route}
+		turn, _, _, err := c.next(t.Context(), 1)
+		if err != nil || turn.Message != "ok" {
+			t.Errorf("native response: %+v, %v", turn, err)
+		}
+		_, _, _, err = completeAIEndpointContext(t.Context(), route.BaseURL, route.Model, "", "", "", false, route.EnableThinking)
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -139,3 +139,23 @@ descarta ese turno y solicita una reformulación una sola vez por
 investigación. La reformulación consume una de las ocho rondas y sus
 tokens se suman al total. Las llamadas rechazadas quedan fuera del
 historial del proveedor y del registro de ejecución de herramientas.
+
+### Razonamiento explícito con LiteLLM y Unsloth Studio
+
+`SENTINEL_DEEP_RCA_ENABLE_THINKING=true` activa el razonamiento en la
+ruta profunda. Para una ruta rápida explícita, usa
+`SENTINEL_ROUTINE_ENABLE_THINKING=false`. Omitir la variable conserva
+el comportamiento del proveedor. Configura también el ámbito local y
+el transporte de la ruta profunda si usa LiteLLM con DNS dividido.
+
+Cuando el ajuste es explícito, Sentinel envía `enable_thinking` en el
+cuerpo OpenAI-compatible y desactiva la caché de LiteLLM con
+`caching: false`. En el despliegue de prueba, la cabecera Cache-Control
+por sí sola permitió reutilizar una respuesta de la otra modalidad.
+Sentinel procesa el contenido final y las llamadas nativas.
+
+Con una pregunta sintética sobre telemetría, LiteLLM devolvió 81 tokens
+de salida en 0,87 s con `false` y 716 tokens en 4,47 s con `true`.
+Solo la segunda respuesta incluyó un campo de razonamiento separado.
+La muestra confirma el efecto del parámetro. La calidad requiere
+evaluar más casos con evidencia conocida.
