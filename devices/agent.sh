@@ -1960,49 +1960,55 @@ while true; do
         if [ -n "$LATEST_HASH" ] && [ "$LATEST_HASH" != "$AGENT_VERSION" ]; then
             LATEST_SIGNATURE=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature' 2>/dev/null)
             LATEST_SIGNATURE_ALGORITHM=$(echo "$LATEST_JSON" | jsonfilter -e '@.signature_algorithm' 2>/dev/null)
+            UPDATE_ALLOWED=1
             case "$LATEST_VERSION_NUMBER" in
-                ''|*[!0-9]*) logger -t agent "Signed update version is missing or malformed; refusing update"; continue ;;
+                ''|*[!0-9]*)
+                    logger -t agent "Signed update version is missing or malformed; refusing update"
+                    UPDATE_ALLOWED=0
+                    ;;
             esac
-            if [ "$LATEST_VERSION_NUMBER" -le "${AGENT_VERSION_NUMBER:-0}" ]; then
+            if [ "$UPDATE_ALLOWED" = "1" ] && [ "$LATEST_VERSION_NUMBER" -le "${AGENT_VERSION_NUMBER:-0}" ]; then
                 logger -t agent "Signed update is not newer than the installed version; refusing downgrade"
-                continue
+                UPDATE_ALLOWED=0
             fi
-            logger -t agent "New agent version found: $LATEST_HASH. Downloading..."
-            if controller_curl -m 10 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
-                TMP_HASH=$(sha256sum "$0.tmp" | awk '{print $1}')
-                SIGNATURE_OK=0
-                if [ -n "$LATEST_SIGNATURE" ] && [ "$LATEST_SIGNATURE_ALGORITHM" = "Ed25519" ]; then
-                    if verify_agent_artifact "$0.tmp" "$LATEST_SIGNATURE" "$AGENT_UPDATE_PUBLIC_KEY"; then
-                        SIGNATURE_OK=1
-                    fi
-                else
-                    logger -t agent "Signed update metadata is missing or uses an unsupported algorithm"
-                fi
-                if [ "$TMP_HASH" = "$LATEST_HASH" ] && [ "$SIGNATURE_OK" = "1" ]; then
-                    logger -t agent "Agent downloaded securely. Updating and restarting."
-                    if chmod +x "$0.tmp" && cp "$0" "$0.old" && printf '%s\n' "$AGENT_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE.old" && mv "$0.tmp" "$0" && printf '%s\n' "$LATEST_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE"; then
-                        AGENT_VERSION_NUMBER="$LATEST_VERSION_NUMBER"
-                        logger -t agent "Agent updated. Reloading in-process to preserve procd respawn budget."
-                        # Use exec to re-exec the new script in the same PID.
-                        # procd never sees a process exit, so the crash counter is preserved
-                        # across self-updates (5 clean exits within 1h would otherwise mark
-                        # the instance as crashed and procd would stop respawning it).
-                        if ! exec /bin/sh "$0"; then
-                            logger -t agent "exec failed; restoring the previous agent"
-                            if ! mv "$0.old" "$0"; then
-                                logger -t agent "previous agent could not be restored"
-                            elif [ -f "$AGENT_VERSION_NUMBER_FILE.old" ]; then
-                                mv "$AGENT_VERSION_NUMBER_FILE.old" "$AGENT_VERSION_NUMBER_FILE"
-                            fi
-                            exit 0
+            if [ "$UPDATE_ALLOWED" = "1" ]; then
+                logger -t agent "New agent version found: $LATEST_HASH. Downloading..."
+                if controller_curl -m 10 -s -X GET -H "X-Device-Token: $DEVICE_TOKEN" "$BASE_URL/agent/latest/raw" -o "$0.tmp"; then
+                    TMP_HASH=$(sha256sum "$0.tmp" | awk '{print $1}')
+                    SIGNATURE_OK=0
+                    if [ -n "$LATEST_SIGNATURE" ] && [ "$LATEST_SIGNATURE_ALGORITHM" = "Ed25519" ]; then
+                        if verify_agent_artifact "$0.tmp" "$LATEST_SIGNATURE" "$AGENT_UPDATE_PUBLIC_KEY"; then
+                            SIGNATURE_OK=1
                         fi
                     else
-                        logger -t agent "Agent replacement failed; preserving the current agent"
+                        logger -t agent "Signed update metadata is missing or uses an unsupported algorithm"
+                    fi
+                    if [ "$TMP_HASH" = "$LATEST_HASH" ] && [ "$SIGNATURE_OK" = "1" ]; then
+                        logger -t agent "Agent downloaded securely. Updating and restarting."
+                        if chmod +x "$0.tmp" && cp "$0" "$0.old" && printf '%s\n' "$AGENT_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE.old" && mv "$0.tmp" "$0" && printf '%s\n' "$LATEST_VERSION_NUMBER" > "$AGENT_VERSION_NUMBER_FILE"; then
+                            AGENT_VERSION_NUMBER="$LATEST_VERSION_NUMBER"
+                            logger -t agent "Agent updated. Reloading in-process to preserve procd respawn budget."
+                            # Use exec to re-exec the new script in the same PID.
+                            # procd never sees a process exit, so the crash counter is preserved
+                            # across self-updates (5 clean exits within 1h would otherwise mark
+                            # the instance as crashed and procd would stop respawning it).
+                            if ! exec /bin/sh "$0"; then
+                                logger -t agent "exec failed; restoring the previous agent"
+                                if ! mv "$0.old" "$0"; then
+                                    logger -t agent "previous agent could not be restored"
+                                elif [ -f "$AGENT_VERSION_NUMBER_FILE.old" ]; then
+                                    mv "$AGENT_VERSION_NUMBER_FILE.old" "$AGENT_VERSION_NUMBER_FILE"
+                                fi
+                                exit 0
+                            fi
+                        else
+                            logger -t agent "Agent replacement failed; preserving the current agent"
+                            rm -f "$0.tmp"
+                        fi
+                    else
+                        logger -t agent "Hash mismatch on new agent. Aborting update."
                         rm -f "$0.tmp"
                     fi
-                else
-                    logger -t agent "Hash mismatch on new agent. Aborting update."
-                    rm -f "$0.tmp"
                 fi
             fi
         fi

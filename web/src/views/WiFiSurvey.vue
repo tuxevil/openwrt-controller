@@ -1,18 +1,33 @@
 <script setup>
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 import QRCode from 'qrcode'
 import api from '../services/api'
+import { createCartoLayer, resolveCartoApiKey } from '../services/cartoMaps'
+import {
+  classifyMissingReason,
+  colorForSignalDbm,
+  rgbForSignalDbm,
+  colorForStreamQuality,
+  streamQualityScore,
+  rgbForStreamScore,
+  summarizeSurveyPoints,
+  interpolateBoundedIDW,
+  defaultFloorplanBounds,
+  adjustFloorplanBounds,
+} from '../utils/surveyMap'
+
+const BASEMAP_PREF_KEY = 'nerve_survey_basemap'
 
 const route = useRoute()
-const router = useRouter()
 const siteId = computed(() => String(route.params.site_id || ''))
 
 // ─── State ──────────────────────────────────────────────────────────────────
 const loading = ref(false)
 const surveys = ref([])
+const siteDevices = ref([])
 const selectedSurvey = ref(null)
 const points = ref([])
 const showNewModal = ref(false)
@@ -24,24 +39,44 @@ const newSurveyorMAC = ref('')
 const detectedMAC = ref('')
 const detectingMAC = ref(false)
 let detectionRequest = 0
-const newSurveyResponse = ref(null) // { id, survey_token, survey_url, ... }
-const showQrModal = ref(null) // survey with token + url + qr dataurl
+const newSurveyResponse = ref(null)
+const showQrModal = ref(null)
+
+// Map & layers
 const mapEl = ref(null)
 let map = null
 let pointLayer = null
+let accuracyLayer = null
 let neighborLayer = null
 let heatLayer = null
+let floorplanOverlay = null
+let didInitialFit = false
 
 // Filters / display
 const apFilter = ref('all') // all | <ap_id>
+const displayMetric = ref('signal') // signal | stream
 const showHeatmap = ref(false)
+const heatRadiusM = ref(15)
+const showAccuracy = ref(false)
 const showNeighbors = ref(false)
-const timeSlider = ref(100) // 0..100 (% of survey progress)
+const timeSlider = ref(100)
+
+// Local offline floorplan
+const floorplan = ref(null) // { image_data_url, filename, bounds: [[swLat,swLon],[neLat,neLon]], opacity }
+const showFloorplan = ref(true)
+const showFloorplanPanel = ref(false)
+const floorplanSaving = ref(false)
+const floorplanError = ref('')
+const floorplanFileInput = ref(null)
 
 // ─── Lifecycle ──────────────────────────────────────────────────────────────
 onMounted(async () => {
-  await loadSitePublicFlag()
-  await loadSurveys()
+  await Promise.all([
+    loadSitePublicFlag(),
+    loadSiteDevices(),
+    loadFloorplan(),
+    loadSurveys(),
+  ])
 })
 
 onUnmounted(() => {
@@ -53,30 +88,60 @@ onUnmounted(() => {
 
 watch(selectedSurvey, async (s) => {
   if (s) {
-    await loadSamples(s)
+    didInitialFit = false
+    const [, cartoKey] = await Promise.all([loadSamples(s), resolveCartoApiKey()])
     await nextTick()
-    initMap()
+    if (!selectedSurvey.value) return
+    initMap(cartoKey)
+    renderFloorplanOverlay()
     drawPoints()
   } else if (map) {
-    // tear down
     map.remove()
     map = null
+    pointLayer = null
+    accuracyLayer = null
+    neighborLayer = null
+    heatLayer = null
+    floorplanOverlay = null
   }
 })
 
-watch([apFilter, timeSlider, showHeatmap, showNeighbors], () => {
-  if (selectedSurvey.value) drawPoints()
-})
+watch(
+  [apFilter, displayMetric, timeSlider, showHeatmap, heatRadiusM, showAccuracy, showNeighbors],
+  () => {
+    if (selectedSurvey.value) drawPoints()
+  }
+)
+
+watch([floorplan, showFloorplan], () => {
+  if (map) renderFloorplanOverlay()
+}, { deep: true })
 
 // ─── Data loaders ───────────────────────────────────────────────────────────
 async function loadSitePublicFlag() {
   try {
     const cfg = await api.getSiteConfig(siteId.value)
-    // allow_public_surveys lives on site_configs; if the backend doesn't
-    // echo it on the GET, we fall back to false.
     sitePublicAllowed.value = !!(cfg.data?.allow_public_surveys ?? cfg.allow_public_surveys)
-  } catch (e) {
+  } catch {
     sitePublicAllowed.value = false
+  }
+}
+
+async function loadSiteDevices() {
+  try {
+    const res = await api.getSiteDevices(siteId.value)
+    siteDevices.value = res.data?.data || res.data || []
+  } catch {
+    siteDevices.value = []
+  }
+}
+
+async function loadFloorplan() {
+  try {
+    const res = await api.getSurveyFloorplan(siteId.value)
+    floorplan.value = res.data?.data || null
+  } catch {
+    floorplan.value = null
   }
 }
 
@@ -85,7 +150,7 @@ async function loadSurveys() {
   try {
     const res = await api.listSurveys(siteId.value)
     surveys.value = res.data?.data || res.data || []
-  } catch (e) {
+  } catch {
     surveys.value = []
   } finally {
     loading.value = false
@@ -96,86 +161,290 @@ async function loadSamples(s) {
   try {
     const res = await api.getSurveySamples(siteId.value, s.id)
     points.value = res.data?.data || res.data || []
-  } catch (e) {
+  } catch {
     points.value = []
   }
 }
 
-// ─── Map ────────────────────────────────────────────────────────────────────
-function initMap() {
-  if (map || !mapEl.value) return
-  map = L.map(mapEl.value, { zoomControl: true, attributionControl: true })
-    .setView([0, 0], 18)
-  // Esri World Imagery (satellite). Free for non-commercial use.
-  const satellite = L.tileLayer(
-    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-    { maxZoom: 19, attribution: 'Esri' }
-  )
-  L.control.layers({ "Offline": L.layerGroup().addTo(map), "Satellite (internet)": satellite }).addTo(map)
-  L.control.scale({ imperial: false }).addTo(map)
-  pointLayer = L.layerGroup().addTo(map)
-  neighborLayer = L.layerGroup()
-  if (showNeighbors.value) neighborLayer.addTo(map)
+async function refreshSelectedSamples() {
+  if (!selectedSurvey.value) return
+  await loadSamples(selectedSurvey.value)
+  drawPoints()
 }
 
-function colorForDbm(dbm) {
-  if (dbm == null) return '#888'
-  if (dbm >= -60) return '#39FF14' // green
-  if (dbm >= -75) return '#FFD600' // yellow
-  return '#ff0055'                  // red
-}
-
-function drawPoints() {
-  if (!map) return
-  pointLayer.clearLayers()
-  if (neighborLayer) neighborLayer.clearLayers()
-  if (heatLayer) { map.removeLayer(heatLayer); heatLayer = null }
-
-  if (!points.value.length) {
-    return
+// ─── AP friendly labels ─────────────────────────────────────────────────────
+const deviceLabelMap = computed(() => {
+  const m = new Map()
+  for (const d of siteDevices.value) {
+    if (!d?.id) continue
+    const name = (d.name || '').trim()
+    const ip = (d.last_ip || d.ip || '').trim()
+    const label = name && ip ? `${name} (${ip})` : name || ip || d.id
+    m.set(d.id.toLowerCase(), label)
   }
+  return m
+})
 
-  // Filter by AP and time
+function apLabel(apId) {
+  if (!apId) return '—'
+  return deviceLabelMap.value.get(String(apId).toLowerCase()) || apId
+}
+
+// ─── Filtered points & summary ──────────────────────────────────────────────
+const filteredPoints = computed(() => {
+  if (!points.value.length) return []
   const startTs = points.value[0]?.captured_at
   const endTs = points.value[points.value.length - 1]?.captured_at
   const startMs = startTs ? new Date(startTs).getTime() : 0
   const endMs = endTs ? new Date(endTs).getTime() : 1
   const cutoff = startMs + (endMs - startMs) * (timeSlider.value / 100)
-  const filtered = points.value
-    .filter(p => apFilter.value === 'all' || p.ap_id === apFilter.value)
-    .filter(p => !p.captured_at || new Date(p.captured_at).getTime() <= cutoff)
+  return points.value
+    .filter((p) => apFilter.value === 'all' || p.ap_id === apFilter.value)
+    .filter((p) => !p.captured_at || new Date(p.captured_at).getTime() <= cutoff)
+})
 
+const summary = computed(() => summarizeSurveyPoints(filteredPoints.value))
+
+// ─── Map ────────────────────────────────────────────────────────────────────
+function getSavedBasemapPref() {
+  try {
+    return window.localStorage.getItem(BASEMAP_PREF_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function saveBasemapPref(name) {
+  try {
+    window.localStorage.setItem(BASEMAP_PREF_KEY, name)
+  } catch {
+    // ignore storage failures
+  }
+}
+
+function initMap(cartoApiKey = '') {
+  if (map || !mapEl.value) return
+  map = L.map(mapEl.value, { zoomControl: true, attributionControl: true }).setView([0, 0], 18)
+
+  const offlineLayer = L.layerGroup()
+  const satellite = L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    { maxZoom: 19, attribution: 'Esri' }
+  )
+
+  const baseLayers = {}
+  let defaultLayerName = 'Offline'
+  if (cartoApiKey) {
+    baseLayers['CARTO Dark'] = createCartoLayer(L, 'dark', cartoApiKey)
+    baseLayers['CARTO Voyager'] = createCartoLayer(L, 'voyager', cartoApiKey)
+    defaultLayerName = 'CARTO Dark'
+  }
+  baseLayers['Satellite (internet)'] = satellite
+  baseLayers['Offline'] = offlineLayer
+
+  const preferred = getSavedBasemapPref()
+  const initialLayer = baseLayers[preferred] || baseLayers[defaultLayerName]
+  initialLayer.addTo(map)
+
+  L.control.layers(baseLayers).addTo(map)
+
+  map.on('baselayerchange', (e) => {
+    if (e?.name) saveBasemapPref(e.name)
+  })
+
+  L.control.scale({ imperial: false }).addTo(map)
+  accuracyLayer = L.layerGroup().addTo(map)
+  pointLayer = L.layerGroup().addTo(map)
+  neighborLayer = L.layerGroup()
+  if (showNeighbors.value) neighborLayer.addTo(map)
+}
+
+function renderFloorplanOverlay() {
+  if (!map) return
+  if (floorplanOverlay) {
+    map.removeLayer(floorplanOverlay)
+    floorplanOverlay = null
+  }
+  const fp = floorplan.value
+  if (!showFloorplan.value || !fp?.image_data_url || !Array.isArray(fp.bounds)) return
+  floorplanOverlay = L.imageOverlay(fp.image_data_url, fp.bounds, {
+    opacity: fp.opacity ?? 0.75,
+    interactive: false,
+  }).addTo(map)
+  floorplanOverlay.bringToBack()
+}
+
+function buildBoundedHeatmapLayer(measured, metric, radiusM) {
+  const HeatmapGrid = L.GridLayer.extend({
+    createTile(coords) {
+      const tile = document.createElement('canvas')
+      const size = this.getTileSize()
+      tile.width = size.x
+      tile.height = size.y
+      const ctx = tile.getContext('2d')
+      if (!ctx || !measured.length) return tile
+
+      const step = 6
+      const valueFn =
+        metric === 'stream'
+          ? (p) => streamQualityScore(p)
+          : (p) => p.signal_dbm
+      const rgbFn = metric === 'stream' ? rgbForStreamScore : rgbForSignalDbm
+
+      for (let py = 0; py < size.y; py += step) {
+        for (let px = 0; px < size.x; px += step) {
+          const pointPx = L.point(coords.x * size.x + px + step / 2, coords.y * size.y + py + step / 2)
+          const latlng = this._map.unproject(pointPx, coords.z)
+          const val = interpolateBoundedIDW(latlng.lat, latlng.lng, measured, {
+            maxRadiusMeters: radiusM,
+            valueFn,
+          })
+          if (val == null) continue
+          const [r, g, b] = rgbFn(val)
+          ctx.fillStyle = `rgba(${r},${g},${b},0.34)`
+          ctx.fillRect(px, py, step, step)
+        }
+      }
+      return tile
+    },
+  })
+  return new HeatmapGrid({ pane: 'overlayPane', zIndex: 200 })
+}
+
+function escapeHtml(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function parseSilentAps(raw) {
+  if (!raw) return []
+  try {
+    const arr = typeof raw === 'string' ? JSON.parse(raw) : raw
+    return Array.isArray(arr) ? arr : []
+  } catch {
+    return []
+  }
+}
+
+function drawPoints() {
+  if (!map) return
+  pointLayer.clearLayers()
+  accuracyLayer.clearLayers()
+  if (neighborLayer) {
+    neighborLayer.clearLayers()
+    if (showNeighbors.value && !map.hasLayer(neighborLayer)) neighborLayer.addTo(map)
+    if (!showNeighbors.value && map.hasLayer(neighborLayer)) map.removeLayer(neighborLayer)
+  }
+  if (heatLayer) {
+    map.removeLayer(heatLayer)
+    heatLayer = null
+  }
+
+  const filtered = filteredPoints.value
   if (!filtered.length) return
 
-  // Points
+  // Bounded IDW Heatmap
+  if (showHeatmap.value) {
+    const measured = filtered.filter((p) => {
+      if (p.lat == null || p.lon == null) return false
+      return displayMetric.value === 'stream'
+        ? streamQualityScore(p) != null
+        : p.signal_dbm != null
+    })
+    if (measured.length) {
+      heatLayer = buildBoundedHeatmapLayer(measured, displayMetric.value, heatRadiusM.value)
+      heatLayer.addTo(map)
+    }
+  }
+
+  // Points & GPS accuracy rings
   const bounds = []
   for (const p of filtered) {
     if (p.lat == null || p.lon == null) continue
     bounds.push([p.lat, p.lon])
+
+    if (showAccuracy.value && p.accuracy_m != null && p.accuracy_m > 0) {
+      L.circle([p.lat, p.lon], {
+        radius: p.accuracy_m,
+        color: p.accuracy_m > 15 ? '#f59e0b' : '#38bdf8',
+        weight: 1,
+        dashArray: '3 3',
+        fillOpacity: 0.04,
+        interactive: false,
+      }).addTo(accuracyLayer)
+    }
+
+    const diag = classifyMissingReason(p)
+    const isStream = displayMetric.value === 'stream'
+    const markerColor = isStream
+      ? colorForStreamQuality(p)
+      : p.signal_dbm != null
+        ? colorForSignalDbm(p.signal_dbm)
+        : diag.color
+
+    const silentList = parseSilentAps(p.silent_aps)
+    const headerText = isStream
+      ? p.probe_rtt_ms != null || p.probe_loss_pct != null
+        ? `RTT ${p.probe_rtt_ms != null ? p.probe_rtt_ms.toFixed(0) + ' ms' : 'timeout'} · Loss ${p.probe_loss_pct != null ? p.probe_loss_pct.toFixed(0) + '%' : '—'}`
+        : 'No stream probe data'
+      : p.signal_dbm != null
+        ? `${p.signal_dbm} dBm`
+        : diag.label
+
+    const extraRows = []
+    if (p.signal_dbm == null) {
+      if (p.reporting_aps_count != null && p.total_aps_count != null) {
+        extraRows.push(`APs reporting at fix: ${p.reporting_aps_count}/${p.total_aps_count}`)
+      }
+      if (silentList.length) {
+        extraRows.push(`Silent APs: ${escapeHtml(silentList.join(', '))}`)
+      }
+    } else {
+      extraRows.push(`AP: ${escapeHtml(apLabel(p.ap_id))}`)
+      if (p.snr != null) extraRows.push(`SNR: ${p.snr.toFixed(0)} dB`)
+    }
+    if (p.probe_rtt_ms != null || p.probe_loss_pct != null) {
+      extraRows.push(
+        `Local link: ${p.probe_rtt_ms != null ? p.probe_rtt_ms.toFixed(0) + ' ms' : 'timeout'}` +
+          (p.probe_jitter_ms != null ? ` (±${p.probe_jitter_ms.toFixed(0)} ms)` : '') +
+          (p.probe_loss_pct != null ? ` · loss ${p.probe_loss_pct.toFixed(0)}%` : '')
+      )
+    }
+    if (p.accuracy_m != null) {
+      extraRows.push(`GPS: ± ${p.accuracy_m.toFixed(0)} m${p.accuracy_m > 15 ? ' (low precision)' : ''}`)
+    }
+    extraRows.push(escapeHtml(p.captured_at))
+
     L.circleMarker([p.lat, p.lon], {
-      radius: 5,
-      color: colorForDbm(p.signal_dbm),
-      fillColor: colorForDbm(p.signal_dbm),
-      fillOpacity: 0.85,
-      weight: 1
-    }).bindPopup(
-      `<div style="background:#000;color:#fff;padding:6px;font-family:monospace;font-size:11px">
-        <b>${p.signal_dbm == null ? 'No signal measurement' : p.signal_dbm + ' dBm'}</b><br/>
-        AP: ${p.ap_id || '—'}<br/>
-        ${p.bssid ? 'BSSID: ' + p.bssid + '<br/>' : ''}
-        ${p.snr != null ? 'SNR: ' + p.snr.toFixed(0) + ' dB<br/>' : ''}
-        ${p.accuracy_m != null ? '± ' + p.accuracy_m.toFixed(0) + ' m<br/>' : ''}
-        ${p.captured_at}
-      </div>`
-    ).addTo(pointLayer)
+      radius: !isStream && diag.dashed ? 6 : 5,
+      color: markerColor,
+      fillColor: markerColor,
+      fillOpacity: !isStream && diag.dashed ? 0.35 : 0.85,
+      weight: !isStream && diag.dashed ? 2 : 1,
+      dashArray: !isStream && diag.dashed ? '3 3' : undefined,
+    })
+      .bindPopup(
+        `<div style="background:#000;color:#fff;padding:6px;font-family:monospace;font-size:11px;line-height:1.45">
+          <b>${escapeHtml(headerText)}</b><br/>
+          ${extraRows.join('<br/>')}
+        </div>`
+      )
+      .addTo(pointLayer)
   }
 
-  // Neighbor APs (deduplicated BSSIDs with their latest signal)
+  // Neighbor APs
   if (showNeighbors.value) {
     const seen = new Map()
     for (const p of filtered) {
       let nbrs = []
-      try { nbrs = JSON.parse(p.neighbor_aps || '[]') } catch { nbrs = [] }
+      try {
+        nbrs = JSON.parse(p.neighbor_aps || '[]')
+      } catch {
+        nbrs = []
+      }
       for (const n of nbrs) {
         if (!n.bssid) continue
         if (!seen.has(n.bssid)) {
@@ -188,37 +457,120 @@ function drawPoints() {
       L.marker([n.lat, n.lon], {
         icon: L.divIcon({
           className: 'nbr-icon',
-          html: `<div style="background:#0ff;color:#000;padding:2px 4px;font-family:monospace;font-size:10px;border:1px solid #0ff">${n.ssid || n.bssid.slice(-4)}</div>`,
-          iconSize: [40, 16]
-        })
-      }).bindPopup(
-        `<div style="background:#000;color:#0ff;padding:6px;font-family:monospace;font-size:11px">
-          <b>${n.ssid || '—'}</b><br/>
-          BSSID: ${n.bssid}<br/>
-          Ch: ${n.channel}<br/>
-          Sig: ${n.signal}
-        </div>`
-      ).addTo(neighborLayer)
+          html: `<div style="background:#0ff;color:#000;padding:2px 4px;font-family:monospace;font-size:10px;border:1px solid #0ff">${escapeHtml(n.ssid || n.bssid.slice(-4))}</div>`,
+          iconSize: [40, 16],
+        }),
+      })
+        .bindPopup(
+          `<div style="background:#000;color:#0ff;padding:6px;font-family:monospace;font-size:11px">
+            <b>${escapeHtml(n.ssid || '—')}</b><br/>
+            BSSID: ${escapeHtml(n.bssid)}<br/>
+            Ch: ${escapeHtml(n.channel)}<br/>
+            Sig: ${escapeHtml(n.signal)}
+          </div>`
+        )
+        .addTo(neighborLayer)
     }
   }
 
-  // Heatmap (simple radial gradient via circleMarkers with low opacity)
-  if (showHeatmap.value) {
-    for (const p of filtered) {
-      if (p.lat == null || p.lon == null || p.signal_dbm == null) continue
-      L.circleMarker([p.lat, p.lon], {
-        radius: 18,
-        color: colorForDbm(p.signal_dbm),
-        fillColor: colorForDbm(p.signal_dbm),
-        fillOpacity: 0.18,
-        weight: 0,
-        stroke: false
-      }).addTo(pointLayer)
-    }
-  }
-
-  if (bounds.length) {
+  if (bounds.length && !didInitialFit) {
+    didInitialFit = true
     map.fitBounds(bounds, { padding: [40, 40] })
+  }
+}
+
+// ─── Local Floorplan Controls ───────────────────────────────────────────────
+function onFloorplanFileSelected(event) {
+  floorplanError.value = ''
+  const file = event.target?.files?.[0]
+  if (!file) return
+  if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+    floorplanError.value = 'Use a PNG, JPEG, or WebP image.'
+    return
+  }
+  const reader = new FileReader()
+  reader.onload = () => {
+    const img = new Image()
+    img.onload = () => {
+      // Resize large photos client-side to keep payload well under 3MB
+      const maxDim = 1600
+      let { width, height } = img
+      if (width > maxDim || height > maxDim) {
+        const scale = Math.min(maxDim / width, maxDim / height)
+        width = Math.round(width * scale)
+        height = Math.round(height * scale)
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, width, height)
+      const mime = file.type === 'image/png' ? 'image/png' : 'image/jpeg'
+      const dataUrl = canvas.toDataURL(mime, 0.85)
+      if (dataUrl.length > 2_600_000) {
+        floorplanError.value = 'Image is too large even after resizing. Use a smaller image.'
+        return
+      }
+      const bounds = floorplan.value?.bounds || defaultFloorplanBounds(points.value)
+      floorplan.value = {
+        image_data_url: dataUrl,
+        filename: file.name,
+        bounds,
+        opacity: floorplan.value?.opacity ?? 0.7,
+      }
+      showFloorplan.value = true
+      if (map) {
+        renderFloorplanOverlay()
+        map.fitBounds(bounds, { padding: [30, 30] })
+      }
+    }
+    img.onerror = () => {
+      floorplanError.value = 'Could not read image file.'
+    }
+    img.src = String(reader.result || '')
+  }
+  reader.readAsDataURL(file)
+}
+
+function fitFloorplanToTrack() {
+  if (!floorplan.value) return
+  floorplan.value.bounds = defaultFloorplanBounds(points.value)
+  renderFloorplanOverlay()
+  if (map) map.fitBounds(floorplan.value.bounds, { padding: [30, 30] })
+}
+
+function nudgeFloorplan(dLat, dLon, scale = 1) {
+  if (!floorplan.value?.bounds) return
+  floorplan.value.bounds = adjustFloorplanBounds(floorplan.value.bounds, { dLat, dLon, scale })
+  renderFloorplanOverlay()
+}
+
+async function saveFloorplanToServer() {
+  if (!floorplan.value) return
+  floorplanSaving.value = true
+  floorplanError.value = ''
+  try {
+    const res = await api.saveSurveyFloorplan(siteId.value, floorplan.value)
+    floorplan.value = res.data?.data || floorplan.value
+  } catch (e) {
+    floorplanError.value = e.response?.data?.error || e.message || 'Failed to save floorplan'
+  } finally {
+    floorplanSaving.value = false
+  }
+}
+
+async function removeFloorplan() {
+  if (!confirm('Remove the saved local floorplan for this site?')) return
+  floorplanSaving.value = true
+  floorplanError.value = ''
+  try {
+    await api.saveSurveyFloorplan(siteId.value, { image_data_url: '' })
+    floorplan.value = null
+    renderFloorplanOverlay()
+  } catch (e) {
+    floorplanError.value = e.response?.data?.error || e.message || 'Failed to remove floorplan'
+  } finally {
+    floorplanSaving.value = false
   }
 }
 
@@ -264,7 +616,7 @@ async function createSurvey() {
       name: newName.value || `Survey ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
       surveyor_label: newSurveyorLabel.value,
       surveyor_mac: newSurveyorMAC.value.trim(),
-      access_mode: newAccessMode.value
+      access_mode: newAccessMode.value,
     })
     newSurveyResponse.value = res.data?.data || res.data
     await loadSurveys()
@@ -274,9 +626,6 @@ async function createSurvey() {
 }
 
 async function showQr(s) {
-  // If we have a token from create or rotate, show it. Otherwise fetch the
-  // survey (which doesn't include the token — the API never returns it
-  // after creation for security) and ask the user to rotate.
   if (!s.survey_token) {
     alert('This survey already exists. Use ROTATE TOKEN to issue a new QR code.')
     return
@@ -344,23 +693,49 @@ async function deleteSurvey(s) {
   }
 }
 
-// ─── Export ─────────────────────────────────────────────────────────────────
+// ─── Export ��────────────────────────────────────────────────────────────────
 function exportCsv() {
   if (!points.value.length) return
-  const headers = ['captured_at', 'ap_id', 'bssid', 'lat', 'lon', 'accuracy_m', 'signal_dbm', 'noise_dbm', 'snr']
+  const headers = [
+    'captured_at',
+    'ap_id',
+    'ap_label',
+    'bssid',
+    'lat',
+    'lon',
+    'accuracy_m',
+    'signal_dbm',
+    'noise_dbm',
+    'snr',
+    'missing_reason',
+    'reporting_aps_count',
+    'total_aps_count',
+    'probe_rtt_ms',
+    'probe_jitter_ms',
+    'probe_loss_pct',
+  ]
   const rows = [headers.join(',')]
   for (const p of points.value) {
-    rows.push([
-      p.captured_at,
-      p.ap_id,
-      p.bssid || '',
-      p.lat ?? '',
-      p.lon ?? '',
-      p.accuracy_m ?? '',
-      p.signal_dbm ?? '',
-      p.noise_dbm ?? '',
-      p.snr ?? ''
-    ].join(','))
+    rows.push(
+      [
+        p.captured_at,
+        p.ap_id,
+        JSON.stringify(p.ap_id ? apLabel(p.ap_id) : ''),
+        p.bssid || '',
+        p.lat ?? '',
+        p.lon ?? '',
+        p.accuracy_m ?? '',
+        p.signal_dbm ?? '',
+        p.noise_dbm ?? '',
+        p.snr ?? '',
+        p.missing_reason || '',
+        p.reporting_aps_count ?? '',
+        p.total_aps_count ?? '',
+        p.probe_rtt_ms ?? '',
+        p.probe_jitter_ms ?? '',
+        p.probe_loss_pct ?? '',
+      ].join(',')
+    )
   }
   download('survey-' + selectedSurvey.value.id + '.csv', rows.join('\n'), 'text/csv')
 }
@@ -394,7 +769,14 @@ const apIds = computed(() => {
 })
 
 function statusColor(s) {
-  return { pending: 'text-yellow-400', active: 'text-[#39FF14] animate-pulse', completed: 'text-gray-400', aborted: 'text-[#ff0055]' }[s] || 'text-gray-400'
+  return (
+    {
+      pending: 'text-yellow-400',
+      active: 'text-[#39FF14] animate-pulse',
+      completed: 'text-gray-400',
+      aborted: 'text-[#ff0055]',
+    }[s] || 'text-gray-400'
+  )
 }
 
 function fmtDate(s) {
@@ -458,7 +840,7 @@ function backToList() {
 
     <!-- Detail view -->
     <template v-else>
-      <header class="px-6 py-3 border-b border-[#39FF14]/30 flex items-center justify-between bg-black/50">
+      <header class="px-6 py-3 border-b border-[#39FF14]/30 flex flex-wrap items-center justify-between gap-2 bg-black/50">
         <div class="flex items-center gap-3">
           <button @click="backToList" class="text-[#39FF14] hover:text-white text-xs">← BACK</button>
           <div>
@@ -470,10 +852,24 @@ function backToList() {
             </div>
           </div>
         </div>
-        <div class="flex items-center gap-2">
-          <router-link v-if="selectedSurvey.access_mode === 'authenticated' && ['pending', 'active'].includes(selectedSurvey.status)"
+        <div class="flex flex-wrap items-center gap-2">
+          <button @click="refreshSelectedSamples" class="px-3 py-1.5 border border-gray-600 text-gray-300 text-xs hover:bg-gray-800">
+            ↻ REFRESH
+          </button>
+          <button
+            @click="showFloorplanPanel = !showFloorplanPanel"
+            :class="[
+              'px-3 py-1.5 border text-xs tracking-widest',
+              floorplan ? 'border-cyan-400 text-cyan-300' : 'border-gray-600 text-gray-300 hover:border-cyan-400',
+            ]"
+          >
+            {{ floorplan ? 'FLOORPLAN ✓' : '+ FLOORPLAN' }}
+          </button>
+          <router-link
+            v-if="selectedSurvey.access_mode === 'authenticated' && ['pending', 'active'].includes(selectedSurvey.status)"
             :to="{ name: 'survey-capture', params: { site_id: siteId, survey_id: selectedSurvey.id } }"
-            class="px-3 py-1.5 border border-[#39FF14] text-[#39FF14] text-xs">
+            class="px-3 py-1.5 border border-[#39FF14] text-[#39FF14] text-xs"
+          >
             OPEN GPS CAPTURE
           </router-link>
           <button v-if="selectedSurvey.status === 'pending' && selectedSurvey.access_mode === 'public'" @click="startSurvey(selectedSurvey)" class="px-3 py-1.5 border border-[#39FF14] text-[#39FF14] text-xs tracking-widest clip-chamfer hover:bg-[#39FF14] hover:text-black">
@@ -496,25 +892,124 @@ function backToList() {
       <!-- Filters bar -->
       <div class="px-6 py-2 border-b border-gray-800 flex flex-wrap items-center gap-3 text-[11px]">
         <label class="flex items-center gap-2">
-          <span class="text-gray-500 tracking-widest">AP:</span>
-          <select v-model="apFilter" class="bg-black border border-gray-700 text-white px-2 py-1 text-xs">
-            <option value="all">All APs</option>
-            <option v-for="id in apIds" :key="id" :value="id">{{ id }}</option>
+          <span class="text-gray-500 tracking-widest">VIEW:</span>
+          <select v-model="displayMetric" class="bg-black border border-gray-700 text-white px-2 py-1 text-xs">
+            <option value="signal">Signal (dBm)</option>
+            <option value="stream">Stream Quality (RTT / Loss)</option>
           </select>
         </label>
         <label class="flex items-center gap-2">
-          <input type="checkbox" v-model="showHeatmap" class="accent-[#39FF14]" />
-          <span>Heatmap</span>
+          <span class="text-gray-500 tracking-widest">AP:</span>
+          <select v-model="apFilter" class="bg-black border border-gray-700 text-white px-2 py-1 text-xs">
+            <option value="all">All APs</option>
+            <option v-for="id in apIds" :key="id" :value="id">{{ apLabel(id) }}</option>
+          </select>
         </label>
-        <label class="flex items-center gap-2">
+        <label class="flex items-center gap-1.5">
+          <input type="checkbox" v-model="showHeatmap" class="accent-[#39FF14]" />
+          <span>Bounded Heatmap</span>
+        </label>
+        <label v-if="showHeatmap" class="flex items-center gap-1 text-gray-400">
+          <span>{{ heatRadiusM }}m</span>
+          <input type="range" v-model.number="heatRadiusM" min="6" max="30" step="2" class="w-16 accent-[#39FF14]" />
+        </label>
+        <label class="flex items-center gap-1.5">
+          <input type="checkbox" v-model="showAccuracy" class="accent-sky-400" />
+          <span>GPS accuracy</span>
+        </label>
+        <label class="flex items-center gap-1.5">
           <input type="checkbox" v-model="showNeighbors" class="accent-cyan-400" />
           <span>Neighbor APs</span>
         </label>
-        <div class="flex-1 flex items-center gap-2 min-w-[12rem]">
+        <div class="flex-1 flex items-center gap-2 min-w-[10rem]">
           <span class="text-gray-500 tracking-widest">Time:</span>
           <input type="range" v-model.number="timeSlider" min="0" max="100" step="1" class="flex-1 accent-[#39FF14]" />
-          <span class="text-white w-10 text-right">{{ timeSlider }}%</span>
+          <span class="text-white w-9 text-right">{{ timeSlider }}%</span>
         </div>
+      </div>
+
+      <!-- Diagnostic summary bar -->
+      <div v-if="points.length" class="px-6 py-1.5 border-b border-gray-800/80 bg-zinc-950 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
+        <span><b class="text-[#39FF14]">{{ summary.withSignal }}</b> with signal</span>
+        <span v-if="summary.clientNotAssociated" class="text-gray-400">
+          ● <b class="text-white">{{ summary.clientNotAssociated }}</b> Wi-Fi dropped (all APs online)
+        </span>
+        <span v-if="summary.partialApTelemetry" class="text-amber-400">
+          ◌ <b>{{ summary.partialApTelemetry }}</b> AP silent (partial telemetry)
+        </span>
+        <span v-if="summary.noApTelemetry" class="text-orange-400">
+          ◌ <b>{{ summary.noApTelemetry }}</b> no AP telemetry
+        </span>
+        <span v-if="summary.unknownMissing" class="text-gray-500">
+          ● <b>{{ summary.unknownMissing }}</b> no signal (legacy)
+        </span>
+        <span v-if="summary.medianAccuracyM != null" class="text-sky-400">
+          GPS median ±{{ summary.medianAccuracyM.toFixed(0) }}m (max ±{{ summary.maxAccuracyM.toFixed(0) }}m)
+        </span>
+        <span v-if="summary.withProbe" class="text-cyan-300">
+          Local link: avg {{ summary.avgRttMs != null ? summary.avgRttMs + ' ms' : '—' }} · max loss {{ summary.maxLossPct != null ? summary.maxLossPct + '%' : '—' }}
+        </span>
+        <span v-if="displayMetric === 'stream'" class="text-[10px] text-gray-500 ml-auto">
+          Measures phone → Nerve Center stability (test YouTube uplink separately)
+        </span>
+      </div>
+
+      <!-- Local Offline Floorplan Drawer -->
+      <div v-if="showFloorplanPanel" class="px-6 py-3 border-b border-cyan-500/40 bg-cyan-950/20 flex flex-wrap items-center gap-3 text-[11px]">
+        <input
+          ref="floorplanFileInput"
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          class="hidden"
+          @change="onFloorplanFileSelected"
+        />
+        <button
+          @click="floorplanFileInput?.click()"
+          class="px-3 py-1 border border-cyan-400 text-cyan-300 hover:bg-cyan-400 hover:text-black"
+        >
+          {{ floorplan ? 'REPLACE IMAGE' : 'UPLOAD LOCAL IMAGE' }}
+        </button>
+
+        <template v-if="floorplan">
+          <label class="flex items-center gap-1.5">
+            <input type="checkbox" v-model="showFloorplan" class="accent-cyan-400" />
+            <span>Show</span>
+          </label>
+          <label class="flex items-center gap-1.5">
+            <span class="text-gray-400">Opacity</span>
+            <input type="range" v-model.number="floorplan.opacity" min="0.1" max="1" step="0.05" class="w-20 accent-cyan-400" />
+          </label>
+          <button @click="fitFloorplanToTrack" class="px-2 py-1 border border-gray-600 text-gray-200 hover:border-cyan-400">
+            FIT TO TRACK
+          </button>
+          <div class="flex items-center gap-1">
+            <span class="text-gray-400">Align:</span>
+            <button @click="nudgeFloorplan(0.00004, 0)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">↑</button>
+            <button @click="nudgeFloorplan(-0.00004, 0)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">↓</button>
+            <button @click="nudgeFloorplan(0, -0.00004)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">←</button>
+            <button @click="nudgeFloorplan(0, 0.00004)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">→</button>
+            <button @click="nudgeFloorplan(0, 0, 1.08)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">+</button>
+            <button @click="nudgeFloorplan(0, 0, 0.92)" class="px-1.5 py-0.5 border border-gray-700 hover:border-cyan-400">−</button>
+          </div>
+          <button
+            @click="saveFloorplanToServer"
+            :disabled="floorplanSaving"
+            class="px-3 py-1 border border-[#39FF14] text-[#39FF14] hover:bg-[#39FF14] hover:text-black disabled:opacity-50"
+          >
+            {{ floorplanSaving ? 'SAVING…' : 'SAVE OFFLINE PLAN' }}
+          </button>
+          <button
+            @click="removeFloorplan"
+            :disabled="floorplanSaving"
+            class="px-2 py-1 border border-[#ff0055] text-[#ff0055] hover:bg-[#ff0055] hover:text-black"
+          >
+            REMOVE
+          </button>
+        </template>
+        <span v-else class="text-gray-400">
+          Upload a PNG/JPG sketch or screenshot of your property to view walks 100% offline.
+        </span>
+        <span v-if="floorplanError" class="text-[#ff0055]">{{ floorplanError }}</span>
       </div>
 
       <!-- Map -->
@@ -579,8 +1074,14 @@ function backToList() {
           <span v-else>
             On Android, open Settings → Wi-Fi → your connected network and copy its MAC address.
           </span>
-          <button v-if="newAccessMode === 'authenticated' && !newSurveyorMAC && !detectingMAC"
-            type="button" @click="detectCurrentDevice" class="ml-2 underline text-cyan-400">Detect again</button>
+          <button
+            v-if="newAccessMode === 'authenticated' && !newSurveyorMAC && !detectingMAC"
+            type="button"
+            @click="detectCurrentDevice"
+            class="ml-2 underline text-cyan-400"
+          >
+            Detect again
+          </button>
         </label>
 
         <!-- Result with token (only shown once) -->
@@ -597,8 +1098,9 @@ function backToList() {
             </div>
           </div>
           <div v-else class="text-[10px] text-gray-400">
-            <router-link :to="{ name: 'survey-capture', params: { site_id: siteId, survey_id: newSurveyResponse.id } }"
-              class="underline text-[#39FF14]">OPEN GPS CAPTURE</router-link>
+            <router-link :to="{ name: 'survey-capture', params: { site_id: siteId, survey_id: newSurveyResponse.id } }" class="underline text-[#39FF14]">
+              OPEN GPS CAPTURE
+            </router-link>
           </div>
         </div>
 

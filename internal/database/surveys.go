@@ -5,8 +5,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // ─── WIFI_SURVEY domain types ───────────────────────────────────────────────
@@ -41,18 +43,66 @@ type Survey struct {
 }
 
 type SurveyPoint struct {
-	ID          int64    `json:"id"`
-	SurveyID    string   `json:"survey_id"`
-	APID        string   `json:"ap_id"`
-	Lat         *float64 `json:"lat,omitempty"`
-	Lon         *float64 `json:"lon,omitempty"`
-	AccuracyM   *float32 `json:"accuracy_m,omitempty"`
-	SignalDBM   *float32 `json:"signal_dbm,omitempty"`
-	NoiseDBM    *float32 `json:"noise_dbm,omitempty"`
-	SNR         *float32 `json:"snr,omitempty"`
-	BSSID       *string  `json:"bssid,omitempty"`
-	NeighborAPs string   `json:"neighbor_aps"` // raw JSON string
-	CapturedAt  string   `json:"captured_at"`
+	ID                int64    `json:"id"`
+	SurveyID          string   `json:"survey_id"`
+	APID              string   `json:"ap_id"`
+	Lat               *float64 `json:"lat,omitempty"`
+	Lon               *float64 `json:"lon,omitempty"`
+	AccuracyM         *float32 `json:"accuracy_m,omitempty"`
+	SignalDBM         *float32 `json:"signal_dbm,omitempty"`
+	NoiseDBM          *float32 `json:"noise_dbm,omitempty"`
+	SNR               *float32 `json:"snr,omitempty"`
+	BSSID             *string  `json:"bssid,omitempty"`
+	NeighborAPs       string   `json:"neighbor_aps"` // raw JSON string
+	CapturedAt        string   `json:"captured_at"`
+	ClientSampleID    *string  `json:"client_sample_id,omitempty"`
+	MissingReason     string   `json:"missing_reason,omitempty"`
+	ReportingAPsCount *int     `json:"reporting_aps_count,omitempty"`
+	TotalAPsCount     *int     `json:"total_aps_count,omitempty"`
+	SilentAPs         string   `json:"silent_aps,omitempty"` // raw JSON array string
+	ProbeRTTMs        *float32 `json:"probe_rtt_ms,omitempty"`
+	ProbeJitterMs     *float32 `json:"probe_jitter_ms,omitempty"`
+	ProbeLossPct      *float32 `json:"probe_loss_pct,omitempty"`
+}
+
+type SiteAPRef struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	LastIP string `json:"last_ip"`
+}
+
+func (a SiteAPRef) DisplayLabel() string {
+	name := strings.TrimSpace(a.Name)
+	ip := strings.TrimSpace(a.LastIP)
+	switch {
+	case name != "" && ip != "":
+		return fmt.Sprintf("%s (%s)", name, ip)
+	case name != "":
+		return name
+	case ip != "":
+		return ip
+	default:
+		return a.ID
+	}
+}
+
+type SiteAPTelemetry struct {
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	LastIP       string   `json:"last_ip"`
+	Label        string   `json:"label"`
+	AgeSeconds   int      `json:"age_s"`
+	Reporting    bool     `json:"reporting"`
+	SeesSurveyor bool     `json:"sees_surveyor"`
+	SurveyorDBM  *float64 `json:"surveyor_dbm,omitempty"`
+}
+
+type SurveyFloorplan struct {
+	ImageDataURL string        `json:"image_data_url"`
+	Filename     string        `json:"filename,omitempty"`
+	Bounds       [2][2]float64 `json:"bounds"`
+	Opacity      float64       `json:"opacity"`
+	UpdatedAt    string        `json:"updated_at,omitempty"`
 }
 
 // ─── CRUD helpers ────────────────────────────────────────────────────────────
@@ -246,7 +296,15 @@ func GetSurveyPoints(ctx context.Context, schema, surveyID string, limit int) ([
 		SELECT id, survey_id, ap_id, lat, lon, accuracy_m,
 		       signal_dbm, noise_dbm, snr, COALESCE(bssid, ''),
 		       COALESCE(neighbor_aps::text, '[]'),
-		       captured_at
+		       captured_at,
+		       client_sample_id,
+		       COALESCE(missing_reason, ''),
+		       reporting_aps_count,
+		       total_aps_count,
+		       COALESCE(silent_aps::text, '[]'),
+		       probe_rtt_ms,
+		       probe_jitter_ms,
+		       probe_loss_pct
 		FROM %s.wifi_survey_points
 		WHERE survey_id = $1
 		ORDER BY captured_at ASC
@@ -263,7 +321,10 @@ func GetSurveyPoints(ctx context.Context, schema, surveyID string, limit int) ([
 		if err := rows.Scan(&p.ID, &p.SurveyID, &p.APID,
 			&p.Lat, &p.Lon, &p.AccuracyM,
 			&p.SignalDBM, &p.NoiseDBM, &p.SNR, &p.BSSID,
-			&p.NeighborAPs, &p.CapturedAt); err != nil {
+			&p.NeighborAPs, &p.CapturedAt,
+			&p.ClientSampleID, &p.MissingReason,
+			&p.ReportingAPsCount, &p.TotalAPsCount, &p.SilentAPs,
+			&p.ProbeRTTMs, &p.ProbeJitterMs, &p.ProbeLossPct); err != nil {
 			return nil, err
 		}
 		out = append(out, p)
@@ -271,14 +332,160 @@ func GetSurveyPoints(ctx context.Context, schema, surveyID string, limit int) ([
 	return out, nil
 }
 
-func InsertSurveyPoint(ctx context.Context, schema string, p SurveyPoint) error {
-	_, err := Tx(ctx).Exec(fmt.Sprintf(`
+// InsertSurveyPoint inserts a correlated GPS survey point. When ClientSampleID
+// is present, retries with the same (survey_id, client_sample_id) are ignored
+// idempotently and return inserted=false, err=nil.
+func InsertSurveyPoint(ctx context.Context, schema string, p SurveyPoint) (bool, error) {
+	if p.NeighborAPs == "" {
+		p.NeighborAPs = "[]"
+	}
+	if p.SilentAPs == "" {
+		p.SilentAPs = "[]"
+	}
+	res, err := Tx(ctx).Exec(fmt.Sprintf(`
 		INSERT INTO %s.wifi_survey_points
-			(survey_id, ap_id, lat, lon, accuracy_m, signal_dbm, noise_dbm, snr, bssid, neighbor_aps, captured_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+			(survey_id, ap_id, lat, lon, accuracy_m, signal_dbm, noise_dbm, snr, bssid, neighbor_aps, captured_at,
+			 client_sample_id, missing_reason, reporting_aps_count, total_aps_count, silent_aps,
+			 probe_rtt_ms, probe_jitter_ms, probe_loss_pct)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, $12, $13, $14, $15, $16::jsonb, $17, $18, $19)
+		ON CONFLICT (survey_id, client_sample_id) WHERE client_sample_id IS NOT NULL DO NOTHING
 	`, schema),
 		p.SurveyID, p.APID, p.Lat, p.Lon, p.AccuracyM,
-		p.SignalDBM, p.NoiseDBM, p.SNR, p.BSSID, p.NeighborAPs, p.CapturedAt)
+		p.SignalDBM, p.NoiseDBM, p.SNR, p.BSSID, p.NeighborAPs, p.CapturedAt,
+		p.ClientSampleID, p.MissingReason, p.ReportingAPsCount, p.TotalAPsCount, p.SilentAPs,
+		p.ProbeRTTMs, p.ProbeJitterMs, p.ProbeLossPct)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return true, nil
+	}
+	return affected > 0, nil
+}
+
+// GetSiteDeviceRefs returns the devices belonging to a site for telemetry diagnostics.
+func GetSiteDeviceRefs(ctx context.Context, schema, siteID string) ([]SiteAPRef, error) {
+	rows, err := Tx(ctx).Query(fmt.Sprintf(`
+		SELECT id, COALESCE(name, ''), COALESCE(last_ip, '')
+		FROM %s.devices
+		WHERE site_id = $1
+		ORDER BY last_ip, id
+	`, schema), siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SiteAPRef
+	for rows.Next() {
+		var d SiteAPRef
+		if err := rows.Scan(&d.ID, &d.Name, &d.LastIP); err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// GetSiteAPTelemetryHealth inspects live AP telemetry freshness and checks
+// whether any reporting AP currently sees surveyorMAC in wireless_stations.
+func GetSiteAPTelemetryHealth(ctx context.Context, schema, siteID, surveyorMAC string) ([]SiteAPTelemetry, error) {
+	rows, err := Tx(ctx).Query(fmt.Sprintf(`
+		SELECT id, COALESCE(name, ''), COALESCE(last_ip, ''),
+		       COALESCE(EXTRACT(EPOCH FROM (CURRENT_TIMESTAMP - updated_at))::int, 999999),
+		       state_json
+		FROM %s.devices
+		WHERE site_id = $1
+		ORDER BY last_ip, id
+	`, schema), siteID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []SiteAPTelemetry
+	for rows.Next() {
+		var d SiteAPTelemetry
+		var stateRaw []byte
+		if err := rows.Scan(&d.ID, &d.Name, &d.LastIP, &d.AgeSeconds, &stateRaw); err != nil {
+			return nil, err
+		}
+		if d.AgeSeconds < 0 {
+			d.AgeSeconds = 0
+		}
+		d.Label = SiteAPRef{ID: d.ID, Name: d.Name, LastIP: d.LastIP}.DisplayLabel()
+		d.Reporting = d.AgeSeconds <= 45
+
+		if d.Reporting && surveyorMAC != "" && len(stateRaw) > 0 {
+			var state struct {
+				Stations map[string][]struct {
+					MAC    string  `json:"mac"`
+					Signal float64 `json:"signal"`
+				} `json:"wireless_stations"`
+			}
+			if json.Unmarshal(stateRaw, &state) == nil {
+				for _, list := range state.Stations {
+					for _, st := range list {
+						if strings.EqualFold(st.MAC, surveyorMAC) {
+							d.SeesSurveyor = true
+							if st.Signal != 0 {
+								sig := st.Signal
+								d.SurveyorDBM = &sig
+							}
+							break
+						}
+					}
+					if d.SeesSurveyor {
+						break
+					}
+				}
+			}
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
+// GetSiteSurveyFloorplan returns the saved local floorplan for a site, or nil if unset.
+func GetSiteSurveyFloorplan(ctx context.Context, schema, siteID string) (*SurveyFloorplan, error) {
+	var raw string
+	err := Tx(ctx).QueryRow(fmt.Sprintf(`
+		SELECT COALESCE(survey_floorplan::text, '{}')
+		FROM %s.site_configs
+		WHERE site_id = $1
+	`, schema), siteID).Scan(&raw)
+	if err != nil {
+		return nil, err
+	}
+	if raw == "" || raw == "{}" || raw == "null" {
+		return nil, nil
+	}
+	var fp SurveyFloorplan
+	if err := json.Unmarshal([]byte(raw), &fp); err != nil {
+		return nil, err
+	}
+	if fp.ImageDataURL == "" {
+		return nil, nil
+	}
+	return &fp, nil
+}
+
+// SaveSiteSurveyFloorplan persists (or clears when fp == nil) the site's local floorplan.
+func SaveSiteSurveyFloorplan(ctx context.Context, schema, siteID string, fp *SurveyFloorplan) error {
+	payload := "{}"
+	if fp != nil && fp.ImageDataURL != "" {
+		b, err := json.Marshal(fp)
+		if err != nil {
+			return err
+		}
+		payload = string(b)
+	}
+	_, err := Tx(ctx).Exec(fmt.Sprintf(`
+		UPDATE %s.site_configs
+		   SET survey_floorplan = $2::jsonb
+		 WHERE site_id = $1
+	`, schema), siteID, payload)
 	return err
 }
 

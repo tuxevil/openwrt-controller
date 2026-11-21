@@ -53,6 +53,8 @@ func SetupRoutes() *http.ServeMux {
 
 	// ── WIFI_SURVEY / public sample ingest (X-Survey-Token auth, no JWT) ─────
 	mux.HandleFunc("POST /api/surveys/{id}/samples", handlers.PostSurveySampleHandler)
+	mux.HandleFunc("GET /api/surveys/{id}/status", handlers.GetPublicSurveyStatusHandler)
+	mux.HandleFunc("GET /api/surveys/{id}/ping", handlers.PublicSurveyPingHandler)
 
 	// ── Protected API routes ─────────────────────────────────────────────────
 	mux.HandleFunc("GET /api/global/health", middleware.WithAuth(handlers.GetGlobalHealthHandler))
@@ -258,6 +260,8 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys", middleware.WithAuth(handlers.CreateSurveyHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys", middleware.WithAuth(handlers.ListSiteSurveysHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys/detect-device", middleware.WithAuth(handlers.DetectSurveyorHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/surveys/floorplan", middleware.WithAuth(handlers.GetSurveyFloorplanHandler))
+	mux.HandleFunc("PUT /api/sites/{site_id}/surveys/floorplan", middleware.WithAuth(handlers.SaveSurveyFloorplanHandler))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}", middleware.WithAuth(handlers.GetSurveyHandler))
 	mux.HandleFunc("DELETE /api/sites/{site_id}/surveys/{survey_id}", middleware.WithAuth(middleware.RequireAdmin(handlers.DeleteSurveyHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/start", middleware.WithAuth(handlers.StartSurveyHandler))
@@ -266,6 +270,8 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/revoke-token", middleware.WithAuth(middleware.RequireAdmin(handlers.RevokeSurveyTokenHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}/samples", middleware.WithAuth(handlers.GetSurveyPointsHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/samples", middleware.WithAuth(handlers.PostOperatorSurveySampleHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}/status", middleware.WithAuth(handlers.GetSurveyStatusHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}/ping", middleware.WithAuth(handlers.SurveyPingHandler))
 	mux.HandleFunc("PUT /api/global/surveys/lockdown", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.SetGlobalSurveyLockdownHandler)))
 
 	// ── Agent Management ─────────────────────────────────────────────────────

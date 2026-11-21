@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"openwrt-controller/internal/models"
@@ -360,6 +361,48 @@ func GetClosestSurveySignal(ctx context.Context, mac, surveyID string, capturedA
 		return ClientSignalSample{}, false, result.Err()
 	}
 	return ClientSignalSample{}, false, nil
+}
+
+// GetReportingDevicesAround returns the lower-cased device_ids that reported
+// device_metrics telemetry to InfluxDB within [capturedAt-window, capturedAt+window].
+// Used to distinguish a real client Wi-Fi drop from an AP telemetry outage,
+// even when GPS samples were queued offline and uploaded minutes later.
+func GetReportingDevicesAround(ctx context.Context, capturedAt time.Time, window time.Duration) (map[string]bool, error) {
+	if InfluxClient == nil {
+		return nil, fmt.Errorf("influx client not initialized")
+	}
+	if window <= 0 {
+		window = 30 * time.Second
+	}
+	flux := fmt.Sprintf(`
+		from(bucket: %q)
+		  |> range(start: %s, stop: %s)
+		  |> filter(fn: (r) => r["_measurement"] == "device_metrics" and r["_field"] == "uptime")
+		  |> group(columns: ["device_id"])
+		  |> first()
+		  |> group()
+		  |> keep(columns: ["device_id"])
+	`, bucket,
+		capturedAt.Add(-window).UTC().Format(time.RFC3339Nano),
+		capturedAt.Add(window).UTC().Format(time.RFC3339Nano))
+
+	result, err := InfluxClient.QueryAPI(org).Query(ctx, flux)
+	if err != nil {
+		return nil, err
+	}
+	defer result.Close()
+
+	reporting := make(map[string]bool)
+	for result.Next() {
+		id := strings.ToLower(strings.TrimSpace(stringField(result.Record().ValueByKey("device_id"))))
+		if id != "" {
+			reporting[id] = true
+		}
+	}
+	if result.Err() != nil {
+		return nil, result.Err()
+	}
+	return reporting, nil
 }
 
 func stringField(v interface{}) string {

@@ -346,5 +346,17 @@ export default {
   },
   getSurveySamples(siteId, surveyId, limit = 5000) {
     return apiClient.get(`/sites/${siteId}/surveys/${surveyId}/samples?limit=${limit}`)
+  },
+  getSurveyStatus(siteId, surveyId) {
+    return apiClient.get(`/sites/${siteId}/surveys/${surveyId}/status`, { timeout: 5000 })
+  },
+  pingSurvey(siteId, surveyId) {
+    return apiClient.get(`/sites/${siteId}/surveys/${surveyId}/ping`, { timeout: 1500 })
+  },
+  getSurveyFloorplan(siteId) {
+    return apiClient.get(`/sites/${siteId}/surveys/floorplan`)
+  },
+  saveSurveyFloorplan(siteId, payload) {
+    return apiClient.put(`/sites/${siteId}/surveys/floorplan`, payload, { timeout: 20000 })
   }
 }

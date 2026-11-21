@@ -418,17 +418,56 @@ func GetSurveyPointsHandler(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]interface{}{"data": pts})
 }
 
-// ─── PUBLIC sample ingest ───────────────────────────────────────────────────
+// ─── PUBLIC sample ingest & helpers ─────────────────────────────────────────
+
+func authenticatePublicSurvey(w http.ResponseWriter, r *http.Request) (string, *database.Survey, bool) {
+	surveyID := r.PathValue("id")
+	if surveyID == "" {
+		http.Error(w, `{"error":"survey id required"}`, http.StatusBadRequest)
+		return "", nil, false
+	}
+	providedToken := r.Header.Get("X-Survey-Token")
+	if providedToken == "" {
+		http.Error(w, `{"error":"UNAUTHORIZED: missing X-Survey-Token"}`, http.StatusUnauthorized)
+		return "", nil, false
+	}
+
+	schema, survey, ok := findSurveyAcrossTenants(surveyID)
+	if !ok {
+		http.Error(w, `{"error":"SURVEY_NOT_FOUND"}`, http.StatusNotFound)
+		return "", nil, false
+	}
+	if survey.AccessMode != "public" {
+		http.Error(w, `{"error":"UNAUTHORIZED: survey is not public"}`, http.StatusUnauthorized)
+		return "", nil, false
+	}
+	if survey.SurveyTokenHash == nil || *survey.SurveyTokenHash == "" {
+		http.Error(w, `{"error":"UNAUTHORIZED: no token issued for this survey"}`, http.StatusUnauthorized)
+		return "", nil, false
+	}
+	if subtle.ConstantTimeCompare([]byte(database.HashToken(providedToken)), []byte(*survey.SurveyTokenHash)) != 1 {
+		http.Error(w, `{"error":"UNAUTHORIZED: invalid token"}`, http.StatusUnauthorized)
+		return "", nil, false
+	}
+	if survey.TokenRevokedAt != nil && *survey.TokenRevokedAt != "" {
+		http.Error(w, `{"error":"TOKEN_REVOKED"}`, http.StatusUnauthorized)
+		return "", nil, false
+	}
+	allowed, _ := database.GetSiteConfigAllowPublicSurveys(r.Context(), schema, survey.SiteID)
+	if !allowed {
+		http.Error(w, `{"error":"PUBLIC_SURVEY_DISABLED"}`, http.StatusForbidden)
+		return "", nil, false
+	}
+	lockdown, _ := database.IsGlobalSurveysPublicLockdown()
+	if lockdown {
+		http.Error(w, `{"error":"PUBLIC_SURVEY_LOCKDOWN"}`, http.StatusForbidden)
+		return "", nil, false
+	}
+	return schema, survey, true
+}
 
 // PostSurveySampleHandler — POST /api/surveys/{id}/samples
-// Auth: X-Survey-Token. Body: { lat, lon, accuracy_m, ts }.
-// Validates:
-//   - token not empty, not revoked, not expired (if ended_at + 1h passed)
-//   - site allow_public_surveys + not globally locked down
-//   - access_mode == "public"
-//   - rate-limit 10 req/s
-//
-// Records first_seen IP+UA, forwards to survey worker for correlation.
+// Auth: X-Survey-Token. Body: { lat, lon, accuracy_m, ts, client_sample_id?, probe_rtt_ms?, probe_jitter_ms?, probe_loss_pct? }.
 func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 	surveyID := r.PathValue("id")
 	if surveyID == "" {
@@ -440,52 +479,10 @@ func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"RATE_LIMITED"}`, http.StatusTooManyRequests)
 		return
 	}
-
-	providedToken := r.Header.Get("X-Survey-Token")
-	if providedToken == "" {
-		http.Error(w, `{"error":"UNAUTHORIZED: missing X-Survey-Token"}`, http.StatusUnauthorized)
-		return
-	}
-
-	// Survey IDs are UUIDs that span tenants. We need to locate the survey
-	// across all active tenant schemas. This is O(N) tenants but only fires
-	// per-sample, and N is small (<100 for typical MSP).
-	schema, survey, ok := findSurveyAcrossTenants(surveyID)
+	schema, survey, ok := authenticatePublicSurvey(w, r)
 	if !ok {
-		http.Error(w, `{"error":"SURVEY_NOT_FOUND"}`, http.StatusNotFound)
 		return
 	}
-	if survey.AccessMode != "public" {
-		http.Error(w, `{"error":"UNAUTHORIZED: survey is not public"}`, http.StatusUnauthorized)
-		return
-	}
-
-	// Token: constant-time compare against stored hash.
-	if survey.SurveyTokenHash == nil || *survey.SurveyTokenHash == "" {
-		http.Error(w, `{"error":"UNAUTHORIZED: no token issued for this survey"}`, http.StatusUnauthorized)
-		return
-	}
-	if subtle.ConstantTimeCompare([]byte(database.HashToken(providedToken)), []byte(*survey.SurveyTokenHash)) != 1 {
-		http.Error(w, `{"error":"UNAUTHORIZED: invalid token"}`, http.StatusUnauthorized)
-		return
-	}
-	if survey.TokenRevokedAt != nil && *survey.TokenRevokedAt != "" {
-		http.Error(w, `{"error":"TOKEN_REVOKED"}`, http.StatusUnauthorized)
-		return
-	}
-	// Re-check site + platform toggles on every request (they can change
-	// while the survey is live). Cheap because they're indexed lookups.
-	allowed, _ := database.GetSiteConfigAllowPublicSurveys(r.Context(), schema, survey.SiteID)
-	if !allowed {
-		http.Error(w, `{"error":"PUBLIC_SURVEY_DISABLED"}`, http.StatusForbidden)
-		return
-	}
-	lockdown, _ := database.IsGlobalSurveysPublicLockdown()
-	if lockdown {
-		http.Error(w, `{"error":"PUBLIC_SURVEY_LOCKDOWN"}`, http.StatusForbidden)
-		return
-	}
-
 	saveSurveySample(w, r, schema, survey)
 }
 
@@ -526,16 +523,32 @@ func saveSurveySample(w http.ResponseWriter, r *http.Request, schema string, sur
 	}
 
 	var req struct {
-		Lat       *float64 `json:"lat"`
-		Lon       *float64 `json:"lon"`
-		AccuracyM float32  `json:"accuracy_m"`
-		Timestamp int64    `json:"ts"`
+		Lat            *float64 `json:"lat"`
+		Lon            *float64 `json:"lon"`
+		AccuracyM      float32  `json:"accuracy_m"`
+		Timestamp      int64    `json:"ts"`
+		ClientSampleID string   `json:"client_sample_id"`
+		ProbeRTTMs     *float32 `json:"probe_rtt_ms"`
+		ProbeJitterMs  *float32 `json:"probe_jitter_ms"`
+		ProbeLossPct   *float32 `json:"probe_loss_pct"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 4096)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
 		req.Lat == nil || req.Lon == nil || *req.Lat < -90 || *req.Lat > 90 ||
 		*req.Lon < -180 || *req.Lon > 180 || req.AccuracyM < 0 {
 		http.Error(w, `{"error":"Invalid GPS coordinates or accuracy"}`, http.StatusBadRequest)
+		return
+	}
+	if req.ProbeRTTMs != nil && (*req.ProbeRTTMs < 0 || *req.ProbeRTTMs > 60000) {
+		http.Error(w, `{"error":"Invalid probe_rtt_ms"}`, http.StatusBadRequest)
+		return
+	}
+	if req.ProbeJitterMs != nil && (*req.ProbeJitterMs < 0 || *req.ProbeJitterMs > 60000) {
+		http.Error(w, `{"error":"Invalid probe_jitter_ms"}`, http.StatusBadRequest)
+		return
+	}
+	if req.ProbeLossPct != nil && (*req.ProbeLossPct < 0 || *req.ProbeLossPct > 100) {
+		http.Error(w, `{"error":"Invalid probe_loss_pct"}`, http.StatusBadRequest)
 		return
 	}
 	if req.Timestamp <= 0 {
@@ -561,8 +574,22 @@ func saveSurveySample(w http.ResponseWriter, r *http.Request, schema string, sur
 		return
 	}
 	point := database.SurveyPoint{
-		SurveyID: surveyID, Lat: req.Lat, Lon: req.Lon, AccuracyM: &req.AccuracyM,
-		CapturedAt: ts.UTC().Format(time.RFC3339Nano), NeighborAPs: "[]",
+		SurveyID:      surveyID,
+		Lat:           req.Lat,
+		Lon:           req.Lon,
+		AccuracyM:     &req.AccuracyM,
+		CapturedAt:    ts.UTC().Format(time.RFC3339Nano),
+		NeighborAPs:   "[]",
+		SilentAPs:     "[]",
+		ProbeRTTMs:    req.ProbeRTTMs,
+		ProbeJitterMs: req.ProbeJitterMs,
+		ProbeLossPct:  req.ProbeLossPct,
+	}
+	if cid := strings.TrimSpace(req.ClientSampleID); cid != "" {
+		if len(cid) > 64 {
+			cid = cid[:64]
+		}
+		point.ClientSampleID = &cid
 	}
 	if matched {
 		point.APID = signal.DeviceID
@@ -573,8 +600,17 @@ func saveSurveySample(w http.ResponseWriter, r *http.Request, schema string, sur
 			snr := dbm - noise
 			point.NoiseDBM, point.SNR = &noise, &snr
 		}
+	} else {
+		reason, reportingCount, totalCount, silentJSON := diagnoseMissingSignal(ctx, schema, survey.SiteID, ts)
+		point.MissingReason = reason
+		if totalCount > 0 {
+			point.ReportingAPsCount = &reportingCount
+			point.TotalAPsCount = &totalCount
+		}
+		point.SilentAPs = silentJSON
 	}
-	if err := database.InsertSurveyPoint(ctx, schema, point); err != nil {
+	inserted, err := database.InsertSurveyPoint(ctx, schema, point)
+	if err != nil {
 		RespondError(w, http.StatusServiceUnavailable, "failed to save survey point", err)
 		return
 	}
@@ -582,7 +618,233 @@ func saveSurveySample(w http.ResponseWriter, r *http.Request, schema string, sur
 		ip, ua := clientFingerprint(r)
 		_ = database.SetSurveyTokenFirstUse(r.Context(), schema, surveyID, ip, ua)
 	}
-	writeJSON(w, http.StatusCreated, map[string]bool{"matched": matched})
+	statusCode := http.StatusCreated
+	if !inserted {
+		statusCode = http.StatusOK
+	}
+	resp := map[string]interface{}{
+		"matched":        matched,
+		"duplicate":      !inserted,
+		"missing_reason": point.MissingReason,
+	}
+	if point.ReportingAPsCount != nil {
+		resp["reporting_aps"] = *point.ReportingAPsCount
+	}
+	if point.TotalAPsCount != nil {
+		resp["total_aps"] = *point.TotalAPsCount
+	}
+	writeJSON(w, statusCode, resp)
+}
+
+// diagnoseMissingSignal checks which site APs reported device_metrics around ts
+// so gray points distinguish a client Wi-Fi drop from silent/offline AP telemetry.
+func diagnoseMissingSignal(ctx context.Context, schema, siteID string, ts time.Time) (reason string, reportingCount, totalCount int, silentJSON string) {
+	silentJSON = "[]"
+	devices, err := database.GetSiteDeviceRefs(ctx, schema, siteID)
+	if err != nil || len(devices) == 0 {
+		return "no_ap_telemetry", 0, 0, silentJSON
+	}
+	totalCount = len(devices)
+	reportingSet, err := database.GetReportingDevicesAround(ctx, ts, 30*time.Second)
+	if err != nil {
+		return "no_ap_telemetry", 0, totalCount, silentJSON
+	}
+	silentLabels := make([]string, 0)
+	for _, dev := range devices {
+		if reportingSet[strings.ToLower(dev.ID)] {
+			reportingCount++
+		} else {
+			silentLabels = append(silentLabels, dev.DisplayLabel())
+		}
+	}
+	if b, err := json.Marshal(silentLabels); err == nil {
+		silentJSON = string(b)
+	}
+	switch {
+	case reportingCount == 0:
+		reason = "no_ap_telemetry"
+	case reportingCount < totalCount:
+		reason = "partial_ap_telemetry"
+	default:
+		reason = "client_not_associated"
+	}
+	return reason, reportingCount, totalCount, silentJSON
+}
+
+// ─── Live AP Telemetry Health & Streaming Probe Ping ────────────────────────
+
+func writeSurveyStatus(w http.ResponseWriter, r *http.Request, schema string, survey *database.Survey) {
+	w.Header().Set("Cache-Control", "no-store")
+	surveyorMAC := ""
+	if survey.SurveyorMAC != nil {
+		surveyorMAC = *survey.SurveyorMAC
+	}
+	aps, err := database.GetSiteAPTelemetryHealth(r.Context(), schema, survey.SiteID, surveyorMAC)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "failed to load AP telemetry status", err)
+		return
+	}
+	if aps == nil {
+		aps = []database.SiteAPTelemetry{}
+	}
+	reportingCount := 0
+	surveyorSeen := false
+	surveyorAP := ""
+	var surveyorDBM *float64
+	for _, ap := range aps {
+		if ap.Reporting {
+			reportingCount++
+		}
+		if ap.SeesSurveyor {
+			surveyorSeen = true
+			surveyorAP = ap.Label
+			surveyorDBM = ap.SurveyorDBM
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"survey_id":       survey.ID,
+		"status":          survey.Status,
+		"reporting_count": reportingCount,
+		"total_count":     len(aps),
+		"surveyor_seen":   surveyorSeen,
+		"surveyor_ap":     surveyorAP,
+		"surveyor_dbm":    surveyorDBM,
+		"aps":             aps,
+	})
+}
+
+func GetSurveyStatusHandler(w http.ResponseWriter, r *http.Request) {
+	_, role := surveyClaims(r)
+	if !roleAtLeast(role, "OPERATOR") {
+		http.Error(w, `{"error":"FORBIDDEN: OPERATOR+ required"}`, http.StatusForbidden)
+		return
+	}
+	schema := middleware.GetTenantSchema(r)
+	if schema == "" {
+		http.Error(w, `{"error":"tenant schema unresolved"}`, http.StatusInternalServerError)
+		return
+	}
+	survey, err := database.GetSurvey(r.Context(), schema, r.PathValue("survey_id"))
+	if err != nil || survey.SiteID != r.PathValue("site_id") {
+		http.NotFound(w, r)
+		return
+	}
+	writeSurveyStatus(w, r, schema, survey)
+}
+
+func GetPublicSurveyStatusHandler(w http.ResponseWriter, r *http.Request) {
+	schema, survey, ok := authenticatePublicSurvey(w, r)
+	if !ok {
+		return
+	}
+	writeSurveyStatus(w, r, schema, survey)
+}
+
+func SurveyPingHandler(w http.ResponseWriter, r *http.Request) {
+	_, role := surveyClaims(r)
+	if !roleAtLeast(role, "OPERATOR") {
+		http.Error(w, `{"error":"FORBIDDEN: OPERATOR+ required"}`, http.StatusForbidden)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":        true,
+		"server_ts": time.Now().UnixMilli(),
+	})
+}
+
+func PublicSurveyPingHandler(w http.ResponseWriter, r *http.Request) {
+	_, _, ok := authenticatePublicSurvey(w, r)
+	if !ok {
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"ok":        true,
+		"server_ts": time.Now().UnixMilli(),
+	})
+}
+
+// ─── Local Offline Floorplan ────────────────────────────────────────────────
+
+const maxFloorplanBodyBytes = 3 << 20 // 3 MiB
+
+func validateSurveyFloorplan(fp database.SurveyFloorplan) error {
+	if fp.ImageDataURL == "" {
+		return nil // clearing floorplan
+	}
+	validPrefix := strings.HasPrefix(fp.ImageDataURL, "data:image/png;base64,") ||
+		strings.HasPrefix(fp.ImageDataURL, "data:image/jpeg;base64,") ||
+		strings.HasPrefix(fp.ImageDataURL, "data:image/webp;base64,")
+	if !validPrefix {
+		return fmt.Errorf("floorplan must be a PNG, JPEG, or WebP data URL")
+	}
+	swLat, swLon := fp.Bounds[0][0], fp.Bounds[0][1]
+	neLat, neLon := fp.Bounds[1][0], fp.Bounds[1][1]
+	if swLat < -90 || swLat > 90 || neLat < -90 || neLat > 90 ||
+		swLon < -180 || swLon > 180 || neLon < -180 || neLon > 180 {
+		return fmt.Errorf("invalid floorplan geographic bounds")
+	}
+	if swLat >= neLat || swLon >= neLon {
+		return fmt.Errorf("south-west bound must be strictly less than north-east bound")
+	}
+	if fp.Opacity < 0.05 || fp.Opacity > 1.0 {
+		return fmt.Errorf("opacity must be between 0.05 and 1.0")
+	}
+	return nil
+}
+
+func GetSurveyFloorplanHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	schema := middleware.GetTenantSchema(r)
+	if schema == "" {
+		http.Error(w, `{"error":"tenant schema unresolved"}`, http.StatusInternalServerError)
+		return
+	}
+	fp, err := database.GetSiteSurveyFloorplan(r.Context(), schema, siteID)
+	if err != nil {
+		RespondError(w, http.StatusInternalServerError, "failed to load floorplan", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"data": fp})
+}
+
+func SaveSurveyFloorplanHandler(w http.ResponseWriter, r *http.Request) {
+	siteID := r.PathValue("site_id")
+	schema := middleware.GetTenantSchema(r)
+	if schema == "" {
+		http.Error(w, `{"error":"tenant schema unresolved"}`, http.StatusInternalServerError)
+		return
+	}
+	username, role := surveyClaims(r)
+	if !roleAtLeast(role, "OPERATOR") {
+		http.Error(w, `{"error":"FORBIDDEN: OPERATOR+ required"}`, http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFloorplanBodyBytes)
+	var fp database.SurveyFloorplan
+	if err := json.NewDecoder(r.Body).Decode(&fp); err != nil {
+		http.Error(w, `{"error":"invalid floorplan payload or image exceeds 3 MB limit"}`, http.StatusBadRequest)
+		return
+	}
+	if fp.ImageDataURL != "" && fp.Opacity == 0 {
+		fp.Opacity = 0.75
+	}
+	if err := validateSurveyFloorplan(fp); err != nil {
+		http.Error(w, fmt.Sprintf(`{"error":%q}`, err.Error()), http.StatusBadRequest)
+		return
+	}
+	var toSave *database.SurveyFloorplan
+	if fp.ImageDataURL != "" {
+		fp.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		toSave = &fp
+	}
+	if err := database.SaveSiteSurveyFloorplan(r.Context(), schema, siteID, toSave); err != nil {
+		RespondError(w, http.StatusInternalServerError, "failed to save floorplan", err)
+		return
+	}
+	go database.InsertAuditLog(username, "SURVEY_FLOORPLAN_UPDATE", "SITE", siteID, fp.Filename, r.RemoteAddr)
+	writeJSON(w, http.StatusOK, map[string]interface{}{"data": toSave})
 }
 
 func clientFingerprint(r *http.Request) (ip, ua string) {

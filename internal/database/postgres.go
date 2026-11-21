@@ -628,10 +628,20 @@ func createTenantTables(schema string) error {
 		snr REAL,
 		bssid VARCHAR(50),
 		neighbor_aps JSONB DEFAULT '[]',
-		captured_at TIMESTAMP WITH TIME ZONE NOT NULL
+		captured_at TIMESTAMP WITH TIME ZONE NOT NULL,
+		client_sample_id VARCHAR(64),
+		missing_reason VARCHAR(40) NOT NULL DEFAULT '',
+		reporting_aps_count INTEGER,
+		total_aps_count INTEGER,
+		silent_aps JSONB NOT NULL DEFAULT '[]',
+		probe_rtt_ms REAL,
+		probe_jitter_ms REAL,
+		probe_loss_pct REAL
 	);
 	CREATE INDEX IF NOT EXISTS idx_wifi_survey_points_survey_captured
 		ON wifi_survey_points(survey_id, captured_at);
+	CREATE UNIQUE INDEX IF NOT EXISTS uq_wifi_survey_points_client_sample
+		ON wifi_survey_points(survey_id, client_sample_id) WHERE client_sample_id IS NOT NULL;
 	`
 
 	tx, err := DB.Begin()
@@ -789,6 +799,16 @@ func createTenantTables(schema string) error {
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP, expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
 			CHECK (status IN ('PENDING','APPROVING','APPROVED','REJECTED','BLOCKED','FAILED')) )`, quotedSchema, quotedSchema, quotedSchema, quotedSchema),
 		fmt.Sprintf("CREATE INDEX IF NOT EXISTS idx_sentinel_proposals_status ON %s.sentinel_proposals(status, created_at DESC)", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS client_sample_id VARCHAR(64)", quotedSchema),
+		fmt.Sprintf("CREATE UNIQUE INDEX IF NOT EXISTS uq_wifi_survey_points_client_sample ON %s.wifi_survey_points(survey_id, client_sample_id) WHERE client_sample_id IS NOT NULL", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS missing_reason VARCHAR(40) NOT NULL DEFAULT ''", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS reporting_aps_count INTEGER", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS total_aps_count INTEGER", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS silent_aps JSONB NOT NULL DEFAULT '[]'", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS probe_rtt_ms REAL", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS probe_jitter_ms REAL", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.wifi_survey_points ADD COLUMN IF NOT EXISTS probe_loss_pct REAL", quotedSchema),
+		fmt.Sprintf("ALTER TABLE %s.site_configs ADD COLUMN IF NOT EXISTS survey_floorplan JSONB NOT NULL DEFAULT '{}'", quotedSchema),
 	}
 	for _, m := range migrations {
 		if _, err := DB.Exec(m); err != nil {
