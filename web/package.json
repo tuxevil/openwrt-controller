@@ -14,30 +14,34 @@
   "dependencies": {
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "axios": "^1.18.0",
+    "axios": "^1.21.1",
     "chart.js": "^4.5.1",
     "d3": "^7.9.0",
     "d3-force": "^3.0.0",
-    "dompurify": "^3.4.13",
+    "dompurify": "^3.4.18",
     "leaflet": "^1.9.4",
     "marked": "^18.0.2",
     "pinia": "^2.3.1",
     "qrcode": "^1.5.4",
     "v-network-graph": "^0.9.22",
-    "vue": "^3.5.32",
+    "vue": "^3.5.46",
     "vue-chartjs": "^5.3.3",
     "vue-router": "^4.4.5"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.5",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/coverage-v8": "^5.1.1",
     "@vue/test-utils": "^2.4.11",
     "autoprefixer": "^10.4.27",
-    "happy-dom": "^20.10.5",
+    "happy-dom": "^21.0.4",
     "jsdom": "^29.1.1",
     "postcss": "^8.5.25",
     "tailwindcss": "^3.4.19",
-    "vite": "^8.0.16",
-    "vitest": "^4.1.11"
+    "vite": "^8.3.8",
+    "vitest": "^5.1.1"
+  },
+  "overrides": {
+    "glob": "^14.0.6",
+    "minimatch": "^11.0.9"
   }
 }
