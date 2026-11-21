@@ -52,3 +52,9 @@ En OpenClaw 2026.9.4, establece `transport: "streamable-http"` junto a
 `get_site_health` y `get_case` con TLS y una credencial temporal.
 La selección automática intentó SSE y recibió HTTP 405. El endpoint
 stateless atiende las operaciones del cliente mediante POST.
+
+El checkout de Hermes Agent `755a2804` también descubrió ambas
+herramientas contra el endpoint TLS de laboratorio. Su función de
+diagnóstico usó `url` y `headers.Authorization` de la configuración
+de `mcp_servers` y el certificado de prueba en el almacén de confianza
+de su proceso. En la LAN, usa la CA que firmó el certificado del controlador.
