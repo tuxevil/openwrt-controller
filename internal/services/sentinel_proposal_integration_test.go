@@ -61,6 +61,22 @@ func TestSentinelProposalApprovalBoundaryPostgres(t *testing.T) {
 	if err := db.QueryRow("SELECT pending_operation IS NOT NULL FROM " + quoted + ".devices WHERE id='sandbox-node'").Scan(&queued); err != nil || queued {
 		t.Fatalf("operation queued before approval: %t (%v)", queued, err)
 	}
+	const siteID = "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"
+	if _, err := db.Exec("INSERT INTO "+quoted+".sites (id,name) VALUES ($1,'previous site')", siteID); err != nil {
+		t.Fatal(err)
+	}
+	caseID, err := OpenSentinelCase(schema, "incident", siteID, "", "HIGH", "Moved device", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved, err := CreateSentinelProposal(schema, "", caseID, "synthetic", &draft)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApproveSentinelProposal(t.Context(), schema, moved.ID, "operator"); err == nil {
+		t.Fatal("approval accepted a device outside the Case's current site")
+	}
+
 	operation, err := ApproveSentinelProposal(t.Context(), schema, pending.ID, "operator")
 	if err != nil || operation.Generation == 0 || operation.OperationID == "" || operation.PlanHash == "" {
 		t.Fatalf("could not approve valid operation: %v", err)

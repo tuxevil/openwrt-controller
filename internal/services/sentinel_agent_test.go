@@ -225,9 +225,10 @@ func TestApproveSentinelProposalReturnsQueuedOperationIdentity(t *testing.T) {
 	plan := `{"operation_id":"operation-1","plan_hash":"` + planHash + `","config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":false}`
 	boundPlan := `{"operation_id":"operation-1","plan_hash":"` + planHash + `","generation":42,"config":"system","commands":[{"action":"set","config":"system","section":"@system[0]","option":"hostname","value":"lab-router"}],"auto_confirm":false}`
 
-	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.sentinel_proposals SET status = 'APPROVING'")).
+	mock.ExpectBegin()
+	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.sentinel_proposals AS proposal SET status = 'APPROVING'")).
 		WithArgs("proposal-1").
-		WillReturnRows(sqlmock.NewRows([]string{"device_id", "status", "plan"}).AddRow("device-1", "APPROVING", []byte(plan)))
+		WillReturnRows(sqlmock.NewRows([]string{"device_id", "plan"}).AddRow("device-1", []byte(plan)))
 	mock.ExpectQuery(regexp.QuoteMeta("UPDATE tenant_demo.devices")).
 		WithArgs(sqlmock.AnyArg(), "device-1", "operation-1", int64(0)).
 		WillReturnRows(sqlmock.NewRows([]string{"desired_generation", "pending_operation"}).AddRow(int64(42), []byte(boundPlan)))
@@ -235,6 +236,7 @@ func TestApproveSentinelProposalReturnsQueuedOperationIdentity(t *testing.T) {
 		WithArgs("operator", "proposal-1").
 		WillReturnResult(sqlmock.NewResult(1, 1))
 
+	mock.ExpectCommit()
 	operation, err := ApproveSentinelProposal(t.Context(), "tenant_demo", "proposal-1", "operator")
 	if err != nil {
 		t.Fatal(err)

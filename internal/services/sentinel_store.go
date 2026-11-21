@@ -757,31 +757,51 @@ func ApproveSentinelProposal(ctx context.Context, schema, proposalID, username s
 	if err != nil {
 		return DeviceOperationPlan{}, err
 	}
-	var deviceID, status string
+	tx, ok := ctx.Value(database.TxKey).(*sql.Tx)
+	if !ok {
+		tx, err = database.DB.BeginTx(ctx, nil)
+		if err != nil {
+			return DeviceOperationPlan{}, err
+		}
+		ctx = context.WithValue(ctx, database.TxKey, tx)
+	}
+	defer tx.Rollback()
+	var deviceID string
 	var plan []byte
-	err = database.DB.QueryRow(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'APPROVING'
-        WHERE id = $1 AND status = 'PENDING' AND COALESCE(BTRIM(blocked_reason), '') = '' AND expires_at > CURRENT_TIMESTAMP
-        RETURNING device_id, status, plan`, safeSchema), proposalID).Scan(&deviceID, &status, &plan)
+	err = tx.QueryRowContext(ctx, fmt.Sprintf(`UPDATE %[1]s.sentinel_proposals AS proposal SET status = 'APPROVING'
+        WHERE proposal.id = $1 AND proposal.status = 'PENDING'
+          AND COALESCE(BTRIM(proposal.blocked_reason), '') = '' AND proposal.expires_at > CURRENT_TIMESTAMP
+          AND EXISTS (
+              SELECT 1 FROM %[1]s.devices AS device
+              LEFT JOIN %[1]s.sentinel_cases AS related_case ON related_case.id = proposal.case_id
+              WHERE device.id = proposal.device_id
+                AND (related_case.site_id IS NULL OR device.site_id = related_case.site_id)
+                AND (related_case.device_id IS NULL OR device.id = related_case.device_id)
+              FOR UPDATE OF device
+          )
+        RETURNING proposal.device_id, proposal.plan`, safeSchema), proposalID).Scan(&deviceID, &plan)
 	if err == sql.ErrNoRows {
-		return DeviceOperationPlan{}, fmt.Errorf("proposal is no longer pending, expired, or blocked")
+		return DeviceOperationPlan{}, fmt.Errorf("proposal expired, blocked, outside current Case scope, or already handled")
 	}
 	if err != nil {
 		return DeviceOperationPlan{}, err
 	}
 	var operation DeviceOperationPlan
 	if err := json.Unmarshal(plan, &operation); err != nil {
-		_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'FAILED', blocked_reason = $1 WHERE id = $2`, safeSchema), err.Error(), proposalID)
 		return DeviceOperationPlan{}, fmt.Errorf("invalid proposal operation: %w", err)
 	}
-	queuedGeneration, err := database.QueueDeviceOperation(ctx, schema, deviceID, plan)
+	operation.Generation, err = database.QueueDeviceOperation(ctx, schema, deviceID, plan)
 	if err != nil {
-		_, _ = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'FAILED', blocked_reason = $1 WHERE id = $2`, safeSchema), err.Error(), proposalID)
 		return DeviceOperationPlan{}, err
 	}
-	operation.Generation = queuedGeneration
-	_, err = database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'APPROVED', approved_by = $1,
-        approved_at = CURRENT_TIMESTAMP WHERE id = $2`, safeSchema), username, proposalID)
-	return operation, err
+	if _, err = tx.ExecContext(ctx, fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'APPROVED', approved_by = $1,
+        approved_at = CURRENT_TIMESTAMP WHERE id = $2`, safeSchema), username, proposalID); err != nil {
+		return DeviceOperationPlan{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return DeviceOperationPlan{}, err
+	}
+	return operation, nil
 }
 
 func RejectSentinelProposal(schema, proposalID, username, reason string) error {
