@@ -569,15 +569,32 @@ func SnapshotSurveyAPPositions(ctx context.Context, schema, surveyID, siteID str
 }
 
 // UpdateDeviceLocation sets or clears a device's geographic coordinates on the site map.
+// Uses two distinct statements (set vs clear) instead of CASE WHEN $1 IS NULL
+// so PostgreSQL never hits SQLSTATE 42P08 ("could not determine data type of parameter $1").
 func UpdateDeviceLocation(ctx context.Context, schema, siteID, deviceID string, lat, lon *float64, note string) (bool, error) {
-	res, err := Tx(ctx).Exec(fmt.Sprintf(`
-		UPDATE %s.devices
-		   SET location_lat = $1,
-		       location_lon = $2,
-		       location_note = $3,
-		       location_updated_at = CASE WHEN $1 IS NULL THEN NULL ELSE CURRENT_TIMESTAMP END
-		 WHERE lower(id) = lower($4) AND site_id = $5
-	`, schema), lat, lon, note, deviceID, siteID)
+	var (
+		res interface{ RowsAffected() (int64, error) }
+		err error
+	)
+	if lat == nil || lon == nil {
+		res, err = Tx(ctx).Exec(fmt.Sprintf(`
+			UPDATE %s.devices
+			   SET location_lat = NULL,
+			       location_lon = NULL,
+			       location_note = '',
+			       location_updated_at = NULL
+			 WHERE lower(id) = lower($1) AND site_id = $2
+		`, schema), deviceID, siteID)
+	} else {
+		res, err = Tx(ctx).Exec(fmt.Sprintf(`
+			UPDATE %s.devices
+			   SET location_lat = $1::double precision,
+			       location_lon = $2::double precision,
+			       location_note = $3,
+			       location_updated_at = CURRENT_TIMESTAMP
+			 WHERE lower(id) = lower($4) AND site_id = $5
+		`, schema), *lat, *lon, note, deviceID, siteID)
+	}
 	if err != nil {
 		return false, err
 	}

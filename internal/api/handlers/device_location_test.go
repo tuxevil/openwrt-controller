@@ -72,7 +72,7 @@ func TestUpdateDeviceLocationHandlerEndToEnd(t *testing.T) {
 	lat := -2.023712
 	lon := -78.947345
 	mock.ExpectExec("UPDATE tenant_demo.devices").
-		WithArgs(&lat, &lon, "Poste sur 3m", "78:8a:20:2c:c1:12", "site-1").
+		WithArgs(lat, lon, "Poste sur 3m", "78:8a:20:2c:c1:12", "site-1").
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	mock.ExpectCommit()
 
