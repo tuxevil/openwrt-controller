@@ -308,7 +308,7 @@ func GetClosestSurveySignal(ctx context.Context, mac, surveyID string, capturedA
 		return ClientSignalSample{}, false, fmt.Errorf("influx client not initialized")
 	}
 
-	window := 4 * time.Second
+	window := 10 * time.Second
 	flux := fmt.Sprintf(`
 		from(bucket: %q)
 		  |> range(start: %s, stop: %s)

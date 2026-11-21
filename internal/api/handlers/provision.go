@@ -446,9 +446,6 @@ func GetDeviceConfigHandler(w http.ResponseWriter, r *http.Request) {
 			"enabled":  tailscaleEnabled,
 			"auth_key": tailscaleAuthKey,
 		},
-		"survey_mode":                       surveyModeFor(tenantSchema, siteID.String),
-		"survey_id":                         surveyIDFor(tenantSchema, siteID.String),
-		"survey_telemetry_interval_seconds": surveyIntervalFor(tenantSchema, siteID.String),
 	}
 	if pendingOperation != nil {
 		configPayload["apply_operation"] = pendingOperation
@@ -489,39 +486,4 @@ func resolveDeviceTenant(providedToken, providedKey string) (string, string, err
 		return "", "", err
 	}
 	return tenantSchema, "", nil
-}
-
-// surveyModeFor returns true if the site has an active wifi_survey.
-// Used by the agent to switch its telemetry loop to the high-cadence branch.
-func surveyModeFor(schema, siteID string) bool {
-	if siteID == "" {
-		return false
-	}
-	s, err := getActiveSurveyForSite(schema, siteID)
-	return err == nil && s != nil
-}
-
-// surveyIDFor returns the active survey ID for the site, or "" if none.
-func surveyIDFor(schema, siteID string) string {
-	if siteID == "" {
-		return ""
-	}
-	s, err := getActiveSurveyForSite(schema, siteID)
-	if err != nil || s == nil {
-		return ""
-	}
-	return s.ID
-}
-
-// surveyIntervalFor is the seconds the agent should sleep between telemetry
-// cycles when in survey mode. 2s gives ~30 samples per minute per AP.
-func surveyIntervalFor(schema, siteID string) int {
-	if surveyModeFor(schema, siteID) {
-		return 2
-	}
-	return 0
-}
-
-func getActiveSurveyForSite(schema, siteID string) (*database.Survey, error) {
-	return database.GetActiveSurveyForSite(context.Background(), schema, siteID)
 }

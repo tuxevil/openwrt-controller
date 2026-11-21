@@ -39,6 +39,11 @@ const router = createRouter({
       meta: { public: true }
     },
     {
+      path: '/site/:site_id/surveys/:survey_id/capture',
+      name: 'survey-capture',
+      component: () => import('../views/SurveyorPwa.vue')
+    },
+    {
       path: '/',
       redirect: '/global'
     },

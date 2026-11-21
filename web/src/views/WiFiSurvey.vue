@@ -234,7 +234,7 @@ async function createSurvey() {
     const res = await api.createSurvey(siteId.value, {
       name: newName.value || `Survey ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
       surveyor_label: newSurveyorLabel.value,
-      surveyor_mac: newAccessMode.value === 'public' ? newSurveyorMAC.value.trim() : '',
+      surveyor_mac: newSurveyorMAC.value.trim(),
       access_mode: newAccessMode.value
     })
     newSurveyResponse.value = res.data?.data || res.data
@@ -442,7 +442,12 @@ function backToList() {
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <button v-if="selectedSurvey.status === 'pending'" @click="startSurvey(selectedSurvey)" class="px-3 py-1.5 border border-[#39FF14] text-[#39FF14] text-xs tracking-widest clip-chamfer hover:bg-[#39FF14] hover:text-black">
+          <router-link v-if="selectedSurvey.access_mode === 'authenticated' && ['pending', 'active'].includes(selectedSurvey.status)"
+            :to="{ name: 'survey-capture', params: { site_id: siteId, survey_id: selectedSurvey.id } }"
+            class="px-3 py-1.5 border border-[#39FF14] text-[#39FF14] text-xs">
+            OPEN GPS CAPTURE
+          </router-link>
+          <button v-if="selectedSurvey.status === 'pending' && selectedSurvey.access_mode === 'public'" @click="startSurvey(selectedSurvey)" class="px-3 py-1.5 border border-[#39FF14] text-[#39FF14] text-xs tracking-widest clip-chamfer hover:bg-[#39FF14] hover:text-black">
             ▶ START
           </button>
           <button v-if="selectedSurvey.status === 'active'" @click="stopSurvey(selectedSurvey)" class="px-3 py-1.5 border border-yellow-500 text-yellow-500 text-xs tracking-widest clip-chamfer hover:bg-yellow-500 hover:text-black">
@@ -523,7 +528,7 @@ function backToList() {
         <div v-if="!newSurveyResponse">
           <label class="flex items-center gap-2 text-sm cursor-pointer">
             <input type="checkbox" v-model="newAccessMode" true-value="public" false-value="authenticated" :disabled="!sitePublicAllowed" class="accent-cyan-400" />
-            <span>Allow public surveyor (no login required)</span>
+            <span>Guest access via QR (optional)</span>
           </label>
           <p v-if="!sitePublicAllowed" class="text-[10px] text-yellow-500 mt-1">
             Public surveys are disabled for this site. Enable "Allow public surveys" in
@@ -535,10 +540,10 @@ function backToList() {
           </p>
         </div>
 
-        <label v-if="!newSurveyResponse && newAccessMode === 'public'" class="block text-xs text-gray-400">
+        <label v-if="!newSurveyResponse" class="block text-xs text-gray-400">
           ANDROID WI-FI MAC
           <input v-model="newSurveyorMAC" placeholder="aa:bb:cc:dd:ee:ff" class="mt-1 w-full bg-black border border-gray-700 text-white px-3 py-2" />
-          Use the MAC shown in Android’s settings for the connected Wi-Fi network.
+          On Android, open Settings → Wi-Fi → your connected network and copy its MAC address.
         </label>
 
         <!-- Result with token (only shown once) -->
@@ -555,7 +560,8 @@ function backToList() {
             </div>
           </div>
           <div v-else class="text-[10px] text-gray-400">
-            Survey is <b>authenticated</b>. Operators can join it from the dashboard.
+            <router-link :to="{ name: 'survey-capture', params: { site_id: siteId, survey_id: newSurveyResponse.id } }"
+              class="underline text-[#39FF14]">OPEN GPS CAPTURE</router-link>
           </div>
         </div>
 

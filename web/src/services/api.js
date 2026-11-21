@@ -329,6 +329,9 @@ export default {
   startSurvey(siteId, surveyId) {
     return apiClient.post(`/sites/${siteId}/surveys/${surveyId}/start`)
   },
+  saveSurveySample(siteId, surveyId, sample) {
+    return apiClient.post(`/sites/${siteId}/surveys/${surveyId}/samples`, sample, { timeout: 10000 })
+  },
   stopSurvey(siteId, surveyId) {
     return apiClient.post(`/sites/${siteId}/surveys/${surveyId}/stop`)
   },

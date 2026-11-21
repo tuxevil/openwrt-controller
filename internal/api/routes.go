@@ -264,6 +264,7 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/rotate-token", middleware.WithAuth(middleware.RequireAdmin(handlers.RotateSurveyTokenHandler)))
 	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/revoke-token", middleware.WithAuth(middleware.RequireAdmin(handlers.RevokeSurveyTokenHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/surveys/{survey_id}/samples", middleware.WithAuth(handlers.GetSurveyPointsHandler))
+	mux.HandleFunc("POST /api/sites/{site_id}/surveys/{survey_id}/samples", middleware.WithAuth(handlers.PostOperatorSurveySampleHandler))
 	mux.HandleFunc("PUT /api/global/surveys/lockdown", middleware.WithAuth(middleware.RequireSuperAdmin(handlers.SetGlobalSurveyLockdownHandler)))
 
 	// ── Agent Management ─────────────────────────────────────────────────────

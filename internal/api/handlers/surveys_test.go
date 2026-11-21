@@ -107,7 +107,7 @@ func TestSurveySamplePersistsGPSWithAndWithoutSignal(t *testing.T) {
 			ts := time.UnixMilli(time.Now().Add(-time.Minute).UnixMilli()).UTC()
 			influx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				body, _ := io.ReadAll(r.Body)
-				for _, want := range []string{mac, surveyID, ts.Add(-4 * time.Second).Format(time.RFC3339Nano), ts.Add(4 * time.Second).Format(time.RFC3339Nano), "distance_ns"} {
+				for _, want := range []string{mac, surveyID, ts.Add(-10 * time.Second).Format(time.RFC3339Nano), ts.Add(10 * time.Second).Format(time.RFC3339Nano), "distance_ns"} {
 					if !strings.Contains(string(body), want) {
 						t.Errorf("Influx query missing %q", want)
 					}

@@ -317,26 +317,18 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}(deviceID, metrics)
 
-	// 2b. WIFI_SURVEY: when a survey_id is attached to the payload, write
-	//     per-station signal samples to the client_signal measurement so
-	//     the correlation worker can pair them with phone GPS samples.
-	//     This is the only path that gets the signal into InfluxDB at the
-	//     2s survey cadence without doubling the telemetry cost.
-	if surveyID, _ := raw["survey_id"].(string); surveyID != "" && deviceSiteID != nil {
-		go func(devID string, payload map[string]interface{}, surveyID, siteID string) {
+	// Correlate the normal station telemetry without asking older agents to
+	// run off-channel scans that can interrupt Wi-Fi or produce invalid JSON.
+	if stations, _ := raw["wireless_stations"].(map[string]interface{}); len(stations) > 0 && deviceSiteID != nil {
+		go func(devID, siteID string, capturedAt time.Time) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			survey, err := database.GetActiveSurveyForSite(ctx, tenantSchema, siteID)
-			if err != nil || survey.ID != surveyID || survey.SurveyorMAC == nil {
-				return
-			}
-			stations, _ := payload["wireless_stations"].(map[string]interface{})
-			if len(stations) == 0 {
+			if err != nil || survey.SurveyorMAC == nil || *survey.SurveyorMAC == "" {
 				return
 			}
 			var samples []database.ClientSignalSample
-			now := time.Now()
-			for iface, ifaceClients := range stations {
+			for _, ifaceClients := range stations {
 				list, _ := ifaceClients.([]interface{})
 				for _, cIf := range list {
 					cMap, _ := cIf.(map[string]interface{})
@@ -354,17 +346,16 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 					inactF, _ := cMap["inactive"].(float64)
 					rx, _ := strconv.ParseFloat(rxStr, 64)
 					tx, _ := strconv.ParseFloat(txStr, 64)
-					_ = iface
 					samples = append(samples, database.ClientSignalSample{
 						DeviceID:   devID,
 						MAC:        *survey.SurveyorMAC,
-						SurveyID:   surveyID,
+						SurveyID:   survey.ID,
 						SignalDBM:  sig,
 						NoiseDBM:   noise,
 						RxRate:     rx,
 						TxRate:     tx,
 						InactiveMs: int64(inactF),
-						Time:       now,
+						Time:       capturedAt,
 					})
 				}
 			}
@@ -374,7 +365,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			if err := database.WriteClientSignalBatch(samples); err != nil {
 				log.Printf("[SURVEY] WriteClientSignalBatch failed for device %s: %v", devID, err)
 			}
-		}(canonicalDeviceID, raw, surveyID, *deviceSiteID)
+		}(canonicalDeviceID, *deviceSiteID, time.Now())
 	}
 
 	// 3. Process logs

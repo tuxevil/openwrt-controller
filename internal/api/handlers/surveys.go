@@ -159,7 +159,7 @@ func CreateSurveyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	mac, macErr := net.ParseMAC(strings.TrimSpace(req.SurveyorMAC))
-	if (accessMode == "public" || req.SurveyorMAC != "") && (macErr != nil || len(mac) != 6 || mac[0]&1 != 0) {
+	if macErr != nil || len(mac) != 6 || mac[0]&1 != 0 {
 		http.Error(w, `{"error":"Enter the phone Wi-Fi MAC for this SSID"}`, http.StatusBadRequest)
 		return
 	}
@@ -277,8 +277,7 @@ func DeleteSurveyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // StartSurveyHandler — POST /api/sites/{site_id}/surveys/{survey_id}/start
-// Marks the survey active; the next agent pull of /api/devices/{id}/config
-// will see the survey_mode flag and ramp up to 2 s telemetry.
+// Marks a pending survey active so regular device telemetry can supply RSSI.
 func StartSurveyHandler(w http.ResponseWriter, r *http.Request) {
 	schema := middleware.GetTenantSchema(r)
 	surveyID := r.PathValue("survey_id")
@@ -296,8 +295,20 @@ func StartSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusNotFound, "survey not found", err)
 		return
 	}
-	if s.AccessMode == "public" && (s.SurveyorMAC == nil || *s.SurveyorMAC == "") {
+	if s.SiteID != r.PathValue("site_id") {
+		http.NotFound(w, r)
+		return
+	}
+	if s.SurveyorMAC == nil || *s.SurveyorMAC == "" {
 		http.Error(w, `{"error":"Create a survey with the phone Wi-Fi MAC"}`, http.StatusConflict)
+		return
+	}
+	if s.Status == "active" {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "active", "survey_id": s.ID})
+		return
+	}
+	if s.Status != "pending" {
+		http.Error(w, "Survey already ended", http.StatusGone)
 		return
 	}
 	if err := database.SetSurveyStatus(r.Context(), schema, surveyID, "active"); err != nil {
@@ -320,8 +331,8 @@ func StopSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"FORBIDDEN: OPERATOR+ required"}`, http.StatusForbidden)
 		return
 	}
-	if _, err := database.GetSurvey(r.Context(), schema, surveyID); err != nil {
-		RespondError(w, http.StatusNotFound, "survey not found", err)
+	if s, err := database.GetSurvey(r.Context(), schema, surveyID); err != nil || s.SiteID != r.PathValue("site_id") {
+		http.NotFound(w, r)
 		return
 	}
 	if err := database.SetSurveyStatus(r.Context(), schema, surveyID, "completed"); err != nil {
@@ -462,16 +473,6 @@ func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"TOKEN_REVOKED"}`, http.StatusUnauthorized)
 		return
 	}
-	if survey.Status == "completed" || survey.Status == "aborted" {
-		http.Error(w, `{"error":"SURVEY_ENDED"}`, http.StatusGone)
-		return
-	}
-
-	if survey.Status != "active" || survey.SurveyorMAC == nil || *survey.SurveyorMAC == "" {
-		http.Error(w, `{"error":"Start a survey configured with the phone Wi-Fi MAC"}`, http.StatusConflict)
-		return
-	}
-
 	// Re-check site + platform toggles on every request (they can change
 	// while the survey is live). Cheap because they're indexed lookups.
 	allowed, _ := database.GetSiteConfigAllowPublicSurveys(r.Context(), schema, survey.SiteID)
@@ -482,6 +483,45 @@ func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 	lockdown, _ := database.IsGlobalSurveysPublicLockdown()
 	if lockdown {
 		http.Error(w, `{"error":"PUBLIC_SURVEY_LOCKDOWN"}`, http.StatusForbidden)
+		return
+	}
+
+	saveSurveySample(w, r, schema, survey)
+}
+
+func PostOperatorSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
+	_, role := surveyClaims(r)
+	if !roleAtLeast(role, "OPERATOR") {
+		http.Error(w, "Operator access required", http.StatusForbidden)
+		return
+	}
+	schema := middleware.GetTenantSchema(r)
+	if schema == "" {
+		http.Error(w, "Tenant required", http.StatusForbidden)
+		return
+	}
+	survey, err := database.GetSurvey(r.Context(), schema, r.PathValue("survey_id"))
+	if err != nil || survey.SiteID != r.PathValue("site_id") || survey.AccessMode != "authenticated" {
+		http.NotFound(w, r)
+		return
+	}
+	if !surveyAllow(survey.ID) {
+		w.Header().Set("Retry-After", "1")
+		http.Error(w, "Too many samples", http.StatusTooManyRequests)
+		return
+	}
+	saveSurveySample(w, r, schema, survey)
+}
+
+func saveSurveySample(w http.ResponseWriter, r *http.Request, schema string, survey *database.Survey) {
+	surveyID := survey.ID
+	if survey.Status == "completed" || survey.Status == "aborted" {
+		http.Error(w, `{"error":"SURVEY_ENDED"}`, http.StatusGone)
+		return
+	}
+
+	if survey.Status != "active" || survey.SurveyorMAC == nil || *survey.SurveyorMAC == "" {
+		http.Error(w, `{"error":"Start a survey configured with the phone Wi-Fi MAC"}`, http.StatusConflict)
 		return
 	}
 
@@ -509,7 +549,7 @@ func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Let telemetry arrive on both sides of the GPS timestamp.
-	if time.Since(ts) < 8*time.Second {
+	if time.Since(ts) < 15*time.Second {
 		http.Error(w, `{"error":"WAITING_FOR_TELEMETRY"}`, http.StatusTooEarly)
 		return
 	}
@@ -538,7 +578,7 @@ func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusServiceUnavailable, "failed to save survey point", err)
 		return
 	}
-	if survey.TokenFirstUsedAt == nil {
+	if survey.AccessMode == "public" && survey.TokenFirstUsedAt == nil {
 		ip, ua := clientFingerprint(r)
 		_ = database.SetSurveyTokenFirstUse(r.Context(), schema, surveyID, ip, ua)
 	}

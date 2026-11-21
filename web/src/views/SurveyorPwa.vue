@@ -2,9 +2,11 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import axios from 'axios'
+import api from '../services/api'
 
 const route = useRoute()
 const surveyId = computed(() => String(route.params.survey_id || ''))
+const siteId = computed(() => String(route.params.site_id || ''))
 const token = computed(() => String(route.query.token || ''))
 
 const status = ref('idle')     // idle | requesting | streaming | stopped | error
@@ -20,7 +22,7 @@ let lastCapture = 0
 let watchId = null
 
 onMounted(() => {
-  if (!surveyId.value || !token.value) {
+  if (!surveyId.value || (!siteId.value && !token.value)) {
     status.value = 'error'
     errorMsg.value = 'Missing survey ID or token in URL. Scan the QR code again.'
   }
@@ -40,7 +42,16 @@ function startGPS() {
   }
   status.value = 'requesting'
   navigator.geolocation.getCurrentPosition(
-    () => beginWatch(),
+    async () => {
+      if (disposed) return
+      try {
+        if (siteId.value) await api.startSurvey(siteId.value, surveyId.value)
+        beginWatch()
+      } catch (e) {
+        status.value = 'error'
+        errorMsg.value = e.response?.data?.error || 'Unable to start the survey.'
+      }
+    },
     (err) => {
       status.value = 'error'
       errorMsg.value = geoError(err)
@@ -86,8 +97,10 @@ async function sendSamples() {
   if (uploading || disposed) return
   uploading = true
   try {
-    while (!disposed && pending.value.length && Date.now() - pending.value[0].ts >= 8000) {
-      const { data } = await axios.post(`/api/surveys/${surveyId.value}/samples`, pending.value[0], {
+    while (!disposed && pending.value.length && Date.now() - pending.value[0].ts >= 15000) {
+      const { data } = siteId.value
+        ? await api.saveSurveySample(siteId.value, surveyId.value, pending.value[0])
+        : await axios.post(`/api/surveys/${surveyId.value}/samples`, pending.value[0], {
         headers: { 'X-Survey-Token': token.value },
         timeout: 10000,
       })
@@ -103,7 +116,7 @@ async function sendSamples() {
       clearInterval(retryTimer)
       retryTimer = undefined
       status.value = 'error'
-      errorMsg.value = 'Survey ended or access was rejected. Check the survey and scan its QR code.'
+      errorMsg.value = 'Survey ended or access was rejected. Check the survey in Nerve Center.'
     } else if (code === 400) {
       stopGPS()
       clearInterval(retryTimer)
@@ -125,6 +138,19 @@ function stopGPS() {
     watchId = null
   }
   status.value = 'stopped'
+}
+
+async function finishSurvey() {
+  if (pending.value.length || uploading) return
+  status.value = 'finishing'
+  try {
+    await api.stopSurvey(siteId.value, surveyId.value)
+    clearInterval(retryTimer)
+    status.value = 'completed'
+  } catch {
+    status.value = 'stopped'
+    errorMsg.value = 'Unable to finish survey. Try again.'
+  }
 }
 
 function geoError(err) {
@@ -153,7 +179,7 @@ function geoError(err) {
       <div class="count">{{ samples }} saved · {{ matched }} with signal · {{ pending.length }} queued</div>
     </div>
 
-    <p v-if="pending.length">Keep this page open and wait for the queue to empty before ending the survey in the dashboard.</p>
+    <p v-if="pending.length">Keep this page open and wait for the queue to empty before finishing the survey.</p>
 
     <div class="actions">
       <button v-if="status === 'idle'" @click="startGPS" class="go">
@@ -168,8 +194,12 @@ function geoError(err) {
       <button v-if="status === 'stopped' || status === 'error'" @click="startGPS" class="go">
         ▶ RESUME
       </button>
+      <button v-if="siteId && status === 'stopped'" @click="finishSurvey" :disabled="pending.length > 0" class="stop">
+        FINISH SURVEY
+      </button>
     </div>
 
+    <p v-if="status === 'completed'">Survey completed. View the map in Nerve Center.</p>
     <div v-if="status === 'streaming'" class="live">● RECORDING</div>
 
     <div v-if="status === 'error'" class="err">
