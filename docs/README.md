@@ -7,6 +7,7 @@ This directory contains the detailed guides behind the project README. Start wit
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Understand components, boundaries and data flow |
 | [DEPLOYMENT.md](DEPLOYMENT.md) | Install locally or run the native systemd service |
 | [OPERATIONS.md](OPERATIONS.md) | Perform previews, rollouts, backups and recovery |
+| [SLM_OPERATOR_CHEATSHEET.md](SLM_OPERATOR_CHEATSHEET.md) | Give a local model bounded access to monitoring and operations |
 | [SECURITY_MODEL.md](SECURITY_MODEL.md) | Review authentication, tenant isolation and secrets |
 | [DEVICE_AGENT.md](DEVICE_AGENT.md) | Install, enroll or troubleshoot an OpenWrt device |
 | [TESTING.md](TESTING.md) | Run quality gates or opt-in integration checks |
