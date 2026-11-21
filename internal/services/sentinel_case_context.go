@@ -434,7 +434,7 @@ func CompileSentinelCaseContext(ctx context.Context, schema, caseID string, hist
 			if targetMAC := extractSentinelMACFromQuery(query); targetMAC != "" {
 				args, _ := decodeSentinelToolArguments(originalArgs)
 				args["query"] = targetMAC
-				args["limit"] = 40
+				args["limit"] = 25
 				originalArgs = sentinelJSONData(args)
 			} else if item.SiteID != "" && sentinelRoamingQuery(normalizeSentinelQuery(query+" "+item.Title)) {
 				args, _ := decodeSentinelToolArguments(originalArgs)

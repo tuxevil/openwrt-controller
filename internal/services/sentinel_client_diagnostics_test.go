@@ -124,4 +124,14 @@ func TestSentinelPromptGuidesClientLogTroubleshootingAndLanguage(t *testing.T) {
 			t.Fatalf("sentinelAgentSystemPrompt missing guidance %q", needle)
 		}
 	}
+
+	if got := sentinelResponseLanguageInstruction("por que este cliente no se esta pudiendo conectar? 3c:28:6d:0f:85:db"); !strings.Contains(got, "Spanish") {
+		t.Fatalf("expected Spanish language directive, got %q", got)
+	}
+	if got := sentinelResponseLanguageInstruction("¿Cuál es el estado de la red?"); !strings.Contains(got, "Spanish") {
+		t.Fatalf("expected Spanish language directive for accented query, got %q", got)
+	}
+	if got := sentinelResponseLanguageInstruction("Why is client 3c:28:6d:0f:85:db failing DHCP?"); strings.Contains(got, "Spanish") {
+		t.Fatalf("English query should not force Spanish, got %q", got)
+	}
 }
