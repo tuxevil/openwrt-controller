@@ -72,3 +72,13 @@ La prueba cubre el arranque y las APIs del controlador con aislamiento de
 red. La prueba de LiteLLM real se realizó por separado en la LAN. Queda
 por comprobar el recorrido en navegador y los clientes MCP con el
 controlador y LiteLLM activos en una LAN sin salida a Internet.
+
+La segunda ejecución usó LiteLLM real mediante un relé TLS dedicado a
+su IP LAN. El controlador seguía en un espacio de red sin rutas externas,
+con PostgreSQL y telemetría sintéticos. Tras el login, una consulta
+asíncrona ejecutó `get_device_status` y respondió citando el nodo de
+prueba. El registro muestra dos rondas, 3.777 tokens y 5,09 s totales.
+También pasaron la respuesta HTML, ambos informes y el acuse idempotente.
+El relé mantuvo el certificado de LiteLLM y no dio salida general al
+controlador. La salida a Internet del host de LiteLLM se debe verificar
+por separado.
