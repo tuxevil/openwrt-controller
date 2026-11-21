@@ -682,6 +682,8 @@ func CreateSentinelProposal(schema, conversationID, caseID, createdBy string, dr
 	var plan []byte
 	if err := validateSentinelProposal(draft); err != nil {
 		blockedReason = err.Error()
+	}
+	if strings.TrimSpace(blockedReason) != "" {
 		status = "BLOCKED"
 		plan, _ = json.Marshal(draft)
 	} else {
@@ -758,7 +760,7 @@ func ApproveSentinelProposal(ctx context.Context, schema, proposalID, username s
 	var deviceID, status string
 	var plan []byte
 	err = database.DB.QueryRow(fmt.Sprintf(`UPDATE %s.sentinel_proposals SET status = 'APPROVING'
-        WHERE id = $1 AND status = 'PENDING' AND expires_at > CURRENT_TIMESTAMP
+        WHERE id = $1 AND status = 'PENDING' AND COALESCE(BTRIM(blocked_reason), '') = '' AND expires_at > CURRENT_TIMESTAMP
         RETURNING device_id, status, plan`, safeSchema), proposalID).Scan(&deviceID, &status, &plan)
 	if err == sql.ErrNoRows {
 		return DeviceOperationPlan{}, fmt.Errorf("proposal is no longer pending, expired, or blocked")
