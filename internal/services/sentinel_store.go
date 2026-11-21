@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,8 +14,9 @@ import (
 )
 
 var (
-	sentinelCaseRunMu sync.Mutex
-	sentinelCaseRuns  = map[string]time.Time{}
+	sentinelCaseRunMu                sync.Mutex
+	sentinelCaseRuns                 = map[string]time.Time{}
+	ErrSentinelProposalUnknownDevice = errors.New("proposal device_id does not match a managed device")
 )
 
 type SentinelConversation struct {
@@ -695,6 +697,14 @@ func CreateSentinelProposal(schema, conversationID, caseID, createdBy string, dr
 		if err != nil {
 			return SentinelProposal{}, err
 		}
+	}
+	var deviceExists bool
+	// #nosec G201 -- safeSchema is validated by sentinelSchema; device_id is parameterized.
+	if err := database.DB.QueryRow(fmt.Sprintf("SELECT EXISTS (SELECT 1 FROM %s.devices WHERE id = $1)", safeSchema), draft.DeviceID).Scan(&deviceExists); err != nil {
+		return SentinelProposal{}, err
+	}
+	if !deviceExists {
+		return SentinelProposal{}, fmt.Errorf("%w: %s", ErrSentinelProposalUnknownDevice, draft.DeviceID)
 	}
 	var proposal SentinelProposal
 	err = database.DB.QueryRow(fmt.Sprintf(`INSERT INTO %s.sentinel_proposals

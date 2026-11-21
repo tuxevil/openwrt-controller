@@ -847,7 +847,7 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 	}
 	defer rows.Close()
 
-	clients := map[string]string{}
+	clients := map[string]map[string]bool{}
 	devicesReporting := 0
 	for rows.Next() {
 		var deviceID string
@@ -862,7 +862,7 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 		}
 
 		if stations, ok := state["wireless_stations"].(map[string]interface{}); ok {
-			collectSentinelStationMap(clients, stations, "wireless")
+			collectSentinelStationMap(clients, stations, "wireless_station")
 		}
 		if wireless, ok := state["wireless"].(map[string]interface{}); ok {
 			for _, radioRaw := range wireless {
@@ -876,7 +876,7 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 					if !ok {
 						continue
 					}
-					collectSentinelMACList(clients, iface["stations"], "wireless")
+					collectSentinelMACList(clients, iface["stations"], "wireless_station")
 				}
 			}
 		}
@@ -892,11 +892,11 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 				bridge = neighborBridge
 			}
 		}
-		collectSentinelMACList(clients, arp, "wired")
-		collectSentinelMACList(clients, bridge, "wired")
+		collectSentinelMACList(clients, arp, "arp")
+		collectSentinelMACList(clients, bridge, "bridge")
 		if dhcp, ok := state["dhcp"].(map[string]interface{}); ok {
 			if leases, ok := dhcp["leases"]; ok {
-				collectSentinelMACList(clients, leases, "wired")
+				collectSentinelMACList(clients, leases, "dhcp_lease")
 			}
 		}
 	}
@@ -904,11 +904,14 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 		return nil, err
 	}
 
-	wireless, wired := 0, 0
-	for _, kind := range clients {
-		if kind == "wireless" {
+	wireless, wired, leaseOnly := 0, 0, 0
+	for _, sources := range clients {
+		switch classifySentinelClientConnection(sources) {
+		case "wireless":
 			wireless++
-		} else {
+		case "dhcp_lease_only":
+			leaseOnly++
+		default:
 			wired++
 		}
 	}
@@ -929,12 +932,16 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 			identity = database.NetworkIdentity{SiteID: siteID, MAC: mac, Kind: "client"}
 		}
 		trusted := identity.IsTrusted(now)
+		sources := clients[mac]
+		connType := classifySentinelClientConnection(sources)
 		entry := map[string]interface{}{
 			"mac":             mac,
 			"name":            identity.DisplayLabel(),
 			"ip":              identity.IP,
 			"uplink":          identity.UplinkLabel,
-			"connection_type": clients[mac],
+			"connection_type": connType,
+			"active_wireless": connType == "wireless",
+			"observed_in":     sortedSentinelClientSources(sources),
 			"trusted":         trusted,
 		}
 		if identity.TrustLabel != "" {
@@ -954,25 +961,58 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 		}
 	}
 	return map[string]interface{}{
-		"site_id":                   siteID,
-		"connected_clients":         len(clients),
-		"wireless_clients":          wireless,
-		"wired_clients":             wired,
-		"devices_reporting":         devicesReporting,
-		"client_identities":         clientIdentities,
-		"client_identities_omitted": len(macs) - len(clientIdentities),
-		"trusted_clients":           trustedClients,
-		"source":                    "device state_json telemetry snapshots",
+		"site_id":                      siteID,
+		"connected_clients":            wireless + wired,
+		"wireless_clients":             wireless,
+		"wired_clients":                wired,
+		"cached_or_lease_only_clients": leaseOnly,
+		"devices_reporting":            devicesReporting,
+		"client_identities":            clientIdentities,
+		"client_identities_omitted":    len(macs) - len(clientIdentities),
+		"trusted_clients":              trustedClients,
+		"source":                       "device state_json telemetry snapshots",
+		"observation_note":             "active_wireless=true means currently associated on an AP radio. Entries with connection_type='wired_or_cached' or 'dhcp_lease_only' may be wired hosts OR stale ARP/bridge/DHCP caches from disconnected or failing Wi-Fi clients; verify with search_logs before concluding a client is connected.",
 	}, nil
 }
 
-func collectSentinelStationMap(clients map[string]string, stations map[string]interface{}, kind string) {
-	for _, stationList := range stations {
-		collectSentinelMACList(clients, stationList, kind)
+func classifySentinelClientConnection(sources map[string]bool) string {
+	if sources["wireless_station"] {
+		return "wireless"
+	}
+	if sources["arp"] || sources["bridge"] {
+		return "wired_or_cached"
+	}
+	return "dhcp_lease_only"
+}
+
+func sortedSentinelClientSources(sources map[string]bool) []string {
+	out := make([]string, 0, len(sources))
+	for src := range sources {
+		out = append(out, src)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sentinelBridgeEntryIsLocal(entry map[string]interface{}) bool {
+	switch v := entry["is_local"].(type) {
+	case bool:
+		return v
+	case string:
+		lower := strings.ToLower(strings.TrimSpace(v))
+		return lower == "yes" || lower == "true" || lower == "1"
+	default:
+		return false
 	}
 }
 
-func collectSentinelMACList(clients map[string]string, raw interface{}, kind string) {
+func collectSentinelStationMap(clients map[string]map[string]bool, stations map[string]interface{}, source string) {
+	for _, stationList := range stations {
+		collectSentinelMACList(clients, stationList, source)
+	}
+}
+
+func collectSentinelMACList(clients map[string]map[string]bool, raw interface{}, source string) {
 	list, ok := raw.([]interface{})
 	if !ok {
 		return
@@ -982,14 +1022,18 @@ func collectSentinelMACList(clients map[string]string, raw interface{}, kind str
 		if !ok {
 			continue
 		}
+		if source == "bridge" && sentinelBridgeEntryIsLocal(entry) {
+			continue
+		}
 		mac, _ := entry["mac"].(string)
 		mac = strings.ToUpper(strings.TrimSpace(mac))
 		if mac == "" || mac == "00:00:00:00:00:00" {
 			continue
 		}
-		if existing, ok := clients[mac]; !ok || existing != "wireless" {
-			clients[mac] = kind
+		if clients[mac] == nil {
+			clients[mac] = map[string]bool{}
 		}
+		clients[mac][source] = true
 	}
 }
 

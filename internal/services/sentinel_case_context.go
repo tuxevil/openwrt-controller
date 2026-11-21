@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -15,6 +17,16 @@ import (
 
 	"openwrt-controller/internal/database"
 )
+
+var sentinelQueryMACPattern = regexp.MustCompile(`(?i)\b([0-9a-f]{2}(?::[0-9a-f]{2}){5})\b`)
+
+func extractSentinelMACFromQuery(query string) string {
+	match := sentinelQueryMACPattern.FindStringSubmatch(query)
+	if len(match) < 2 {
+		return ""
+	}
+	return strings.ToLower(match[1])
+}
 
 // SentinelContextTrustClass describes provenance, not execution authority.
 // Every context item remains data-only and can never become a privileged
@@ -213,6 +225,7 @@ func PersistSentinelCaseEvidence(schema, caseID, runID, origin string, evidence 
 
 func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	normalized := normalizeSentinelQuery(strings.Join([]string{query, item.Source, item.Title}, " "))
+	targetMAC := extractSentinelMACFromQuery(query)
 	selected := map[string]bool{}
 	add := func(names ...string) {
 		for _, name := range names {
@@ -220,12 +233,26 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 		}
 	}
 
+	if targetMAC != "" {
+		add("search_logs", "get_site_clients", "get_device_status", "get_incidents")
+	}
 	if isSentinelHardwareQuery(normalized) {
 		add("get_device_status")
 	}
+	hasClientTerm := false
 	for _, term := range []string{"client", "clients", "cliente", "clientes", "station", "stations", "endpoint", "endpoints"} {
 		if sentinelQueryContainsTerm(normalized, term) {
 			add("get_site_clients")
+			hasClientTerm = true
+			break
+		}
+	}
+	for _, term := range []string{"conectar", "conectarse", "connect", "connecting", "desconecta", "desconectado", "disconnect", "disconnected", "dhcp", "handshake", "eapol", "asociar", "associate"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			add("search_logs", "get_site_clients")
+			if hasClientTerm {
+				add("get_device_status")
+			}
 			break
 		}
 	}
@@ -255,7 +282,7 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	}
 
 	order := []string{"get_device_status", "get_site_clients", "get_incidents", "get_recent_changes", "get_topology", "search_logs"}
-	if item.SiteID != "" && sentinelRoamingQuery(normalized) {
+	if targetMAC != "" || (item.SiteID != "" && sentinelRoamingQuery(normalized)) {
 		add("search_logs")
 		order = append([]string{"search_logs"}, order[:len(order)-1]...)
 	}
@@ -403,11 +430,18 @@ func CompileSentinelCaseContext(ctx context.Context, schema, caseID string, hist
 			continue
 		}
 		originalArgs := sentinelContextToolArguments(toolName, item)
-		if toolName == "search_logs" && item.SiteID != "" && sentinelRoamingQuery(normalizeSentinelQuery(query+" "+item.Title)) {
-			args, _ := decodeSentinelToolArguments(originalArgs)
-			args["query"] = "hostapd:"
-			args["limit"] = 20
-			originalArgs = sentinelJSONData(args)
+		if toolName == "search_logs" {
+			if targetMAC := extractSentinelMACFromQuery(query); targetMAC != "" {
+				args, _ := decodeSentinelToolArguments(originalArgs)
+				args["query"] = targetMAC
+				args["limit"] = 40
+				originalArgs = sentinelJSONData(args)
+			} else if item.SiteID != "" && sentinelRoamingQuery(normalizeSentinelQuery(query+" "+item.Title)) {
+				args, _ := decodeSentinelToolArguments(originalArgs)
+				args["query"] = "hostapd:"
+				args["limit"] = 20
+				originalArgs = sentinelJSONData(args)
+			}
 		}
 		call := SentinelToolCall{Name: toolName, Arguments: SentinelToolArgumentsWithSite(originalArgs, schema, item.SiteID)}
 		result, err := executeSentinelToolContext(ctx, call)
@@ -641,10 +675,15 @@ func executeSentinelCaseRun(ctx context.Context, schema, runID string) (Sentinel
 	if result.Proposal != nil {
 		created, proposalErr := CreateSentinelProposal(schema, conversationID, caseID, createdBy, result.Proposal)
 		if proposalErr != nil {
-			return result, nil, caseID, proposalErr
+			if errors.Is(proposalErr, ErrSentinelProposalUnknownDevice) {
+				logSentinelInvestigationError(runID, proposalErr)
+			} else {
+				return result, nil, caseID, proposalErr
+			}
+		} else {
+			proposal = &created
+			proposalID = created.ID
 		}
-		proposal = &created
-		proposalID = created.ID
 	}
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; values are parameterized.
 	if _, err := database.DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_runs SET status = 'COMPLETED', answer = $1,
