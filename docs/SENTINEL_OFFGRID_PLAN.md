@@ -100,3 +100,10 @@ Sentinel, leyó el resumen diario y el informe bajo demanda, recuperó una
 conversación guardada, completó otra consulta y leyó el acuse persistido.
 Esta ejecución usó el proveedor simulado. El ciclo con LiteLLM real se
 verificó por API en la prueba anterior.
+
+La prueba de Chromium se repitió con LiteLLM y `gemma4:e2b` reales mediante
+el relé TLS dedicado. Chromium y el controlador compartieron un espacio
+de red sin rutas externas. Pasaron el login, ambos informes, el historial,
+una consulta nueva desde el navegador y la lectura del acuse persistido.
+La base y los nodos fueron sintéticos. El aislamiento del host de LiteLLM
+y el despliegue de uso diario permanecen pendientes de validación.
