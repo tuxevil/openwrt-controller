@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -680,6 +682,129 @@ func ProcessSentinelCaseMessageForSite(ctx context.Context, schema, conversation
 	return executeSentinelCaseRun(ctx, schema, run.ID)
 }
 
+const sentinelDefaultAutoInvestigateCooldown = 60 * time.Minute
+
+func sentinelSeverityRank(raw string) (int, bool) {
+	switch strings.ToUpper(strings.TrimSpace(raw)) {
+	case "CRITICAL":
+		return 4, true
+	case "HIGH":
+		return 3, true
+	case "WARNING", "MEDIUM":
+		return 2, true
+	case "LOW":
+		return 1, true
+	case "INFO", "ALL":
+		return 0, true
+	default:
+		return 0, false
+	}
+}
+
+func sentinelAutoInvestigateMinSeverityWithEnv(getenv func(string) string) (int, bool) {
+	raw := strings.ToUpper(strings.TrimSpace(getenv("SENTINEL_AUTO_INVESTIGATE_MIN_SEVERITY")))
+	if raw == "" {
+		return 3, true // HIGH by default: only real anomalies wake the local model
+	}
+	switch raw {
+	case "OFF", "NONE", "DISABLED", "FALSE", "0":
+		return 0, false
+	}
+	if rank, ok := sentinelSeverityRank(raw); ok {
+		return rank, true
+	}
+	return 3, true
+}
+
+func shouldAutoInvestigateSentinelCaseWithEnv(severity string, getenv func(string) string) bool {
+	minRank, enabled := sentinelAutoInvestigateMinSeverityWithEnv(getenv)
+	if !enabled {
+		return false
+	}
+	rank, ok := sentinelSeverityRank(severity)
+	if !ok {
+		return false
+	}
+	return rank >= minRank
+}
+
+// ShouldAutoInvestigateSentinelCase reports whether a controller-detected
+// anomaly of the given severity should trigger an automatic LLM investigation.
+// Deterministic incidents and Cases are always persisted regardless of this gate.
+func ShouldAutoInvestigateSentinelCase(severity string) bool {
+	return shouldAutoInvestigateSentinelCaseWithEnv(severity, os.Getenv)
+}
+
+func sentinelAutoInvestigateCooldownWithEnv(getenv func(string) string) time.Duration {
+	raw := strings.TrimSpace(getenv("SENTINEL_AUTO_INVESTIGATE_COOLDOWN_MINUTES"))
+	if raw == "" {
+		return sentinelDefaultAutoInvestigateCooldown
+	}
+	minutes, err := strconv.Atoi(raw)
+	if err != nil || minutes < 1 {
+		return sentinelDefaultAutoInvestigateCooldown
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
+func sentinelAutoInvestigateCooldown() time.Duration {
+	return sentinelAutoInvestigateCooldownWithEnv(os.Getenv)
+}
+
+func sentinelLastAutomationRunTime(raw json.RawMessage) (time.Time, bool) {
+	ledger := decodeSentinelCaseEvidenceLedger(raw)
+	var latest time.Time
+	var found bool
+	for _, run := range ledger.Runs {
+		if run.Origin != "automation" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(run.CreatedAt))
+		if err != nil {
+			parsed, err = time.Parse(time.RFC3339, strings.TrimSpace(run.CreatedAt))
+			if err != nil {
+				continue
+			}
+		}
+		if !found || parsed.After(latest) {
+			latest = parsed
+			found = true
+		}
+	}
+	return latest, found
+}
+
+func sentinelCaseRecentlyAutoInvestigated(raw json.RawMessage, now time.Time, cooldown time.Duration) bool {
+	last, ok := sentinelLastAutomationRunTime(raw)
+	if !ok {
+		return false
+	}
+	return now.Sub(last) < cooldown
+}
+
+func claimSentinelAutoInvestigationSlot(schema, caseID, cooldownKey string, now time.Time, cooldown time.Duration) bool {
+	caseKey := schema + ":" + caseID
+	fpKey := ""
+	if trimmed := strings.TrimSpace(cooldownKey); trimmed != "" {
+		fpKey = schema + ":fp:" + trimmed
+	}
+	sentinelCaseRunMu.Lock()
+	defer sentinelCaseRunMu.Unlock()
+	if last, seen := sentinelCaseRuns[caseKey]; seen && now.Sub(last) < cooldown {
+		return false
+	}
+	if fpKey != "" {
+		if last, seen := sentinelCaseRuns[fpKey]; seen && now.Sub(last) < cooldown {
+			return false
+		}
+	}
+	sentinelCaseRuns[caseKey] = now
+	if fpKey != "" {
+		sentinelCaseRuns[fpKey] = now
+	}
+	return true
+}
+
 func InvestigateSentinelCaseContext(schema, caseID string) {
 	if database.DB == nil {
 		return
@@ -689,6 +814,21 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 		logSentinelInvestigationError(caseID, err)
 		return
 	}
+	item, err := GetSentinelCase(schema, caseID)
+	if err != nil {
+		logSentinelInvestigationError(caseID, err)
+		return
+	}
+	if !ShouldAutoInvestigateSentinelCase(item.Severity) {
+		if item.Status == "INVESTIGATING" {
+			// #nosec G201 -- safeSchema is validated by sentinelSchema; caseID is parameterized.
+			_, _ = database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'OPEN', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status = 'INVESTIGATING'", safeSchema), caseID)
+		}
+		return
+	}
+	if item.Status == "OPEN" && sentinelCaseRecentlyAutoInvestigated(item.Evidence, time.Now().UTC(), sentinelAutoInvestigateCooldown()) {
+		return
+	}
 	// #nosec G201 -- safeSchema is validated by sentinelSchema; caseID is parameterized.
 	claim, err := database.DB.Exec(fmt.Sprintf("UPDATE %s.sentinel_cases SET status = 'INVESTIGATING', updated_at = CURRENT_TIMESTAMP WHERE id = $1 AND status IN ('OPEN','INVESTIGATING')", safeSchema), caseID)
 	if err != nil {
@@ -696,11 +836,6 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 		return
 	}
 	if count, err := claim.RowsAffected(); err != nil || count == 0 {
-		return
-	}
-	item, err := GetSentinelCase(schema, caseID)
-	if err != nil {
-		logSentinelInvestigationError(caseID, err)
 		return
 	}
 	query := "Investigate the current Sentinel Case using its scoped evidence and current OMEGA observations. Determine the current status, likely cause, and next safe step."
@@ -731,16 +866,21 @@ func InvestigateSentinelCaseContext(schema, caseID string) {
 	}
 }
 
+func QueueAutoSentinelCaseInvestigation(schema, caseID, severity, cooldownKey string) bool {
+	if !ShouldAutoInvestigateSentinelCase(severity) {
+		return false
+	}
+	if !claimSentinelAutoInvestigationSlot(schema, caseID, cooldownKey, time.Now(), sentinelAutoInvestigateCooldown()) {
+		return false
+	}
+	go InvestigateSentinelCaseContext(schema, caseID)
+	return true
+}
+
 func QueueSentinelCaseContextInvestigation(schema, caseID string) {
-	key := schema + ":" + caseID
-	sentinelCaseRunMu.Lock()
-	last, seen := sentinelCaseRuns[key]
-	if seen && time.Since(last) < 5*time.Minute {
-		sentinelCaseRunMu.Unlock()
+	if !claimSentinelAutoInvestigationSlot(schema, caseID, "", time.Now(), sentinelAutoInvestigateCooldown()) {
 		return
 	}
-	sentinelCaseRuns[key] = time.Now()
-	sentinelCaseRunMu.Unlock()
 	go InvestigateSentinelCaseContext(schema, caseID)
 }
 

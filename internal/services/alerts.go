@@ -148,7 +148,7 @@ func OpenIncident(schema, incidentType, deviceID, siteID, severity string) {
 			"severity":      severity,
 			"device_id":     deviceID,
 		}); caseErr == nil {
-		QueueSentinelCaseContextInvestigation(schema, caseID)
+		QueueAutoSentinelCaseInvestigation(schema, caseID, severity, "incident:"+deviceID+":"+incidentType)
 	} else {
 		log.Printf("[SENTINEL_AI] failed to persist incident case: %v", caseErr)
 	}

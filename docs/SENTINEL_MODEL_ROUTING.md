@@ -75,6 +75,17 @@ SENTINEL_AUTO_FRONTIER_ESCALATION=true
 
 When enabled, an unresolved local investigation can enqueue a `frontier_escalation` artifact. The operator-facing local investigation remains complete independently of whether that optional task can reach its route.
 
+## Automatic investigation gating
+
+Deterministic detectors (alerts, log anomalies, and FlowSense) always persist incidents and Cases regardless of model availability. To avoid unnecessary local model load, automatic background investigations are gated by two environment variables:
+
+```text
+SENTINEL_AUTO_INVESTIGATE_MIN_SEVERITY=HIGH   # CRITICAL | HIGH | MEDIUM | LOW | ALL | OFF
+SENTINEL_AUTO_INVESTIGATE_COOLDOWN_MINUTES=60 # per-case and per-anomaly cooldown
+```
+
+By default only `HIGH` and `CRITICAL` anomalies invoke the local model automatically, at most once per 60 minutes per Case or anomaly fingerprint (persisted across restarts through the Case evidence ledger). Set `SENTINEL_AUTO_INVESTIGATE_MIN_SEVERITY=OFF` to run the model exclusively on demand from operator chat or MCP. Optional background tasks (`curation` and `frontier_escalation`) stop retrying permanently after 3 failed attempts and abandon stale `RUNNING` entries after 15 minutes.
+
 ## Trust boundary
 
 Routing changes model selection only. It does **not** change:

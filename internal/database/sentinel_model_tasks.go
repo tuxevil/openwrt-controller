@@ -165,3 +165,44 @@ func RequeueSentinelModelTask(schema, taskID string, retryAt time.Time, lastErro
 	}
 	return nil
 }
+
+func FailSentinelModelTask(schema, taskID, lastError string) error {
+	quoted, err := sentinelModelTasksSchema(schema)
+	if err != nil {
+		return err
+	}
+	res, err := DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_model_tasks
+		SET status = 'FAILED', last_error = $1, updated_at = CURRENT_TIMESTAMP
+		WHERE id = $2::uuid AND status = 'RUNNING'`, quoted), lastError, taskID)
+	if err != nil {
+		return err
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return fmt.Errorf("Sentinel model task %s was not running", taskID)
+	}
+	return nil
+}
+
+func FailStaleRunningSentinelModelTasks(schema string, maxAge time.Duration) (int64, error) {
+	if err := EnsureSentinelModelTaskTable(schema); err != nil {
+		return 0, err
+	}
+	quoted, err := sentinelModelTasksSchema(schema)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().UTC().Add(-maxAge)
+	res, err := DB.Exec(fmt.Sprintf(`UPDATE %s.sentinel_model_tasks
+		SET status = 'FAILED',
+		    last_error = CASE WHEN last_error = '' THEN 'abandoned after running timeout' ELSE last_error END,
+		    updated_at = CURRENT_TIMESTAMP
+		WHERE status = 'RUNNING' AND updated_at < $1`, quoted), cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
+}

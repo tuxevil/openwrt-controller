@@ -545,7 +545,7 @@ type sentinelCurationEnvelope struct {
 
 const sentinelLearningCurationSystemPrompt = `You are an optional Sentinel learning curator with NO execution or trust authority.
 Return ONLY one JSON object with exactly two arrays: "memories" and "skills".
-A memory has: statement, confidence (0..1), ttl_hours, evidence_ids, optional counter_evidence_ids.
+Each memory object MUST use ONLY these exact JSON keys: {"statement":"...","confidence":0.8,"ttl_hours":168,"evidence_ids":["..."],"counter_evidence_ids":[]}. Do not include any other keys.
 A skill has exactly: {"spec":{"schema_version":1,"name":"lowercase-id","description":"...","match":{"sources":[],"severities":[],"keywords":[]},"evidence_tools":[...]}}.
 Skills are declarative investigation recipes. evidence_tools may name only read-only tools already shown in controller context. Never emit shell, Python, Lua, Go, SQL, HTTP requests, UCI commands, command strings, code, policies, credentials, or execution instructions.
 Evidence IDs must come from CASE_CONTEXT_JSON evidence_references. If evidence is insufficient, return empty arrays.

@@ -5,11 +5,17 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
 
 	"openwrt-controller/internal/database"
+)
+
+const (
+	sentinelOptionalTaskMaxAttempts = 3
+	sentinelOptionalTaskStaleAge    = 15 * time.Minute
 )
 
 const sentinelOptionalModelSystemPrompt = `You are an optional Sentinel analysis worker.
@@ -64,7 +70,12 @@ func sentinelOptionalTaskRetryDelay(attempt int) time.Duration {
 	return delay
 }
 
+func sentinelOptionalTaskShouldFailPermanently(attempts int) bool {
+	return attempts >= sentinelOptionalTaskMaxAttempts
+}
+
 func executeSentinelOptionalModelTask(ctx context.Context, schema string, task database.SentinelModelTask) error {
+	started := time.Now()
 	class, err := sentinelOptionalReasoningClass(task.ReasoningClass)
 	if err != nil {
 		return err
@@ -86,7 +97,10 @@ func executeSentinelOptionalModelTask(ctx context.Context, schema string, task d
 		systemPrompt = sentinelLearningCurationSystemPrompt
 		jsonMode = true
 	}
-	content, execution, _, err := completeSentinelReasoningContext(ctx, class, systemPrompt, prompt, jsonMode)
+	content, execution, tokens, err := completeSentinelReasoningContext(ctx, class, systemPrompt, prompt, jsonMode)
+	slog.Info("Sentinel optional model task ended", "class", class, "task", task.ID, "case", task.CaseID,
+		"model", execution.Model, "attempt", task.Attempts, "tokens", tokens,
+		"duration_ms", time.Since(started).Milliseconds(), "error", err != nil)
 	if err != nil {
 		return err
 	}
@@ -113,6 +127,9 @@ func processSentinelOptionalModelTasksForSchema(parent context.Context, schema s
 	if limit < 1 {
 		return
 	}
+	if _, err := database.FailStaleRunningSentinelModelTasks(schema, sentinelOptionalTaskStaleAge); err != nil {
+		log.Printf("[SENTINEL_ROUTER] stale task cleanup failed for %s: %v", schema, err)
+	}
 	for i := 0; i < limit; i++ {
 		task, err := database.ClaimSentinelModelTask(schema)
 		if err == sql.ErrNoRows {
@@ -128,8 +145,15 @@ func processSentinelOptionalModelTasksForSchema(parent context.Context, schema s
 		if err == nil {
 			continue
 		}
+		sanitizedErr := redactSentinelSecrets(err.Error())
+		if sentinelOptionalTaskShouldFailPermanently(task.Attempts) {
+			if failErr := database.FailSentinelModelTask(schema, task.ID, sanitizedErr); failErr != nil {
+				log.Printf("[SENTINEL_ROUTER] fail optional task %s failed: %v", task.ID, failErr)
+			}
+			continue
+		}
 		retryAt := time.Now().UTC().Add(sentinelOptionalTaskRetryDelay(task.Attempts))
-		if requeueErr := database.RequeueSentinelModelTask(schema, task.ID, retryAt, redactSentinelSecrets(err.Error())); requeueErr != nil {
+		if requeueErr := database.RequeueSentinelModelTask(schema, task.ID, retryAt, sanitizedErr); requeueErr != nil {
 			log.Printf("[SENTINEL_ROUTER] requeue optional task %s failed: %v", task.ID, requeueErr)
 		}
 	}

@@ -36,8 +36,33 @@ var (
 	flowSentinelCache = map[string]time.Time{}
 )
 
-const flowSentinelCooldown = 10 * time.Minute
 const threatConnectionThreshold = 50
+const p2pConnectionThreshold = 5
+const commonTunnelPortThreshold = 10
+
+func classifySuspiciousFlow(entry FlowEntry) (bool, string) {
+	// 1. High volume to non-standard port
+	if entry.Conns > threatConnectionThreshold && !standardSafePorts[entry.Dport] {
+		return true, fmt.Sprintf("HIGH_CONN_COUNT (%d connections) to non-standard port %d", entry.Conns, entry.Dport)
+	}
+
+	// 2. Common P2P/Torrent ports (require sustained activity rather than a single stray connection)
+	if entry.Conns >= p2pConnectionThreshold && (entry.Dport == 6881 || entry.Dport == 6889 ||
+		(entry.Dport >= 51413 && entry.Dport <= 51415) ||
+		entry.Dport == 4662 || entry.Dport == 4672) {
+		return true, fmt.Sprintf("SUSPECTED_P2P port %d", entry.Dport)
+	}
+
+	// 3. Common C2/Tunnel ports (higher threshold for common VPN/alt-HTTP ports 1194/8888)
+	if entry.Dport == 4444 || entry.Dport == 9001 || entry.Dport == 9030 || entry.Dport == 31337 {
+		return true, fmt.Sprintf("SUSPECTED_TUNNEL_C2 port %d", entry.Dport)
+	}
+	if entry.Conns >= commonTunnelPortThreshold && (entry.Dport == 1194 || entry.Dport == 8888) {
+		return true, fmt.Sprintf("SUSPECTED_TUNNEL_C2 port %d", entry.Dport)
+	}
+
+	return false, ""
+}
 
 // ProcessFlowSense is called from TelemetryHandler for each telemetry push.
 // It enriches flows with threat flags and triggers Sentinel AI if warranted.
@@ -104,30 +129,7 @@ func processFlowSense(schema, siteID, deviceID string, rawFlows []interface{}, c
 		}
 
 		// ── Threat Detection Logic ─────────────────────────────────────────────
-		isFlagged := false
-		reason := ""
-
-		// 1. High volume to non-standard port
-		if entry.Conns > threatConnectionThreshold && !standardSafePorts[entry.Dport] {
-			isFlagged = true
-			reason = fmt.Sprintf("HIGH_CONN_COUNT (%d connections) to non-standard port %d", entry.Conns, entry.Dport)
-		}
-
-		// 2. Common P2P/Torrent ports
-		if !isFlagged && (entry.Dport == 6881 || entry.Dport == 6889 ||
-			(entry.Dport >= 51413 && entry.Dport <= 51415) ||
-			entry.Dport == 4662 || entry.Dport == 4672) {
-			isFlagged = true
-			reason = fmt.Sprintf("SUSPECTED_P2P port %d", entry.Dport)
-		}
-
-		// 3. Common C2/Tunnel ports
-		if !isFlagged && (entry.Dport == 1194 || entry.Dport == 4444 ||
-			entry.Dport == 9001 || entry.Dport == 9030 || // Tor
-			entry.Dport == 8888 || entry.Dport == 31337) {
-			isFlagged = true
-			reason = fmt.Sprintf("SUSPECTED_TUNNEL_C2 port %d", entry.Dport)
-		}
+		isFlagged, reason := classifySuspiciousFlow(entry)
 
 		if isFlagged {
 			entry.Flagged = true
@@ -140,9 +142,10 @@ func processFlowSense(schema, siteID, deviceID string, rawFlows []interface{}, c
 
 	// ── Sentinel AI Escalation ─────────────────────────────────────────────────
 	if len(suspicious) > 0 {
+		cooldown := sentinelAutoInvestigateCooldown()
 		flowSentinelMu.Lock()
 		lastRun, seen := flowSentinelCache[deviceID]
-		shouldRun := !seen || time.Since(lastRun) > flowSentinelCooldown
+		shouldRun := !seen || time.Since(lastRun) > cooldown
 		if shouldRun {
 			flowSentinelCache[deviceID] = time.Now()
 		}
@@ -172,13 +175,18 @@ func escalateFlowToSentinel(schema, siteID, deviceID string, suspicious []FlowEn
 	contextStr := sb.String()
 	log.Printf("[FLOW_SENSE] Escalating %d suspicious flows to Sentinel AI for device %s", len(suspicious), deviceID)
 	if schema != "" {
-		caseID, caseErr := OpenSentinelCase(schema, "flow_sense", siteID, deviceID, "HIGH",
+		caseID, caseErr := OpenSentinelCasePreservingEvidence(schema, "flow_sense", siteID, deviceID, "HIGH",
 			"Suspicious outbound flow activity", contextStr, suspicious)
 		if caseErr == nil {
-			QueueSentinelCaseInvestigation(schema, caseID)
+			QueueAutoSentinelCaseInvestigation(schema, caseID, "HIGH", "flow_sense:"+deviceID)
 		} else {
 			log.Printf("[FLOW_SENSE] failed to persist Sentinel case: %v", caseErr)
 		}
+		return
+	}
+
+	if !ShouldAutoInvestigateSentinelCase("HIGH") {
+		return
 	}
 
 	diagnosis, severity, involvedDevices, llmModel, tokensUsed, err := AnalyzeFleetContextForSchema(schema, contextStr)
