@@ -627,6 +627,15 @@ func saveSurveySample(w http.ResponseWriter, r *http.Request, schema string, sur
 		"duplicate":      !inserted,
 		"missing_reason": point.MissingReason,
 	}
+	if matched {
+		resp["ap_id"] = point.APID
+		if point.SignalDBM != nil {
+			resp["signal_dbm"] = *point.SignalDBM
+		}
+		if point.SNR != nil {
+			resp["snr"] = *point.SNR
+		}
+	}
 	if point.ReportingAPsCount != nil {
 		resp["reporting_aps"] = *point.ReportingAPsCount
 	}

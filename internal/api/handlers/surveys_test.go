@@ -169,6 +169,11 @@ func TestSurveySamplePersistsGPSWithAndWithoutSignal(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil || w.Code != http.StatusCreated || response["matched"] != matched {
 				t.Fatalf("unexpected response %d: %s", w.Code, w.Body.String())
 			}
+			if matched {
+				if response["ap_id"] != "ap-2" || response["signal_dbm"] != float64(-69) || response["snr"] != float64(25) {
+					t.Fatalf("expected live signal metadata in response, got %v", response)
+				}
+			}
 			if !matched && response["missing_reason"] != "no_ap_telemetry" {
 				t.Fatalf("expected missing_reason=no_ap_telemetry, got %v", response["missing_reason"])
 			}

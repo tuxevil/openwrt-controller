@@ -2,8 +2,49 @@
 
 import { mount, flushPromises } from '@vue/test-utils'
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import SurveyorPwa from '../../src/views/SurveyorPwa.vue'
-import api from '../../src/services/api'
+
+const circleMarkerCalls = []
+const mapPanCalls = []
+
+vi.mock('leaflet', () => {
+  const makeLayer = () => ({
+    addTo: vi.fn().mockReturnThis(),
+    clearLayers: vi.fn(),
+    bindPopup: vi.fn().mockReturnThis(),
+    setLatLng: vi.fn().mockReturnThis(),
+    setRadius: vi.fn().mockReturnThis(),
+    setStyle: vi.fn().mockReturnThis(),
+    bringToFront: vi.fn().mockReturnThis(),
+  })
+  const mapObj = {
+    setView: vi.fn().mockReturnThis(),
+    panTo: vi.fn((ll) => mapPanCalls.push(ll)),
+    fitBounds: vi.fn(),
+    on: vi.fn(),
+    remove: vi.fn(),
+    removeLayer: vi.fn(),
+    hasLayer: vi.fn(() => false),
+  }
+  return {
+    default: {
+      map: vi.fn(() => mapObj),
+      tileLayer: vi.fn(() => makeLayer()),
+      layerGroup: vi.fn(() => makeLayer()),
+      imageOverlay: vi.fn(() => makeLayer()),
+      circle: vi.fn(() => makeLayer()),
+      circleMarker: vi.fn((latlng, opts) => {
+        circleMarkerCalls.push({ latlng, opts })
+        return makeLayer()
+      }),
+      control: {
+        layers: vi.fn(() => ({ addTo: vi.fn() })),
+        scale: vi.fn(() => ({ addTo: vi.fn() })),
+      },
+      GridLayer: { extend: vi.fn(() => vi.fn(() => makeLayer())) },
+      point: vi.fn((x, y) => ({ x, y })),
+    },
+  }
+})
 
 vi.mock('vue-router', async (importOriginal) => {
   const actual = await importOriginal()
@@ -16,29 +57,36 @@ vi.mock('vue-router', async (importOriginal) => {
   }
 })
 
+import SurveyorPwa from '../../src/views/SurveyorPwa.vue'
+import api from '../../src/services/api'
+
 describe('SurveyorPwa', () => {
   beforeEach(() => {
     window.localStorage.clear()
+    circleMarkerCalls.length = 0
+    mapPanCalls.length = 0
     vi.restoreAllMocks()
+    vi.spyOn(api, 'getSiteKmzMap').mockResolvedValue({ data: { data: null } })
+    vi.spyOn(api, 'getSurveySamples').mockResolvedValue({ data: { data: [] } })
   })
 
   afterEach(() => {
     window.localStorage.clear()
   })
 
-  it('restores queued GPS points from localStorage and renders live AP telemetry health', async () => {
+  it('restores queued GPS points from localStorage, plots live signal colors on map, and renders AP health', async () => {
     const oldTs = Date.now() - 25_000
     window.localStorage.setItem(
       'nerve_survey_state_survey-abc',
       JSON.stringify({
         samples: 5,
         matched: 4,
-        lastFix: { lat: -1.99, lon: -78.96, acc: 5 },
+        lastFix: { lat: -2.0238, lon: -78.9473, acc: 5 },
         pending: [
           {
             client_sample_id: `${oldTs}-xyz`,
-            lat: -1.99,
-            lon: -78.96,
+            lat: -2.0238,
+            lon: -78.9473,
             accuracy_m: 5,
             ts: oldTs,
           },
@@ -47,7 +95,7 @@ describe('SurveyorPwa', () => {
     )
 
     const saveSpy = vi.spyOn(api, 'saveSurveySample').mockResolvedValue({
-      data: { matched: true, duplicate: false },
+      data: { matched: true, duplicate: false, signal_dbm: -55, ap_id: 'ap-1', snr: 40 },
     })
     vi.spyOn(api, 'getSurveyStatus').mockResolvedValue({
       data: {
@@ -78,6 +126,10 @@ describe('SurveyorPwa', () => {
     expect(wrapper.text()).toContain('WNDR3800 (10.128.128.3)')
     expect(wrapper.text()).toContain('Phone seen on MR8300 (10.128.128.1)')
     expect(wrapper.text()).toContain('6 saved · 5 with signal · 0 queued')
+
+    // Uploaded point should be plotted green (#39FF14) on the live map
+    expect(wrapper.find('.live-map').exists()).toBe(true)
+    expect(circleMarkerCalls.some((c) => c.opts.color === '#39FF14')).toBe(true)
 
     wrapper.unmount()
   })
@@ -124,14 +176,12 @@ describe('SurveyorPwa', () => {
     expect(requestSpy).toHaveBeenCalledWith('screen')
     expect(wrapper.text()).toContain('Screen awake')
 
-    // Simulate OS releasing wake lock when tab was backgrounded, then returning to foreground
     if (onRelease) onRelease()
     await flushPromises()
     document.dispatchEvent(new Event('visibilitychange'))
     await flushPromises()
     expect(requestSpy).toHaveBeenCalledTimes(2)
 
-    // Stopping GPS releases wake lock
     await wrapper.get('button.stop').trigger('click')
     await flushPromises()
     expect(releaseSpy).toHaveBeenCalled()
