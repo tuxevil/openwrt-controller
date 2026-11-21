@@ -261,15 +261,15 @@ func WriteFlowAnalyticsBatch(deviceID string, flows []FlowAnalytic) error {
 // signal the AP saw from that MAC.
 
 type ClientSignalSample struct {
-	DeviceID  string
-	MAC       string
-	SurveyID  string
-	SignalDBM float64
-	NoiseDBM  float64
-	RxRate    float64
-	TxRate    float64
+	DeviceID   string
+	MAC        string
+	SurveyID   string
+	SignalDBM  float64
+	NoiseDBM   float64
+	RxRate     float64
+	TxRate     float64
 	InactiveMs int64
-	Time      time.Time
+	Time       time.Time
 }
 
 // WriteClientSignalBatch writes one point per sample. Tags are intentionally
@@ -299,40 +299,31 @@ func WriteClientSignalBatch(samples []ClientSignalSample) error {
 	return nil
 }
 
-// GetLatestClientSignal returns the most recent client_signal point for a
-// given surveyor MAC and survey within the given lookback window. Returns
-// ok=false if nothing is found inside the window.
-func GetLatestClientSignal(mac, surveyID, deviceID string, lookback time.Duration) (ClientSignalSample, bool, error) {
+// GetClosestSurveySignal finds the nearest AP measurement to a GPS fix.
+func GetClosestSurveySignal(ctx context.Context, mac, surveyID string, capturedAt time.Time) (ClientSignalSample, bool, error) {
+	if mac == "" || surveyID == "" {
+		return ClientSignalSample{}, false, fmt.Errorf("survey ID and MAC required")
+	}
 	if InfluxClient == nil {
 		return ClientSignalSample{}, false, fmt.Errorf("influx client not initialized")
 	}
-	if mac == "" {
-		return ClientSignalSample{}, false, fmt.Errorf("mac required")
-	}
 
-	q := InfluxClient.QueryAPI(org)
-	// Pivot so we get a single record per (device_id, _time) with all fields
-	// as columns, then take the most recent one. Filter by survey_id when
-	// provided to avoid cross-survey bleed when a surveyor keeps reconnecting.
-	filter := fmt.Sprintf(`r["mac"] == "%s"`, mac)
-	if surveyID != "" {
-		filter += fmt.Sprintf(` and r["survey_id"] == "%s"`, surveyID)
-	}
-	if deviceID != "" {
-		filter += fmt.Sprintf(` and r["device_id"] == "%s"`, deviceID)
-	}
-
+	window := 4 * time.Second
 	flux := fmt.Sprintf(`
-		from(bucket: "%s")
-		  |> range(start: -%ds)
-		  |> filter(fn: (r) => r["_measurement"] == "client_signal")
-		  |> filter(fn: (r) => %s)
+		from(bucket: %q)
+		  |> range(start: %s, stop: %s)
+		  |> filter(fn: (r) => r["_measurement"] == "client_signal" and r["mac"] == %q and r["survey_id"] == %q)
 		  |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
-		  |> sort(columns: ["_time"], desc: true)
+		  |> filter(fn: (r) => exists r.signal_dbm)
+		  |> group()
+		  |> map(fn: (r) => ({r with offset_ns: int(v: r._time) - %d}))
+		  |> map(fn: (r) => ({r with distance_ns: if r.offset_ns < 0 then -r.offset_ns else r.offset_ns}))
+		  |> sort(columns: ["distance_ns", "_time", "device_id"])
 		  |> limit(n: 1)
-	`, bucket, int(lookback.Seconds()), filter)
+	`, bucket, capturedAt.Add(-window).UTC().Format(time.RFC3339Nano),
+		capturedAt.Add(window).UTC().Format(time.RFC3339Nano), mac, surveyID, capturedAt.UnixNano())
 
-	result, err := q.Query(context.Background(), flux)
+	result, err := InfluxClient.QueryAPI(org).Query(ctx, flux)
 	if err != nil {
 		return ClientSignalSample{}, false, err
 	}

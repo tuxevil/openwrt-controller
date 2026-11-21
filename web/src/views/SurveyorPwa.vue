@@ -11,6 +11,12 @@ const status = ref('idle')     // idle | requesting | streaming | stopped | erro
 const errorMsg = ref('')
 const lastFix = ref(null)
 const samples = ref(0)
+const matched = ref(0)
+const pending = ref([])
+let uploading = false
+let retryTimer
+let disposed = false
+let lastCapture = 0
 let watchId = null
 
 onMounted(() => {
@@ -21,6 +27,8 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  disposed = true
+  clearInterval(retryTimer)
   if (watchId !== null) navigator.geolocation?.clearWatch(watchId)
 })
 
@@ -43,14 +51,28 @@ function startGPS() {
 
 function beginWatch() {
   status.value = 'streaming'
+  if (disposed) return
+  retryTimer ??= setInterval(sendSamples, 1000)
   watchId = navigator.geolocation.watchPosition(
-    async (pos) => {
+    (pos) => {
       lastFix.value = {
         lat: pos.coords.latitude,
         lon: pos.coords.longitude,
         acc: pos.coords.accuracy,
       }
-      await sendSample(pos)
+      if (pos.timestamp - lastCapture < 2000) return
+      if (pending.value.length >= 1800) {
+        stopGPS()
+        errorMsg.value = 'Capture paused. Reconnect to upload the queued GPS points.'
+        return
+      }
+      lastCapture = pos.timestamp
+      pending.value.push({
+        lat: pos.coords.latitude,
+        lon: pos.coords.longitude,
+        accuracy_m: pos.coords.accuracy,
+        ts: pos.timestamp,
+      })
     },
     (err) => {
       // Non-fatal: keep streaming, brief GPS gaps are normal.
@@ -60,29 +82,40 @@ function beginWatch() {
   )
 }
 
-async function sendSample(pos) {
+async function sendSamples() {
+  if (uploading || disposed) return
+  uploading = true
   try {
-    await axios.post(`/api/surveys/${surveyId.value}/samples`, {
-      lat: pos.coords.latitude,
-      lon: pos.coords.longitude,
-      accuracy_m: pos.coords.accuracy,
-      ts: pos.timestamp || Date.now(),
-    }, {
-      headers: { 'X-Survey-Token': token.value },
-      timeout: 10000,
-    })
-    samples.value++
-  } catch (e) {
-    if (e.response?.status === 410) {
-      stopGPS()
-      status.value = 'error'
-      errorMsg.value = 'Survey ended.'
-    } else if (e.response?.status === 401) {
-      stopGPS()
-      status.value = 'error'
-      errorMsg.value = 'Token rejected. Ask for a new QR code.'
+    while (!disposed && pending.value.length && Date.now() - pending.value[0].ts >= 8000) {
+      const { data } = await axios.post(`/api/surveys/${surveyId.value}/samples`, pending.value[0], {
+        headers: { 'X-Survey-Token': token.value },
+        timeout: 10000,
+      })
+      pending.value.shift()
+      samples.value++
+      if (data.matched) matched.value++
+      errorMsg.value = ''
     }
-    // Other errors (429, network) are non-fatal.
+  } catch (e) {
+    const code = e.response?.status
+    if (code === 401 || code === 403 || code === 404 || code === 410) {
+      stopGPS()
+      clearInterval(retryTimer)
+      retryTimer = undefined
+      status.value = 'error'
+      errorMsg.value = 'Survey ended or access was rejected. Check the survey and scan its QR code.'
+    } else if (code === 400) {
+      stopGPS()
+      clearInterval(retryTimer)
+      retryTimer = undefined
+      status.value = 'error'
+      errorMsg.value = 'GPS sample rejected. Check the phone clock and location settings.'
+      pending.value.shift()
+    } else {
+      errorMsg.value = code === 409 ? 'Start the survey in the dashboard.' : 'Upload pending. Keep this page open.'
+    }
+  } finally {
+    uploading = false
   }
 }
 
@@ -117,8 +150,10 @@ function geoError(err) {
         <div>LON {{ lastFix.lon.toFixed(6) }}</div>
         <div>± {{ lastFix.acc.toFixed(0) }} m</div>
       </div>
-      <div class="count">{{ samples }} samples sent</div>
+      <div class="count">{{ samples }} saved · {{ matched }} with signal · {{ pending.length }} queued</div>
     </div>
+
+    <p v-if="pending.length">Keep this page open and wait for the queue to empty before ending the survey in the dashboard.</p>
 
     <div class="actions">
       <button v-if="status === 'idle'" @click="startGPS" class="go">

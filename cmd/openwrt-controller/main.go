@@ -107,8 +107,6 @@ func main() {
 	services.StartAlertEngine()
 	services.StartSniperReaper()
 	services.StartThreatIntelCron()
-	services.GetSurveyWorker().Start()
-	defer services.GetSurveyWorker().Stop()
 
 	logStopCh := make(chan struct{})
 	services.StartLogRetentionCron(logStopCh)

@@ -12,24 +12,24 @@ import (
 // ─── WIFI_SURVEY domain types ───────────────────────────────────────────────
 
 type Survey struct {
-	ID              string   `json:"id"`
-	SiteID          string   `json:"site_id"`
-	Name            string   `json:"name"`
-	SurveyorMAC     *string  `json:"surveyor_mac,omitempty"`
-	SurveyorLabel   *string  `json:"surveyor_label,omitempty"`
-	Status          string   `json:"status"` // pending|active|completed|aborted
-	AccessMode      string   `json:"access_mode"`
-	SurveyTokenHash *string  `json:"-"`
+	ID               string  `json:"id"`
+	SiteID           string  `json:"site_id"`
+	Name             string  `json:"name"`
+	SurveyorMAC      *string `json:"surveyor_mac,omitempty"`
+	SurveyorLabel    *string `json:"surveyor_label,omitempty"`
+	Status           string  `json:"status"` // pending|active|completed|aborted
+	AccessMode       string  `json:"access_mode"`
+	SurveyTokenHash  *string `json:"-"`
 	TokenFirstUsedAt *string `json:"token_first_used_at,omitempty"`
-	TokenFirstIP    *string  `json:"token_first_ip,omitempty"`
-	TokenFirstUA    *string  `json:"token_first_ua,omitempty"`
-	TokenRevokedAt  *string  `json:"token_revoked_at,omitempty"`
-	TokenRotatedAt  *string  `json:"token_rotated_at,omitempty"`
-	StartedAt       *string  `json:"started_at,omitempty"`
-	EndedAt         *string  `json:"ended_at,omitempty"`
-	CreatedBy       *string  `json:"created_by,omitempty"`
-	CreatedAt       string   `json:"created_at"`
-	UpdatedAt       string   `json:"updated_at"`
+	TokenFirstIP     *string `json:"token_first_ip,omitempty"`
+	TokenFirstUA     *string `json:"token_first_ua,omitempty"`
+	TokenRevokedAt   *string `json:"token_revoked_at,omitempty"`
+	TokenRotatedAt   *string `json:"token_rotated_at,omitempty"`
+	StartedAt        *string `json:"started_at,omitempty"`
+	EndedAt          *string `json:"ended_at,omitempty"`
+	CreatedBy        *string `json:"created_by,omitempty"`
+	CreatedAt        string  `json:"created_at"`
+	UpdatedAt        string  `json:"updated_at"`
 	// Aggregated fields populated on list queries
 	PointCount int      `json:"point_count,omitempty"`
 	MinDBM     *float64 `json:"min_dbm,omitempty"`
@@ -110,7 +110,7 @@ func GetSurvey(ctx context.Context, schema, surveyID string) (*Survey, error) {
 		       surveyor_mac, surveyor_label,
 		       token_first_used_at, token_first_ip, token_first_ua,
 		       token_revoked_at, token_rotated_at,
-		       created_by
+		       created_by, survey_token_hash
 		FROM %s.wifi_surveys WHERE id = $1
 	`, schema), surveyID)
 
@@ -119,7 +119,7 @@ func GetSurvey(ctx context.Context, schema, surveyID string) (*Survey, error) {
 	var smac, slabel, tfu, tfip, tfua, trev, trot, cby *string
 	if err := row.Scan(&s.ID, &s.SiteID, &s.Name, &s.Status, &s.AccessMode,
 		&started, &ended, &created, &updated,
-		&smac, &slabel, &tfu, &tfip, &tfua, &trev, &trot, &cby); err != nil {
+		&smac, &slabel, &tfu, &tfip, &tfua, &trev, &trot, &cby, &s.SurveyTokenHash); err != nil {
 		return nil, err
 	}
 	if started != nil {
@@ -145,16 +145,16 @@ func GetSurvey(ctx context.Context, schema, surveyID string) (*Survey, error) {
 	return &s, nil
 }
 
-func CreateSurvey(ctx context.Context, schema, siteID, name, surveyorLabel, accessMode, createdBy string) (string, error) {
+func CreateSurvey(ctx context.Context, schema, siteID, name, surveyorLabel, surveyorMAC, accessMode, createdBy string) (string, error) {
 	if accessMode == "" {
 		accessMode = "authenticated"
 	}
 	var id string
 	err := Tx(ctx).QueryRow(fmt.Sprintf(`
-		INSERT INTO %s.wifi_surveys (site_id, name, surveyor_label, access_mode, created_by, status, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+		INSERT INTO %s.wifi_surveys (site_id, name, surveyor_label, surveyor_mac, access_mode, created_by, status, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, 'pending', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 		RETURNING id
-	`, schema), siteID, name, nullString(surveyorLabel), accessMode, nullString(createdBy)).Scan(&id)
+	`, schema), siteID, name, nullString(surveyorLabel), nullString(surveyorMAC), accessMode, nullString(createdBy)).Scan(&id)
 	return id, err
 }
 

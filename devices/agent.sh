@@ -2369,43 +2369,14 @@ EOF
     #   - telemetry interval drops to 2s (vs 10s normal)
     #   - payload includes "survey_id" so the backend tags per-station signal
     #     samples with the active survey and writes them to InfluxDB.
-    #   - "neighbor_aps" snapshot is included so the dashboard can show
-    #     "what other APs this device can hear from this location".
     SURVEY_MODE=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.survey_mode' 2>/dev/null)
     SURVEY_ID=$(echo "$CONFIG_RESPONSE" | jsonfilter -e '@.config.survey_id' 2>/dev/null)
     [ "$SURVEY_MODE" != "true" ] && SURVEY_MODE="false"
     [ -z "$SURVEY_ID" ] && SURVEY_ID=""
 
-    if [ "$SURVEY_MODE" = "true" ]; then
-        # Build a compact neighbor_aps snapshot. iwinfo scan returns a
-        # human-readable table; we only need BSSID,SSID,channel,signal per row.
-        NEIGHBOR_APS=$(for IFACE in $(ls /sys/class/net | grep -E "wlan|ath|radio|ra|phy"); do
-            iwinfo "$IFACE" scan 2>/dev/null | awk -v iface="$IFACE" '
-                /Address:/ { bssid = $2 }
-                /ESSID:/   { essid = ""; for (i=2; i<=NF; i++) essid = essid (i==2?"":" ") $i; gsub(/"/, "", essid) }
-                /Channel:/ { chan = $2 }
-                /Signal:/  { sig = $2 " " $3
-                              if (count > 0) printf ","
-                              printf "{\"iface\":\"%s\",\"bssid\":\"%s\",\"ssid\":\"%s\",\"channel\":%s,\"signal\":\"%s\"}", iface, bssid, essid, chan, sig
-                              count++
-                              bssid=""; essid=""; chan=""; sig=""
-                            }
-                END { exit }
-            '
-        done | awk 'BEGIN{first=1} { if(NR>0){ if(!first)printf ","; printf "%s",$0; first=0} }'
-        )
-        [ -z "$NEIGHBOR_APS" ] && NEIGHBOR_APS=""
-        # Cap neighbor_aps to 64 entries to keep payload small (and prevent
-        # a busy AP environment from ballooning telemetry).
-        if [ -n "$NEIGHBOR_APS" ]; then
-            NEIGHBOR_APS=$(printf '%s\n' "$NEIGHBOR_APS" | awk -F '},' 'NR <= 64 { if (NR > 1) printf ","; printf "%s", $0 }')
-            NEIGHBOR_APS="[$NEIGHBOR_APS]"
-        else
-            NEIGHBOR_APS="[]"
-        fi
-    else
-        NEIGHBOR_APS="[]"
-    fi
+    # Measuring station RSSI only needs assoclist. Avoid off-channel scans
+    # during a walk so the survey does not disrupt the link being measured.
+    NEIGHBOR_APS="[]"
 
     if [ -n "$CONFIG_RESPONSE" ]; then
         # Extraer llave pública usando jsonfilter (nativo en OpenWrt)

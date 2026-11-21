@@ -322,8 +322,14 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 	//     the correlation worker can pair them with phone GPS samples.
 	//     This is the only path that gets the signal into InfluxDB at the
 	//     2s survey cadence without doubling the telemetry cost.
-	if surveyID, _ := raw["survey_id"].(string); surveyID != "" {
-		go func(devID string, payload map[string]interface{}, sID string) {
+	if surveyID, _ := raw["survey_id"].(string); surveyID != "" && deviceSiteID != nil {
+		go func(devID string, payload map[string]interface{}, surveyID, siteID string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			survey, err := database.GetActiveSurveyForSite(ctx, tenantSchema, siteID)
+			if err != nil || survey.ID != surveyID || survey.SurveyorMAC == nil {
+				return
+			}
 			stations, _ := payload["wireless_stations"].(map[string]interface{})
 			if len(stations) == 0 {
 				return
@@ -335,7 +341,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 				for _, cIf := range list {
 					cMap, _ := cIf.(map[string]interface{})
 					mac, _ := cMap["mac"].(string)
-					if mac == "" {
+					if !strings.EqualFold(mac, *survey.SurveyorMAC) {
 						continue
 					}
 					sig, _ := cMap["signal"].(float64)
@@ -351,8 +357,8 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 					_ = iface
 					samples = append(samples, database.ClientSignalSample{
 						DeviceID:   devID,
-						MAC:        mac,
-						SurveyID:   sID,
+						MAC:        *survey.SurveyorMAC,
+						SurveyID:   surveyID,
 						SignalDBM:  sig,
 						NoiseDBM:   noise,
 						RxRate:     rx,
@@ -368,7 +374,7 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 			if err := database.WriteClientSignalBatch(samples); err != nil {
 				log.Printf("[SURVEY] WriteClientSignalBatch failed for device %s: %v", devID, err)
 			}
-		}(deviceID, raw, surveyID)
+		}(canonicalDeviceID, raw, surveyID, *deviceSiteID)
 	}
 
 	// 3. Process logs

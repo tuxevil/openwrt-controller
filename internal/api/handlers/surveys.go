@@ -17,7 +17,6 @@ import (
 
 	"openwrt-controller/internal/api/middleware"
 	"openwrt-controller/internal/database"
-	"openwrt-controller/internal/services"
 )
 
 // ─── Survey token rate limiter ──────────────────────────────────────────────
@@ -142,6 +141,7 @@ func CreateSurveyHandler(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	var req struct {
 		Name          string `json:"name"`
+		SurveyorMAC   string `json:"surveyor_mac"`
 		SurveyorLabel string `json:"surveyor_label"`
 		AccessMode    string `json:"access_mode"`
 	}
@@ -155,6 +155,12 @@ func CreateSurveyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if accessMode != "authenticated" && accessMode != "public" {
 		http.Error(w, `{"error":"access_mode must be 'authenticated' or 'public'"}`, http.StatusBadRequest)
+		return
+	}
+
+	mac, macErr := net.ParseMAC(strings.TrimSpace(req.SurveyorMAC))
+	if (accessMode == "public" || req.SurveyorMAC != "") && (macErr != nil || len(mac) != 6 || mac[0]&1 != 0) {
+		http.Error(w, `{"error":"Enter the phone Wi-Fi MAC for this SSID"}`, http.StatusBadRequest)
 		return
 	}
 
@@ -176,7 +182,7 @@ func CreateSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	surveyID, err := database.CreateSurvey(r.Context(), schema, siteID, req.Name, req.SurveyorLabel, accessMode, username)
+	surveyID, err := database.CreateSurvey(r.Context(), schema, siteID, req.Name, req.SurveyorLabel, mac.String(), accessMode, username)
 	if err != nil {
 		RespondError(w, http.StatusInternalServerError, "failed to create survey", err)
 		return
@@ -266,7 +272,6 @@ func DeleteSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusInternalServerError, "failed to delete survey", err)
 		return
 	}
-	services.UnregisterSchema(surveyID)
 	go database.InsertAuditLog(username, "SURVEY_DELETE", "SURVEY", surveyID, "", r.RemoteAddr)
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -291,11 +296,14 @@ func StartSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusNotFound, "survey not found", err)
 		return
 	}
+	if s.AccessMode == "public" && (s.SurveyorMAC == nil || *s.SurveyorMAC == "") {
+		http.Error(w, `{"error":"Create a survey with the phone Wi-Fi MAC"}`, http.StatusConflict)
+		return
+	}
 	if err := database.SetSurveyStatus(r.Context(), schema, surveyID, "active"); err != nil {
 		RespondError(w, http.StatusInternalServerError, "failed to set status", err)
 		return
 	}
-	services.RegisterSchema(surveyID, schema)
 	go database.InsertAuditLog(username, "SURVEY_START", "SURVEY", surveyID, "", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "active", "survey_id": s.ID})
 }
@@ -320,7 +328,6 @@ func StopSurveyHandler(w http.ResponseWriter, r *http.Request) {
 		RespondError(w, http.StatusInternalServerError, "failed to set status", err)
 		return
 	}
-	services.UnregisterSchema(surveyID)
 	go database.InsertAuditLog(username, "SURVEY_STOP", "SURVEY", surveyID, "", r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]interface{}{"status": "completed"})
 }
@@ -409,6 +416,7 @@ func GetSurveyPointsHandler(w http.ResponseWriter, r *http.Request) {
 //   - site allow_public_surveys + not globally locked down
 //   - access_mode == "public"
 //   - rate-limit 10 req/s
+//
 // Records first_seen IP+UA, forwards to survey worker for correlation.
 func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 	surveyID := r.PathValue("id")
@@ -459,6 +467,11 @@ func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if survey.Status != "active" || survey.SurveyorMAC == nil || *survey.SurveyorMAC == "" {
+		http.Error(w, `{"error":"Start a survey configured with the phone Wi-Fi MAC"}`, http.StatusConflict)
+		return
+	}
+
 	// Re-check site + platform toggles on every request (they can change
 	// while the survey is live). Cheap because they're indexed lookups.
 	allowed, _ := database.GetSiteConfigAllowPublicSurveys(r.Context(), schema, survey.SiteID)
@@ -472,45 +485,64 @@ func PostSurveySampleHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse body.
-	body, _ := io.ReadAll(r.Body)
 	var req struct {
-		Lat        float64 `json:"lat"`
-		Lon        float64 `json:"lon"`
-		AccuracyM  float32 `json:"accuracy_m"`
-		Timestamp  int64   `json:"ts"` // ms since epoch (optional, defaults to now)
+		Lat       *float64 `json:"lat"`
+		Lon       *float64 `json:"lon"`
+		AccuracyM float32  `json:"accuracy_m"`
+		Timestamp int64    `json:"ts"`
 	}
-	if len(body) == 0 {
-		http.Error(w, `{"error":"empty body"}`, http.StatusBadRequest)
+	r.Body = http.MaxBytesReader(w, r.Body, 4096)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil ||
+		req.Lat == nil || req.Lon == nil || *req.Lat < -90 || *req.Lat > 90 ||
+		*req.Lon < -180 || *req.Lon > 180 || req.AccuracyM < 0 {
+		http.Error(w, `{"error":"Invalid GPS coordinates or accuracy"}`, http.StatusBadRequest)
 		return
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
-		http.Error(w, `{"error":"invalid json"}`, http.StatusBadRequest)
+	if req.Timestamp <= 0 {
+		http.Error(w, `{"error":"GPS timestamp required"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Lat < -90 || req.Lat > 90 || req.Lon < -180 || req.Lon > 180 {
-		http.Error(w, `{"error":"lat/lon out of range"}`, http.StatusBadRequest)
+	ts := time.UnixMilli(req.Timestamp)
+
+	if ts.After(time.Now().Add(5 * time.Second)) {
+		http.Error(w, `{"error":"Phone timestamp is in the future"}`, http.StatusBadRequest)
 		return
 	}
-	ts := time.Now()
-	if req.Timestamp > 0 {
-		ts = time.UnixMilli(req.Timestamp)
+	// Let telemetry arrive on both sides of the GPS timestamp.
+	if time.Since(ts) < 8*time.Second {
+		http.Error(w, `{"error":"WAITING_FOR_TELEMETRY"}`, http.StatusTooEarly)
+		return
 	}
-
-	// Record first_seen fingerprint (best effort, do not block on error).
-	ip, ua := clientFingerprint(r)
-	_ = database.SetSurveyTokenFirstUse(r.Context(), schema, surveyID, ip, ua)
-
-	// Register the schema mapping for the worker (idempotent).
-	services.RegisterSchema(surveyID, schema)
-
-	// Enqueue for correlation. AP ID is resolved by the worker when it
-	// pulls the most recent client_signal from InfluxDB.
-	services.GetSurveyWorker().EnqueueGPS(services.GPSSampleForWorker(surveyID, "", req.Lat, req.Lon, req.AccuracyM, ts))
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	w.Write([]byte(`{"status":"accepted"}`))
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	signal, matched, err := database.GetClosestSurveySignal(ctx, *survey.SurveyorMAC, surveyID, ts)
+	if err != nil {
+		RespondError(w, http.StatusServiceUnavailable, "signal lookup failed", err)
+		return
+	}
+	point := database.SurveyPoint{
+		SurveyID: surveyID, Lat: req.Lat, Lon: req.Lon, AccuracyM: &req.AccuracyM,
+		CapturedAt: ts.UTC().Format(time.RFC3339Nano), NeighborAPs: "[]",
+	}
+	if matched {
+		point.APID = signal.DeviceID
+		dbm := float32(signal.SignalDBM)
+		point.SignalDBM = &dbm
+		if signal.NoiseDBM != 0 {
+			noise := float32(signal.NoiseDBM)
+			snr := dbm - noise
+			point.NoiseDBM, point.SNR = &noise, &snr
+		}
+	}
+	if err := database.InsertSurveyPoint(ctx, schema, point); err != nil {
+		RespondError(w, http.StatusServiceUnavailable, "failed to save survey point", err)
+		return
+	}
+	if survey.TokenFirstUsedAt == nil {
+		ip, ua := clientFingerprint(r)
+		_ = database.SetSurveyTokenFirstUse(r.Context(), schema, surveyID, ip, ua)
+	}
+	writeJSON(w, http.StatusCreated, map[string]bool{"matched": matched})
 }
 
 func clientFingerprint(r *http.Request) (ip, ua string) {

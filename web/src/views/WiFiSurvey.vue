@@ -20,6 +20,7 @@ const newName = ref('')
 const newSurveyorLabel = ref('')
 const newAccessMode = ref('authenticated')
 const sitePublicAllowed = ref(false)
+const newSurveyorMAC = ref('')
 const newSurveyResponse = ref(null) // { id, survey_token, survey_url, ... }
 const showQrModal = ref(null) // survey with token + url + qr dataurl
 const mapEl = ref(null)
@@ -100,13 +101,15 @@ async function loadSamples(s) {
 // ─── Map ────────────────────────────────────────────────────────────────────
 function initMap() {
   if (map || !mapEl.value) return
-  map = L.map(mapEl.value, { zoomControl: true, attributionControl: false })
+  map = L.map(mapEl.value, { zoomControl: true, attributionControl: true })
     .setView([0, 0], 18)
   // Esri World Imagery (satellite). Free for non-commercial use.
-  L.tileLayer(
+  const satellite = L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     { maxZoom: 19, attribution: 'Esri' }
-  ).addTo(map)
+  )
+  L.control.layers({ "Offline": L.layerGroup().addTo(map), "Satellite (internet)": satellite }).addTo(map)
+  L.control.scale({ imperial: false }).addTo(map)
   pointLayer = L.layerGroup().addTo(map)
   neighborLayer = L.layerGroup()
   if (showNeighbors.value) neighborLayer.addTo(map)
@@ -154,8 +157,8 @@ function drawPoints() {
       weight: 1
     }).bindPopup(
       `<div style="background:#000;color:#fff;padding:6px;font-family:monospace;font-size:11px">
-        <b>${p.signal_dbm ?? '—'} dBm</b><br/>
-        AP: ${p.ap_id}<br/>
+        <b>${p.signal_dbm == null ? 'No signal measurement' : p.signal_dbm + ' dBm'}</b><br/>
+        AP: ${p.ap_id || '—'}<br/>
         ${p.bssid ? 'BSSID: ' + p.bssid + '<br/>' : ''}
         ${p.snr != null ? 'SNR: ' + p.snr.toFixed(0) + ' dB<br/>' : ''}
         ${p.accuracy_m != null ? '± ' + p.accuracy_m.toFixed(0) + ' m<br/>' : ''}
@@ -199,7 +202,7 @@ function drawPoints() {
   // Heatmap (simple radial gradient via circleMarkers with low opacity)
   if (showHeatmap.value) {
     for (const p of filtered) {
-      if (p.lat == null || p.lon == null) continue
+      if (p.lat == null || p.lon == null || p.signal_dbm == null) continue
       L.circleMarker([p.lat, p.lon], {
         radius: 18,
         color: colorForDbm(p.signal_dbm),
@@ -220,6 +223,7 @@ function drawPoints() {
 function openNew() {
   newName.value = ''
   newSurveyorLabel.value = ''
+  newSurveyorMAC.value = ''
   newAccessMode.value = 'authenticated'
   newSurveyResponse.value = null
   showNewModal.value = true
@@ -230,6 +234,7 @@ async function createSurvey() {
     const res = await api.createSurvey(siteId.value, {
       name: newName.value || `Survey ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
       surveyor_label: newSurveyorLabel.value,
+      surveyor_mac: newAccessMode.value === 'public' ? newSurveyorMAC.value.trim() : '',
       access_mode: newAccessMode.value
     })
     newSurveyResponse.value = res.data?.data || res.data
@@ -529,6 +534,12 @@ function backToList() {
             The QR code works without a dashboard login. Token expires when the survey ends.
           </p>
         </div>
+
+        <label v-if="!newSurveyResponse && newAccessMode === 'public'" class="block text-xs text-gray-400">
+          ANDROID WI-FI MAC
+          <input v-model="newSurveyorMAC" placeholder="aa:bb:cc:dd:ee:ff" class="mt-1 w-full bg-black border border-gray-700 text-white px-3 py-2" />
+          Use the MAC shown in Android’s settings for the connected Wi-Fi network.
+        </label>
 
         <!-- Result with token (only shown once) -->
         <div v-if="newSurveyResponse" class="space-y-2 border border-cyan-500/40 p-3 bg-cyan-950/30">
