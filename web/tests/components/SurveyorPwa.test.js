@@ -81,4 +81,61 @@ describe('SurveyorPwa', () => {
 
     wrapper.unmount()
   })
+
+  it('acquires screen wake lock while recording, re-acquires on visibility restore, and releases on stop', async () => {
+    const releaseSpy = vi.fn().mockResolvedValue(undefined)
+    let onRelease = null
+    const requestSpy = vi.fn().mockImplementation(async () => ({
+      released: false,
+      addEventListener: (ev, cb) => {
+        if (ev === 'release') onRelease = cb
+      },
+      removeEventListener: vi.fn(),
+      release: async () => {
+        await releaseSpy()
+        if (onRelease) onRelease()
+      },
+    }))
+
+    Object.defineProperty(navigator, 'wakeLock', {
+      configurable: true,
+      value: { request: requestSpy },
+    })
+    Object.defineProperty(navigator, 'geolocation', {
+      configurable: true,
+      value: {
+        getCurrentPosition: (ok) => ok({ coords: { latitude: -2, longitude: -79, accuracy: 5 }, timestamp: Date.now() }),
+        watchPosition: () => 42,
+        clearWatch: vi.fn(),
+      },
+    })
+
+    vi.spyOn(api, 'getSurveyStatus').mockResolvedValue({
+      data: { reporting_count: 3, total_count: 3, surveyor_seen: true, surveyor_ap: 'MR8300', aps: [] },
+    })
+    vi.spyOn(api, 'startSurvey').mockResolvedValue({ data: { status: 'active' } })
+
+    const wrapper = mount(SurveyorPwa)
+    await flushPromises()
+
+    await wrapper.get('button.go').trigger('click')
+    await flushPromises()
+
+    expect(requestSpy).toHaveBeenCalledWith('screen')
+    expect(wrapper.text()).toContain('Screen awake')
+
+    // Simulate OS releasing wake lock when tab was backgrounded, then returning to foreground
+    if (onRelease) onRelease()
+    await flushPromises()
+    document.dispatchEvent(new Event('visibilitychange'))
+    await flushPromises()
+    expect(requestSpy).toHaveBeenCalledTimes(2)
+
+    // Stopping GPS releases wake lock
+    await wrapper.get('button.stop').trigger('click')
+    await flushPromises()
+    expect(releaseSpy).toHaveBeenCalled()
+
+    wrapper.unmount()
+  })
 })

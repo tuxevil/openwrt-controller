@@ -45,6 +45,58 @@ let disposed = false
 let lastCapture = 0
 let watchId = null
 
+// Screen Wake Lock (keeps phone screen awake while surveying)
+const wakeLockState = ref('idle') // idle | active | unsupported | denied
+let wakeLockSentinel = null
+
+async function requestWakeLock() {
+  if (disposed || wakeLockSentinel) return
+  if (typeof navigator === 'undefined' || !navigator.wakeLock || typeof navigator.wakeLock.request !== 'function') {
+    wakeLockState.value = 'unsupported'
+    return
+  }
+  try {
+    const sentinel = await navigator.wakeLock.request('screen')
+    if (disposed || (status.value !== 'streaming' && pending.value.length === 0)) {
+      await sentinel.release?.().catch(() => {})
+      return
+    }
+    wakeLockSentinel = sentinel
+    wakeLockState.value = 'active'
+    sentinel.addEventListener?.('release', () => {
+      if (wakeLockSentinel === sentinel) {
+        wakeLockSentinel = null
+        if (wakeLockState.value === 'active') {
+          wakeLockState.value = 'idle'
+        }
+      }
+    })
+  } catch {
+    wakeLockState.value = 'denied'
+  }
+}
+
+async function releaseWakeLock() {
+  const sentinel = wakeLockSentinel
+  wakeLockSentinel = null
+  if (wakeLockState.value === 'active') {
+    wakeLockState.value = 'idle'
+  }
+  if (sentinel) {
+    try {
+      await sentinel.release()
+    } catch {
+      // ignore release errors
+    }
+  }
+}
+
+function handleVisibilityChange() {
+  if (document.visibilityState === 'visible' && (status.value === 'streaming' || pending.value.length > 0)) {
+    requestWakeLock()
+  }
+}
+
 function persistQueue() {
   if (!surveyId.value) return
   saveSurveyQueueState(surveyId.value, {
@@ -96,6 +148,7 @@ onMounted(() => {
 
   fetchApStatus()
   statusTimer = setInterval(fetchApStatus, 5000)
+  document.addEventListener('visibilitychange', handleVisibilityChange)
 })
 
 onUnmounted(() => {
@@ -103,6 +156,8 @@ onUnmounted(() => {
   clearInterval(retryTimer)
   clearInterval(statusTimer)
   stopProbeLoop()
+  document.removeEventListener('visibilitychange', handleVisibilityChange)
+  releaseWakeLock()
   if (watchId !== null) navigator.geolocation?.clearWatch(watchId)
 })
 
@@ -205,6 +260,7 @@ function startGPS() {
 function beginWatch() {
   status.value = 'streaming'
   if (disposed) return
+  requestWakeLock()
   retryTimer ??= setInterval(sendSamples, 1000)
   if (probeEnabled.value) {
     probeWindow = []
@@ -276,6 +332,9 @@ async function sendSamples() {
       errorMsg.value = ''
       persistQueue()
     }
+    if (status.value === 'stopped' && pending.value.length === 0) {
+      releaseWakeLock()
+    }
   } catch (e) {
     const code = e.response?.status
     if (code === 401 || code === 403 || code === 404 || code === 410) {
@@ -311,6 +370,9 @@ function stopGPS() {
   }
   stopProbeLoop()
   status.value = 'stopped'
+  if (pending.value.length === 0) {
+    releaseWakeLock()
+  }
 }
 
 async function finishSurvey() {
@@ -321,6 +383,7 @@ async function finishSurvey() {
     clearInterval(retryTimer)
     retryTimer = undefined
     clearSurveyQueueState(surveyId.value)
+    releaseWakeLock()
     status.value = 'completed'
   } catch {
     status.value = 'stopped'
@@ -431,7 +494,13 @@ function geoError(err) {
     </div>
 
     <p v-if="status === 'completed'" class="done-note">Survey completed. View the map in Nerve Center.</p>
-    <div v-if="status === 'streaming'" class="live">● RECORDING</div>
+    <div v-if="status === 'streaming'" class="live">
+      ● RECORDING
+      <span v-if="wakeLockState === 'active'" class="wake-ok"> · Screen awake</span>
+    </div>
+    <div v-if="status === 'streaming' && (wakeLockState === 'unsupported' || wakeLockState === 'denied')" class="wake-warn">
+      Screen wake lock unavailable in this browser/battery mode — keep screen on manually.
+    </div>
 
     <div v-if="status === 'error'" class="err">
       {{ errorMsg }}
@@ -528,6 +597,8 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .finish-btn { font-size: 15px; padding: 14px; }
 .wait { border-color: #888; color: #888; background: transparent; }
 .live { margin-top: 4px; color: #39FF14; animation: pulse 1s infinite; }
+.wake-ok { color: #38bdf8; }
+.wake-warn { font-size: 11px; color: #fbbf24; text-align: center; max-width: 360px; }
 @keyframes pulse { 50% { opacity: 0.3; } }
 .err { margin-top: 8px; color: #ff5555; font-size: 13px; text-align: center; max-width: 360px; line-height: 1.5; }
 .hint { margin-top: 8px; color: #888; font-size: 13px; text-align: center; }
