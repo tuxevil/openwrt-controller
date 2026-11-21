@@ -187,3 +187,16 @@ recopilada.
 La prueba aísla la interpretación de evidencia. La selección de
 herramientas y la precisión durante roaming real requieren evaluación
 por separado.
+
+El compilador adelanta la lectura de hostapd para consultas de roaming
+con sitio asignado. El controlador conserva los logs originales y
+entrega al modelo una vista estructurada de las conexiones y rechazos
+reconocidos. Un seguimiento requiere el mismo cliente, nodo, interfaz
+y un evento posterior dentro de diez segundos. La ventana vincula
+observaciones cercanas y no atribuye causalidad. Un rechazo se conserva
+aunque aparezca una conexión posterior. La continuidad se mantiene
+desconocida en los datos derivados de hostapd.
+
+En una conversación nueva del dashboard puedes seleccionar el sitio.
+Si el tenant tiene un solo sitio, el panel lo preselecciona. El alcance
+del caso se conserva durante las consultas posteriores.

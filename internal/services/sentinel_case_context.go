@@ -253,6 +253,10 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	}
 
 	order := []string{"get_device_status", "get_site_clients", "get_incidents", "get_recent_changes", "get_topology", "search_logs"}
+	if item.SiteID != "" && sentinelRoamingQuery(normalized) {
+		add("search_logs")
+		order = append([]string{"search_logs"}, order[:len(order)-1]...)
+	}
 	result := make([]string, 0, 4)
 	for _, name := range order {
 		if selected[name] {
@@ -397,6 +401,12 @@ func CompileSentinelCaseContext(ctx context.Context, schema, caseID string, hist
 			continue
 		}
 		originalArgs := sentinelContextToolArguments(toolName, item)
+		if toolName == "search_logs" && item.SiteID != "" && sentinelRoamingQuery(normalizeSentinelQuery(query+" "+item.Title)) {
+			args, _ := decodeSentinelToolArguments(originalArgs)
+			args["query"] = "hostapd:"
+			args["limit"] = 20
+			originalArgs = sentinelJSONData(args)
+		}
 		call := SentinelToolCall{Name: toolName, Arguments: SentinelToolArgumentsWithSite(originalArgs, schema, item.SiteID)}
 		result, err := executeSentinelToolContext(ctx, call)
 		if err != nil {
@@ -406,6 +416,9 @@ func CompileSentinelCaseContext(ctx context.Context, schema, caseID string, hist
 		encoded := encodeSentinelToolResult(result)
 		evidence := SentinelEvidence{Tool: toolName, Args: originalArgs, Result: json.RawMessage(encoded)}
 		prefetched = append(prefetched, evidence)
+		if item.SiteID != "" {
+			encoded = sentinelRoamingEvidence(toolName, encoded)
+		}
 		compiled.Items = append(compiled.Items, SentinelContextItem{
 			Kind:       "live_observation",
 			TrustClass: sentinelEvidenceTrustClass(toolName),

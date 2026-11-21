@@ -40,6 +40,14 @@
       <p v-if="message.metadata?.case_id" class="text-sm text-slate-300">Caso {{ message.metadata.case_id }}</p>
     </article>
     <form class="mt-3 grid gap-2" @submit.prevent="ask">
+      <template v-if="!conversationID && sites.length">
+        <label for="sentinel-site">Sitio de la nueva conversación</label>
+        <select id="sentinel-site" v-model="selectedSite" :disabled="busy"
+          class="rounded border border-slate-600 bg-slate-900 p-2">
+          <option value="">Sin sitio específico</option>
+          <option v-for="site in sites" :key="site.id" :value="site.id">{{ site.name }}</option>
+        </select>
+      </template>
       <label for="sentinel-query">Consulta de infraestructura</label>
       <textarea id="sentinel-query" v-model.trim="query" maxlength="2000" required
         class="rounded border border-slate-600 bg-slate-900 p-2"
@@ -84,6 +92,9 @@ const error = ref('');
 const lifetime = new AbortController();
 const requestOptions = { signal: lifetime.signal };
 const conversationID = ref('');
+const sites = ref([]);
+const selectedSite = ref('');
+let pendingSite = '';
 const conversations = ref([]);
 const messages = ref([]);
 const loading = ref(false);
@@ -146,6 +157,7 @@ async function openConversation(id) {
       ? (await api.client.get(`/sentinel/conversations/${id}`, requestOptions)).data
       : null;
     conversationID.value = id;
+    pendingSite = '';
     messages.value = conversation?.messages || [];
     turns.value = [];
   } catch {
@@ -157,6 +169,15 @@ async function openConversation(id) {
 
 onMounted(refreshHistory);
 onMounted(loadDailyReport);
+onMounted(async () => {
+  try {
+    const { data } = await api.client.get('/sites', requestOptions);
+    sites.value = data.data || [];
+    if (sites.value.length === 1) selectedSite.value = sites.value[0].id;
+  } catch {
+    // A conversation can still be opened without a selected site.
+  }
+});
 
 async function ask() {
   if (!query.value || busy.value) return;
@@ -169,12 +190,14 @@ async function ask() {
         title: question.slice(0, 100)
       }, requestOptions);
       conversationID.value = data.id;
+      pendingSite = selectedSite.value;
       conversations.value.unshift(data);
     }
     const { data: queued } = await api.client.post(
       `/sentinel/conversations/${conversationID.value}/messages?async=true`,
-      { query: question }, requestOptions
+      { query: question, ...(pendingSite ? { site_id: pendingSite } : {}) }, requestOptions
     );
+    pendingSite = '';
     if (query.value === question) query.value = '';
 
     for (let attempt = 0; attempt < 180; attempt++) {

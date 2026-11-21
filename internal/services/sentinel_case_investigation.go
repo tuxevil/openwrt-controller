@@ -218,6 +218,9 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 			observedCalls[callKey] = true
 			encodedText := encodeSentinelToolResult(toolResult)
 			result.Evidence = append(result.Evidence, SentinelEvidence{Tool: call.Name, Args: originalArguments, Result: json.RawMessage(encodedText)})
+			if compiled.SiteID != "" {
+				encodedText = sentinelRoamingEvidence(call.Name, encodedText)
+			}
 			if native != nil {
 				native.addResult(index, call.Name, encodedText, true)
 			} else {
