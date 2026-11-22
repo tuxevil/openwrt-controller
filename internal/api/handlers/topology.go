@@ -41,6 +41,7 @@ type topologyMetadata struct {
 		Address   string `json:"address"`
 		LinkLabel string `json:"link_label"`
 		Speed     string `json:"speed"`
+		Target    string `json:"target,omitempty"`
 	} `json:"wan"`
 	Links []struct {
 		Source string `json:"source"`
@@ -49,6 +50,21 @@ type topologyMetadata struct {
 		Speed  string `json:"speed"`
 	} `json:"links"`
 	Roles map[string]string `json:"roles"`
+}
+
+func isGatewayRole(role string) bool {
+	return strings.EqualFold(strings.TrimSpace(role), "gateway")
+}
+
+func hasTelemetryWAN(dev map[string]interface{}) bool {
+	wanRaw, ok := dev["wan"]
+	if !ok || wanRaw == nil {
+		return false
+	}
+	if wanMap, ok := wanRaw.(map[string]interface{}); ok {
+		return len(wanMap) > 0
+	}
+	return true
 }
 
 func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +95,10 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 			speed string
 		}{label: link.Label, speed: link.Speed}
 	}
+	roleMeta := make(map[string]string, len(metadata.Roles))
+	for k, v := range metadata.Roles {
+		roleMeta[strings.ToLower(strings.TrimSpace(k))] = strings.TrimSpace(v)
+	}
 	if metadata.WAN != nil {
 		wanID := metadata.WAN.ID
 		if wanID == "" {
@@ -87,8 +107,8 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 		graph.Nodes[wanID] = GraphNode{ID: wanID, Name: metadata.WAN.Name, Type: "wan", Hostname: metadata.WAN.Address, Label: metadata.WAN.Name}
 	}
 
-	// 1. Fetch devices and state_json
-	rows, err := database.Tx(r.Context()).Query("SELECT id, state_json FROM devices WHERE site_id = $1", siteID)
+	// 1. Fetch devices, state_json, and role
+	rows, err := database.Tx(r.Context()).Query("SELECT id, state_json, COALESCE(device_role, '') FROM devices WHERE site_id = $1", siteID)
 	if err != nil {
 		log.Printf("Topology query error: %v", err)
 		http.Error(w, `{"error": "database error"}`, http.StatusInternalServerError)
@@ -102,12 +122,15 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id string
 		var stateJSON []byte
-		if err := rows.Scan(&id, &stateJSON); err == nil {
-			knownRouters[strings.ToLower(id)] = true
+		var deviceRole string
+		if err := rows.Scan(&id, &stateJSON, &deviceRole); err == nil {
+			lowerID := strings.ToLower(id)
+			knownRouters[lowerID] = true
 			if len(stateJSON) > 0 {
 				var payload map[string]interface{}
 				if err := json.Unmarshal(stateJSON, &payload); err == nil {
-					payload["_id"] = strings.ToLower(id)
+					payload["_id"] = lowerID
+					payload["_device_role"] = deviceRole
 					allDevices = append(allDevices, payload)
 				}
 			}
@@ -179,10 +202,9 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
+		deviceRole, _ := dev["_device_role"].(string)
 		nodeType := "ap"
-		if strings.ToLower(devMAC) == "e8:9f:80:14:69:c5" {
-			nodeType = "gateway"
-		} else if _, ok := dev["wan"]; ok {
+		if isGatewayRole(deviceRole) || isGatewayRole(roleMeta[devMAC]) || hasTelemetryWAN(dev) {
 			nodeType = "gateway"
 		}
 
@@ -196,29 +218,32 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 			CPULoad:  cpuLoad,
 		}
 
-		// Starlink WAN Root Node
+		// Connect WAN Root Node only to the gateway (or an explicit metadata.wan.target)
 		if metadata.WAN != nil {
-			wanID := metadata.WAN.ID
-			if wanID == "" {
-				wanID = "wan"
-			}
-			if _, exists := graph.Edges["wan-"+strings.ToLower(devMAC)]; !exists {
-				wanName := "WAN"
-				wanAddress := ""
-				wanName, wanAddress = metadata.WAN.Name, metadata.WAN.Address
-				graph.Nodes[wanID] = GraphNode{
-					ID:       wanID,
-					Name:     wanName,
-					Type:     "wan",
-					Hostname: wanAddress,
-					HasAlert: false,
+			wanTarget := strings.ToLower(strings.TrimSpace(metadata.WAN.Target))
+			attachWAN := (wanTarget != "" && wanTarget == devMAC) || (wanTarget == "" && nodeType == "gateway")
+			if attachWAN {
+				wanID := metadata.WAN.ID
+				if wanID == "" {
+					wanID = "wan"
 				}
-				edgeID := "wan-" + strings.ToLower(devMAC)
-				edgeCounter++
-				graph.Edges[edgeID] = GraphEdge{
-					Source: wanID,
-					Target: strings.ToLower(devMAC),
-					Type:   "wan", Label: metadata.WAN.LinkLabel, Speed: metadata.WAN.Speed,
+				if _, exists := graph.Edges["wan-"+devMAC]; !exists {
+					wanName := metadata.WAN.Name
+					wanAddress := metadata.WAN.Address
+					graph.Nodes[wanID] = GraphNode{
+						ID:       wanID,
+						Name:     wanName,
+						Type:     "wan",
+						Hostname: wanAddress,
+						HasAlert: false,
+					}
+					edgeID := "wan-" + devMAC
+					edgeCounter++
+					graph.Edges[edgeID] = GraphEdge{
+						Source: wanID,
+						Target: devMAC,
+						Type:   "wan", Label: metadata.WAN.LinkLabel, Speed: metadata.WAN.Speed,
+					}
 				}
 			}
 		}
