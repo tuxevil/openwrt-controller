@@ -67,6 +67,36 @@ func hasTelemetryWAN(dev map[string]interface{}) bool {
 	return true
 }
 
+func undirectedPairKey(a, b string) string {
+	if a < b {
+		return a + "<->" + b
+	}
+	return b + "<->" + a
+}
+
+func extractBridgeTable(dev map[string]interface{}) []interface{} {
+	if neighborStats, ok := dev["neighbor_stats"].(map[string]interface{}); ok {
+		if bt, ok := neighborStats["bridge_table"].([]interface{}); ok {
+			return bt
+		}
+	}
+	if bt, ok := dev["bridge_table"].([]interface{}); ok {
+		return bt
+	}
+	return nil
+}
+
+func bridgePortString(entry map[string]interface{}) string {
+	switch v := entry["port"].(type) {
+	case string:
+		return strings.TrimSpace(v)
+	case float64:
+		return fmt.Sprintf("%.0f", v)
+	default:
+		return ""
+	}
+}
+
 func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 	siteID := r.PathValue("site_id")
 	if siteID == "" {
@@ -182,7 +212,10 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	edgeCounter := 0
-	// 3. Process each router
+	nodeTypes := make(map[string]string, len(allDevices))
+	peerPorts := make(map[string]map[string]string, len(allDevices))
+
+	// 3. Process each router: nodes, WAN edges, bridge-table observations, and wireless clients
 	for _, dev := range allDevices {
 		devMAC := dev["_id"].(string)
 
@@ -207,6 +240,7 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 		if isGatewayRole(deviceRole) || isGatewayRole(roleMeta[devMAC]) || hasTelemetryWAN(dev) {
 			nodeType = "gateway"
 		}
+		nodeTypes[devMAC] = nodeType
 
 		// Add the router node
 		graph.Nodes[devMAC] = GraphNode{
@@ -248,36 +282,22 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		// Wired Links via BridgeTable
-		var brTable []interface{}
-		if neighborStats, ok := dev["neighbor_stats"].(map[string]interface{}); ok {
-			if bt, ok := neighborStats["bridge_table"].([]interface{}); ok {
-				brTable = bt
-			}
-		} else if bt, ok := dev["bridge_table"].([]interface{}); ok {
-			brTable = bt
-		}
-
-		if len(brTable) > 0 {
+		// Record remote router MACs seen on each bridge port for pass 2 wired inference
+		if brTable := extractBridgeTable(dev); len(brTable) > 0 {
+			ports := make(map[string]string)
 			for _, entry := range brTable {
-				if brEntry, ok := entry.(map[string]interface{}); ok {
-					childMAC, okMac := brEntry["mac"].(string)
-					childMAC = strings.ToLower(childMAC)
-					isLocal, _ := brEntry["is_local"].(string) // "no" means it's learned passing through
-					if okMac && knownRouters[childMAC] && childMAC != strings.ToLower(devMAC) && isLocal == "no" {
-						linkMeta := metadataLinks[strings.ToLower(devMAC)+"->"+childMAC]
-						edgeID := fmt.Sprintf("edge%d", edgeCounter)
-						edgeCounter++
-						graph.Edges[edgeID] = GraphEdge{
-							Source: strings.ToLower(devMAC),
-							Target: childMAC,
-							Type:   "wired",
-							Label:  linkMeta.label,
-							Speed:  linkMeta.speed,
-						}
-					}
+				brEntry, ok := entry.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				childMAC, okMac := brEntry["mac"].(string)
+				childMAC = strings.ToLower(strings.TrimSpace(childMAC))
+				isLocal, _ := brEntry["is_local"].(string)
+				if okMac && knownRouters[childMAC] && childMAC != devMAC && isLocal == "no" {
+					ports[childMAC] = bridgePortString(brEntry)
 				}
 			}
+			peerPorts[devMAC] = ports
 		}
 
 		// Wireless Links via WirelessStations
@@ -317,13 +337,124 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+
+	// 4. Resolve wired links (deduplicated undirected pairs).
+	// Declared physical links in topology_metadata.links are authoritative for the
+	// nodes they cover; bridge_table inference fills in undeclared nodes while
+	// suppressing transitive L2 sibling links learned behind an uplink port.
+	wiredPairs := make(map[string]bool)
+	declaredWiredNodes := make(map[string]bool)
+	addWiredEdge := func(edgePrefix, src, dst, label, speed string) {
+		if src == "" || dst == "" || src == dst {
+			return
+		}
+		pairKey := undirectedPairKey(src, dst)
+		if wiredPairs[pairKey] {
+			return
+		}
+		wiredPairs[pairKey] = true
+		edgeCounter++
+		graph.Edges[fmt.Sprintf("%s%d", edgePrefix, edgeCounter)] = GraphEdge{
+			Source: src,
+			Target: dst,
+			Type:   "wired",
+			Label:  label,
+			Speed:  speed,
+		}
+	}
+
 	for _, link := range metadata.Links {
-		if link.Source == "" || link.Target == "" {
+		src := strings.ToLower(strings.TrimSpace(link.Source))
+		dst := strings.ToLower(strings.TrimSpace(link.Target))
+		if src == "" || dst == "" || src == dst {
 			continue
 		}
-		graph.Edges[fmt.Sprintf("metadata%d", edgeCounter)] = GraphEdge{Source: strings.ToLower(link.Source), Target: strings.ToLower(link.Target), Type: "wired", Label: link.Label, Speed: link.Speed}
-		edgeCounter++
+		declaredWiredNodes[src] = true
+		declaredWiredNodes[dst] = true
+		addWiredEdge("metadata", src, dst, link.Label, link.Speed)
 	}
+
+	hasGateway := false
+	for _, role := range nodeTypes {
+		if role == "gateway" {
+			hasGateway = true
+			break
+		}
+	}
+
+	if hasGateway {
+		// Identify downstream daisy-chained APs seen on a non-uplink port of another AP.
+		downstreamParent := make(map[string]string)
+		for _, dev := range allDevices {
+			devMAC := dev["_id"].(string)
+			if nodeTypes[devMAC] == "gateway" {
+				continue
+			}
+			ports := peerPorts[devMAC]
+			if len(ports) == 0 {
+				continue
+			}
+			uplinkPorts := make(map[string]bool)
+			for peerMAC, port := range ports {
+				if nodeTypes[peerMAC] == "gateway" && port != "" {
+					uplinkPorts[port] = true
+				}
+			}
+			for peerMAC, port := range ports {
+				if nodeTypes[peerMAC] == "gateway" {
+					continue
+				}
+				if declaredWiredNodes[devMAC] && declaredWiredNodes[peerMAC] {
+					continue
+				}
+				// If this AP sees a gateway on the same bridge port as peerMAC,
+				// peerMAC is reachable transitively via the uplink, not directly cabled.
+				if port == "" || uplinkPorts[port] {
+					continue
+				}
+				linkMeta := metadataLinks[devMAC+"->"+peerMAC]
+				addWiredEdge("edge", devMAC, peerMAC, linkMeta.label, linkMeta.speed)
+				if _, exists := downstreamParent[peerMAC]; !exists {
+					downstreamParent[peerMAC] = devMAC
+				}
+			}
+		}
+
+		// Connect gateways to directly attached routers, skipping grandchildren that
+		// already attach behind a downstream AP on the same gateway bridge port.
+		for _, dev := range allDevices {
+			gwMAC := dev["_id"].(string)
+			if nodeTypes[gwMAC] != "gateway" {
+				continue
+			}
+			gwPorts := peerPorts[gwMAC]
+			for peerMAC, gwPort := range gwPorts {
+				if declaredWiredNodes[gwMAC] && declaredWiredNodes[peerMAC] {
+					continue
+				}
+				if parentAP, ok := downstreamParent[peerMAC]; ok {
+					if parentPort, hasParent := gwPorts[parentAP]; hasParent && parentPort == gwPort {
+						continue
+					}
+				}
+				linkMeta := metadataLinks[gwMAC+"->"+peerMAC]
+				addWiredEdge("edge", gwMAC, peerMAC, linkMeta.label, linkMeta.speed)
+			}
+		}
+	} else {
+		// Fallback when no gateway is identified: deduplicate bridge_table edges.
+		for _, dev := range allDevices {
+			devMAC := dev["_id"].(string)
+			for peerMAC := range peerPorts[devMAC] {
+				if declaredWiredNodes[devMAC] && declaredWiredNodes[peerMAC] {
+					continue
+				}
+				linkMeta := metadataLinks[devMAC+"->"+peerMAC]
+				addWiredEdge("edge", devMAC, peerMAC, linkMeta.label, linkMeta.speed)
+			}
+		}
+	}
+
 	if graph.Metadata == nil {
 		graph.Metadata = map[string]interface{}{}
 	}
