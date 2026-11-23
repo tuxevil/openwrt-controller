@@ -192,6 +192,19 @@ var sentinelToolRegistry = newSentinelToolRegistry([]sentinelRegisteredTool{
 		),
 		handler: sentinelGetRecentChangesTool,
 	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"lookup_mac_vendor", "observability",
+			"Offline IEEE OUI vendor lookup for a MAC address or 3-octet OUI prefix; also detects locally administered / randomized MAC addresses.",
+			SentinelToolScopeTenant, SentinelToolCostLow, 1000, 6,
+			map[string]SentinelToolSchemaProperty{
+				"mac":     sentinelStringProperty("MAC address or 3-octet OUI prefix (e.g. 90:39:5f:2f:c9:7f or 3E:FB:EF)", "", 32),
+				"site_id": sentinelStringProperty("Optional site scope", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "Offline IEEE OUI vendor lookup result and locally-administered flag.", AdditionalProperties: true},
+		),
+		handler: sentinelLookupMACVendorTool,
+	},
 })
 
 func sentinelToolDescriptor(name, category, description string, scope SentinelToolScope, cost SentinelToolCostHint, timeoutMillis, maxCalls int, inputProperties map[string]SentinelToolSchemaProperty, output SentinelToolSchema) SentinelToolDescriptor {
@@ -409,12 +422,12 @@ func validateSentinelArguments(schema SentinelToolSchema, args map[string]interf
 }
 
 func (r *SentinelToolRegistry) Execute(parent context.Context, call SentinelToolCall) (interface{}, error) {
-	if database.DB == nil {
-		return nil, fmt.Errorf("database is unavailable")
-	}
 	tool, ok := r.tools[call.Name]
 	if !ok {
 		return nil, fmt.Errorf("unsupported sentinel tool %q", call.Name)
+	}
+	if database.DB == nil && call.Name != "lookup_mac_vendor" {
+		return nil, fmt.Errorf("database is unavailable")
 	}
 	args, err := decodeSentinelToolArguments(call.Arguments)
 	if err != nil {
@@ -622,6 +635,14 @@ func sentinelGetDeviceStatusTool(ctx context.Context, invocation sentinelToolInv
 func sentinelGetSiteClientsTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
 	siteID, _ := invocation.Args["site_id"].(string)
 	return getSentinelSiteClientsContext(ctx, invocation.Schema, siteID, invocation.Limit)
+}
+
+func sentinelLookupMACVendorTool(_ context.Context, invocation sentinelToolInvocation) (interface{}, error) {
+	mac, _ := invocation.Args["mac"].(string)
+	if strings.TrimSpace(mac) == "" {
+		return nil, fmt.Errorf("mac is required")
+	}
+	return database.LookupMACVendor(mac), nil
 }
 
 func sentinelGetIncidentsTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
@@ -938,15 +959,22 @@ func getSentinelSiteClientsContext(ctx context.Context, schema, siteID string, l
 		trusted := identity.IsTrusted(now)
 		sources := clients[mac]
 		connType := classifySentinelClientConnection(sources)
+		vendorInfo := database.LookupMACVendor(mac)
 		entry := map[string]interface{}{
-			"mac":             mac,
-			"name":            identity.DisplayLabel(),
-			"ip":              identity.IP,
-			"uplink":          identity.UplinkLabel,
-			"connection_type": connType,
-			"active_wireless": connType == "wireless",
-			"observed_in":     sortedSentinelClientSources(sources),
-			"trusted":         trusted,
+			"mac":                  mac,
+			"name":                 identity.DisplayLabel(),
+			"ip":                   identity.IP,
+			"uplink":               identity.UplinkLabel,
+			"connection_type":      connType,
+			"active_wireless":      connType == "wireless",
+			"observed_in":          sortedSentinelClientSources(sources),
+			"trusted":              trusted,
+			"locally_administered": vendorInfo.LocallyAdministered,
+		}
+		if vendorInfo.Vendor != "" {
+			entry["vendor"] = vendorInfo.Vendor
+		} else if vendorInfo.LocallyAdministered {
+			entry["vendor_note"] = vendorInfo.Note
 		}
 		if identity.TrustLabel != "" {
 			entry["trust_label"] = identity.TrustLabel

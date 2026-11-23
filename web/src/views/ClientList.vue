@@ -66,7 +66,7 @@ const filteredClients = computed(() => {
     if (activeFilter.value === 'WEAK' && !isWeak(c.signal)) return false
     if (activeFilter.value === 'TRUSTED' && !c.trusted) return false
     if (!q) return true
-    const hay = [c.hostname, c.ip_address, c.mac, c.uplink_name, c.uplink, c.ssid]
+    const hay = [c.hostname, c.ip_address, c.mac, c.vendor, c.uplink_name, c.uplink, c.ssid]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()
@@ -430,6 +430,10 @@ async function untrustSelectedClient() {
             <div class="space-y-1">
               <label class="text-[10px] text-muted block">&gt; MAC_ADDR</label>
               <div class="font-mono text-sm text-white break-all">{{ selectedClient.mac }}</div>
+              <div v-if="selectedClient.vendor" class="text-[11px] text-neon-cyan">{{ selectedClient.vendor }}</div>
+              <div v-else-if="selectedClient.locally_administered" class="text-[11px] text-neon-amber">
+                Locally administered / randomized MAC
+              </div>
             </div>
             <div class="space-y-1">
               <label class="text-[10px] text-muted block">&gt; IP_ADDR</label>

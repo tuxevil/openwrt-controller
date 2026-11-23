@@ -33,8 +33,10 @@ type AggregatedClient struct {
 	RxPkts             int     `json:"rx_pkts"`
 	InactiveTime       int     `json:"inactive"`
 	ExpectedThroughput string  `json:"expected_throughput"`
-	ConnectionType     string  `json:"conn_type"`
-	Trusted            bool    `json:"trusted"`
+	ConnectionType      string  `json:"conn_type"`
+	Vendor              string  `json:"vendor,omitempty"`
+	LocallyAdministered bool    `json:"locally_administered,omitempty"`
+	Trusted             bool    `json:"trusted"`
 	TrustLabel         string  `json:"trust_label,omitempty"`
 	TrustReason        string  `json:"trust_reason,omitempty"`
 	TrustExpiresAt     string  `json:"trust_expires_at,omitempty"`
@@ -328,6 +330,9 @@ func GetClientsHandler(w http.ResponseWriter, r *http.Request) {
 				c.TrustExpiresAt = custom.expiresAt.Time.UTC().Format(time.RFC3339)
 			}
 		}
+		vendorInfo := database.LookupMACVendor(c.MAC)
+		c.Vendor = vendorInfo.Vendor
+		c.LocallyAdministered = vendorInfo.LocallyAdministered
 		clients = append(clients, *c)
 	}
 

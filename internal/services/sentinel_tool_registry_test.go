@@ -16,6 +16,7 @@ func TestSentinelToolRegistryContainsOnlyPhaseOneReadTools(t *testing.T) {
 		"get_recent_changes",
 		"get_site_clients",
 		"get_topology",
+		"lookup_mac_vendor",
 		"search_logs",
 	}
 	if len(descriptors) != len(want) {
@@ -149,5 +150,33 @@ func TestSentinelToolRegistryFailsClosedOnMutationEntry(t *testing.T) {
 	}()
 	if !deferredPanic {
 		t.Fatal("registry accepted a mutation-capable tool")
+	}
+}
+
+func TestSentinelLookupMACVendorToolOffline(t *testing.T) {
+	call := SentinelToolCall{
+		Name:      "lookup_mac_vendor",
+		Arguments: SentinelToolArgumentsWithSite(json.RawMessage(`{"mac":"90:39:5f:2f:c9:7f"}`), "tenant_demo", "site-1"),
+	}
+	res, err := executeSentinelToolContext(context.Background(), call)
+	if err != nil {
+		t.Fatalf("lookup_mac_vendor failed: %v", err)
+	}
+	encoded, _ := json.Marshal(res)
+	if !strings.Contains(string(encoded), "Amazon") {
+		t.Fatalf("expected Amazon vendor in result, got %s", string(encoded))
+	}
+
+	localCall := SentinelToolCall{
+		Name:      "lookup_mac_vendor",
+		Arguments: SentinelToolArgumentsWithSite(json.RawMessage(`{"mac":"3E:FB:EF:76:06:79"}`), "tenant_demo", "site-1"),
+	}
+	localRes, err := executeSentinelToolContext(context.Background(), localCall)
+	if err != nil {
+		t.Fatalf("lookup_mac_vendor(local) failed: %v", err)
+	}
+	localEncoded, _ := json.Marshal(localRes)
+	if !strings.Contains(string(localEncoded), `"locally_administered":true`) {
+		t.Fatalf("expected locally_administered=true, got %s", string(localEncoded))
 	}
 }
