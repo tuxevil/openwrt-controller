@@ -56,7 +56,7 @@ const runOptimize = async () => {
 const chartData = computed(() => {
   if (!result.value.clients) return { labels: [], datasets: [] }
   return {
-    labels: result.value.clients.map(c => c.mac.substring(9)), // short mac
+    labels: result.value.clients.map(c => c.hostname || (c.mac ? c.mac.substring(9) : 'unknown')),
     datasets: [{
       label: 'SNR (dB)',
       data: result.value.clients.map(c => c.snr),

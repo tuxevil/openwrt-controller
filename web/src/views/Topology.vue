@@ -108,7 +108,7 @@ function getEdgeMidpoint(edge) {
            <p><span class="text-muted">NAME:</span> <span class="text-white font-bold">{{ selectedNode.name }}</span></p>
            <p><span class="text-muted">MAC:</span> <span class="text-white">{{ selectedNode.id }}</span></p>
            <p><span class="text-muted">ROLE:</span> <span class="text-neon-cyan uppercase font-bold">{{ selectedNode.type }}</span></p>
-           <p v-if="selectedNode.hostname"><span class="text-muted">HOST:</span> <span class="text-white">{{ selectedNode.hostname }}</span></p>
+           <p v-if="selectedNode.hostname && selectedNode.hostname !== selectedNode.name"><span class="text-muted">HOST:</span> <span class="text-white">{{ selectedNode.hostname }}</span></p>
            <p v-if="['router', 'gateway', 'ap'].includes(selectedNode.type)"><span class="text-muted">CPU_LOAD:</span> <span class="text-neon-green">{{ selectedNode.cpu_load || 'N/A' }}</span></p>
            <div v-if="selectedNode.has_alert" class="text-neon-red font-bold glitch-anim mt-2">
               [!] OPEN_INCIDENT

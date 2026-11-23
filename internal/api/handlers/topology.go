@@ -180,7 +180,7 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Fetch custom hostnames
+	// Fetch custom hostnames (normalized MAC keys so DB uppercase matches telemetry lowercase)
 	customHostnames := make(map[string]string)
 	hRows, err := database.Tx(r.Context()).Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
 	if err == nil {
@@ -188,7 +188,10 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 		for hRows.Next() {
 			var m, h string
 			if err := hRows.Scan(&m, &h); err == nil {
-				customHostnames[m] = h
+				h = strings.TrimSpace(h)
+				if h != "" && h != "*" {
+					customHostnames[database.NormalizeMAC(m)] = h
+				}
 			}
 		}
 	}
@@ -202,8 +205,9 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 					if lease, ok := leaseRaw.(map[string]interface{}); ok {
 						mac, _ := lease["mac"].(string)
 						hostname, _ := lease["hostname"].(string)
+						hostname = strings.TrimSpace(hostname)
 						if mac != "" && hostname != "" && hostname != "*" {
-							dhcpHostnames[mac] = hostname
+							dhcpHostnames[database.NormalizeMAC(mac)] = hostname
 						}
 					}
 				}
@@ -309,17 +313,22 @@ func GetSiteTopologyHandler(w http.ResponseWriter, r *http.Request) {
 							clientMAC, okMac := cMap["mac"].(string)
 							if okMac {
 								if _, exists := graph.Nodes[clientMAC]; !exists {
+									normClientMAC := database.NormalizeMAC(clientMAC)
 									clientName := "CLIENT_" + clientMAC[len(clientMAC)-5:]
-									if name, ok := customHostnames[clientMAC]; ok && name != "" {
+									resolvedHost := ""
+									if name, ok := customHostnames[normClientMAC]; ok && name != "" {
 										clientName = name
-									} else if name, ok := dhcpHostnames[clientMAC]; ok && name != "" {
+										resolvedHost = name
+									} else if name, ok := dhcpHostnames[normClientMAC]; ok && name != "" {
 										clientName = name
+										resolvedHost = name
 									}
 
 									graph.Nodes[clientMAC] = GraphNode{
 										ID:       clientMAC,
 										Name:     clientName,
 										Type:     "client",
+										Hostname: resolvedHost,
 										HasAlert: false,
 									}
 								}

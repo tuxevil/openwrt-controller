@@ -58,14 +58,14 @@
       <!-- Top Talkers -->
       <div class="col-span-12 md:col-span-8 border border-gray-800 bg-gray-950 rounded-xl p-5 shadow-2xl overflow-hidden relative">
         <div class="absolute inset-x-0 bottom-0 h-px bg-gradient-to-r from-transparent via-rose-500/50 to-transparent"></div>
-        <h2 class="text-sm font-semibold text-gray-400 mb-4 tracking-wider uppercase">Top Talkers (MAC)</h2>
+        <h2 class="text-sm font-semibold text-gray-400 mb-4 tracking-wider uppercase">Top Talkers</h2>
         <div v-if="loading.talkers" class="h-56 flex items-center justify-center">
           <span class="animate-pulse text-rose-500 font-mono text-xs">Identifying targets...</span>
         </div>
         <div v-else class="space-y-3 h-56 overflow-y-auto pr-2 custom-scrollbar">
           <div v-for="(t, idx) in topTalkers" :key="t.mac" class="flex items-center text-sm font-mono relative group/row">
             <div class="w-8 text-gray-600 font-bold group-hover/row:text-rose-400 transition-colors">#{{idx + 1}}</div>
-            <div class="w-32 text-gray-300">{{t.mac}}</div>
+            <div class="w-44 truncate text-gray-200" :title="t.mac">{{ t.hostname || t.mac }}</div>
             <div class="flex-1 ml-4 relative h-1.5 bg-gray-900 rounded-full overflow-hidden">
               <div class="absolute inset-y-0 left-0 bg-rose-500/80 rounded-full" :style="{ width: getPercentage(t.bytes) + '%' }"></div>
             </div>

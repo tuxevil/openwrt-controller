@@ -37,9 +37,10 @@ func GetSiteFlowSenseHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// COALESCE(name, id) avoids NULL scan failures for unnamed devices
+	lookup := database.LoadSiteClientHostnameLookup(r.Context(), siteID)
+
 	rows, err := database.Tx(r.Context()).Query(`
-		SELECT id, COALESCE(name, id) AS device_name, state_json
+		SELECT id, COALESCE(name, ''), COALESCE(last_ip, ''), state_json
 		FROM devices
 		WHERE site_id = $1 AND state_json IS NOT NULL
 	`, siteID)
@@ -47,7 +48,28 @@ func GetSiteFlowSenseHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"db error"}`, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
+
+	type rawFlowDevice struct {
+		id     string
+		name   string
+		lastIP string
+		state  map[string]interface{}
+	}
+	var rawDevices []rawFlowDevice
+	for rows.Next() {
+		var id, name, lastIP string
+		var stateJSON []byte
+		if err := rows.Scan(&id, &name, &lastIP, &stateJSON); err != nil {
+			continue
+		}
+		var state map[string]interface{}
+		if err := json.Unmarshal(stateJSON, &state); err != nil {
+			state = nil
+		}
+		lookup.MergeDeviceState(id, name, lastIP, state)
+		rawDevices = append(rawDevices, rawFlowDevice{id: id, name: name, lastIP: lastIP, state: state})
+	}
+	rows.Close()
 
 	type FlowEntry map[string]interface{}
 	type DeviceFlows struct {
@@ -58,22 +80,17 @@ func GetSiteFlowSenseHandler(w http.ResponseWriter, r *http.Request) {
 
 	var result []DeviceFlows
 
-	for rows.Next() {
-		var id, name string
-		var stateJSON []byte
-		if err := rows.Scan(&id, &name, &stateJSON); err != nil {
+	for _, dev := range rawDevices {
+		namePtr := &dev.name
+		displayName := database.DeviceDisplayName(dev.id, namePtr, dev.state, lookup)
+		if dev.state == nil {
+			result = append(result, DeviceFlows{DeviceID: dev.id, DeviceName: displayName, Flows: []FlowEntry{}})
 			continue
 		}
 
-		var state map[string]interface{}
-		if err := json.Unmarshal(stateJSON, &state); err != nil {
-			result = append(result, DeviceFlows{DeviceID: id, DeviceName: name, Flows: []FlowEntry{}})
-			continue
-		}
-
-		rawFlows, ok := state["flow_sense"].([]interface{})
+		rawFlows, ok := dev.state["flow_sense"].([]interface{})
 		if !ok || len(rawFlows) == 0 {
-			result = append(result, DeviceFlows{DeviceID: id, DeviceName: name, Flows: []FlowEntry{}})
+			result = append(result, DeviceFlows{DeviceID: dev.id, DeviceName: displayName, Flows: []FlowEntry{}})
 			continue
 		}
 
@@ -88,6 +105,10 @@ func GetSiteFlowSenseHandler(w http.ResponseWriter, r *http.Request) {
 			dst := ""
 			if v, ok := m["dst"].(string); ok {
 				dst = v
+			}
+			sampleSrc := ""
+			if v, ok := m["sample_src"].(string); ok {
+				sampleSrc = v
 			}
 			dport := 0
 			if v, ok := m["dport"].(float64); ok {
@@ -124,9 +145,15 @@ func GetSiteFlowSenseHandler(w http.ResponseWriter, r *http.Request) {
 				"dst":        dst,
 				"dport":      dport,
 				"conns":      conns,
-				"sample_src": m["sample_src"],
+				"sample_src": sampleSrc,
 				"flagged":    flagged,
 				"reason":     reason,
+			}
+			if srcHost := lookup.Resolve(sampleSrc); srcHost != "" {
+				entry["sample_src_hostname"] = srcHost
+			}
+			if dstHost := lookup.Resolve(dst); dstHost != "" {
+				entry["dst_hostname"] = dstHost
 			}
 			flows = append(flows, entry)
 		}
@@ -135,7 +162,7 @@ func GetSiteFlowSenseHandler(w http.ResponseWriter, r *http.Request) {
 			flows = []FlowEntry{}
 		}
 
-		result = append(result, DeviceFlows{DeviceID: id, DeviceName: name, Flows: flows})
+		result = append(result, DeviceFlows{DeviceID: dev.id, DeviceName: displayName, Flows: flows})
 	}
 
 	if result == nil {

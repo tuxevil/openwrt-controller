@@ -103,27 +103,30 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	query := `SELECT id, name, state_json FROM devices WHERE site_id = $1`
+	lookup := database.LoadSiteClientHostnameLookup(r.Context(), siteID)
+
+	query := `SELECT id, name, COALESCE(last_ip, ''), state_json FROM devices WHERE site_id = $1`
 	rows, err := database.Tx(r.Context()).Query(query, siteID)
 	if err != nil {
 		http.Error(w, `{"error": "db error"}`, http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
 
-	var result []map[string]interface{}
+	type rawDeviceRow struct {
+		id     string
+		name   *string
+		lastIP string
+		state  map[string]interface{}
+	}
+	var devRows []rawDeviceRow
 	for rows.Next() {
 		var id string
 		var name *string // use pointer to handle NULL
+		var lastIP string
 		var stateJSON []byte
-		if err := rows.Scan(&id, &name, &stateJSON); err != nil {
+		if err := rows.Scan(&id, &name, &lastIP, &stateJSON); err != nil {
 			continue
 		}
-		devName := id // fallback to ID if no name
-		if name != nil && *name != "" {
-			devName = *name
-		}
-
 		var state map[string]interface{}
 		if len(stateJSON) > 0 {
 			if err := json.Unmarshal(stateJSON, &state); err != nil {
@@ -132,10 +135,32 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			state = map[string]interface{}{}
 		}
+		devName := ""
+		if name != nil {
+			devName = *name
+		}
+		lookup.MergeDeviceState(id, devName, lastIP, state)
+		devRows = append(devRows, rawDeviceRow{id: id, name: name, lastIP: lastIP, state: state})
+	}
+	rows.Close()
+
+	// Build MAC -> IP lookup from merged device states so clients carry ip_address when known
+	macToIP := make(map[string]string)
+	for ip, host := range lookup.ByIP {
+		for mac, mHost := range lookup.ByMAC {
+			if mHost == host && macToIP[mac] == "" {
+				macToIP[mac] = ip
+			}
+		}
+	}
+
+	var result []map[string]interface{}
+	for _, dev := range devRows {
+		devName := database.DeviceDisplayName(dev.id, dev.name, dev.state, lookup)
 
 		// Flatten wireless_stations into a client list
 		var clients []map[string]interface{}
-		if ws, ok := state["wireless_stations"].(map[string]interface{}); ok {
+		if ws, ok := dev.state["wireless_stations"].(map[string]interface{}); ok {
 			for iface, stList := range ws {
 				if stations, ok := stList.([]interface{}); ok {
 					for _, s := range stations {
@@ -145,6 +170,14 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 							}
 							for k, v := range sm {
 								entry[k] = v
+							}
+							if macStr, ok := entry["mac"].(string); ok && macStr != "" {
+								if h := lookup.ResolveMAC(macStr); h != "" {
+									entry["hostname"] = h
+								}
+								if ip := macToIP[database.NormalizeMAC(macStr)]; ip != "" {
+									entry["ip_address"] = ip
+								}
 							}
 							clients = append(clients, entry)
 						}
@@ -156,11 +189,34 @@ func BandwidthStatsHandler(w http.ResponseWriter, r *http.Request) {
 			clients = make([]map[string]interface{}, 0)
 		}
 
+		// Enrich top_talkers with hostnames when present
+		topTalkers := dev.state["top_talkers"]
+		if talkerList, ok := topTalkers.([]interface{}); ok {
+			enrichedTalkers := make([]interface{}, 0, len(talkerList))
+			for _, rawT := range talkerList {
+				if tm, ok := rawT.(map[string]interface{}); ok {
+					cp := make(map[string]interface{}, len(tm)+1)
+					for k, v := range tm {
+						cp[k] = v
+					}
+					if macStr, ok := cp["mac"].(string); ok && macStr != "" {
+						if h := lookup.Resolve(macStr); h != "" {
+							cp["hostname"] = h
+						}
+					}
+					enrichedTalkers = append(enrichedTalkers, cp)
+				} else {
+					enrichedTalkers = append(enrichedTalkers, rawT)
+				}
+			}
+			topTalkers = enrichedTalkers
+		}
+
 		devData := map[string]interface{}{
-			"device_id":        id,
+			"device_id":        dev.id,
 			"name":             devName,
-			"top_talkers":      state["top_talkers"],
-			"iface_stats":      state["iface_stats"],
+			"top_talkers":      topTalkers,
+			"iface_stats":      dev.state["iface_stats"],
 			"wireless_clients": clients,
 		}
 		result = append(result, devData)

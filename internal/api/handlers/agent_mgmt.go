@@ -307,7 +307,7 @@ func GetAgentVersionsStatusHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Device list with their current agent version
 	rows, err := database.DB.Query(`
-		SELECT d.id, d.name, s.id, s.name, d.agent_version, d.last_seen_at 
+		SELECT d.id, COALESCE(NULLIF(d.name, ''), NULLIF(d.state_json->'board'->>'hostname', ''), d.id), s.id, s.name, d.agent_version, d.last_seen_at 
 		FROM ` + schema + `.devices d
 		LEFT JOIN ` + schema + `.sites s ON d.site_id = s.id
 	`)

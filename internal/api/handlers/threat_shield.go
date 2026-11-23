@@ -131,7 +131,7 @@ func GetSiteThreatShieldHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Collect per-device drop stats
 	rows, _ := database.Tx(r.Context()).Query(`
-		SELECT id, COALESCE(name, id), COALESCE(threat_shield_drops, 0)
+		SELECT id, COALESCE(NULLIF(name, ''), NULLIF(state_json->'board'->>'hostname', ''), id), COALESCE(threat_shield_drops, 0)
 		FROM `+schema+`.devices
 		WHERE site_id = $1
 	`, siteID)

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -14,8 +15,9 @@ type SeriesPoint struct {
 }
 
 type TopTalkerData struct {
-	MAC   string `json:"mac"`
-	Bytes int64  `json:"bytes"`
+	MAC      string `json:"mac"`
+	Hostname string `json:"hostname,omitempty"`
+	Bytes    int64  `json:"bytes"`
 }
 
 type ProtocolData struct {
@@ -161,6 +163,25 @@ func GetTopTalkers(ctx context.Context, siteID, timeRange string) ([]TopTalkerDa
 		return nil, err
 	}
 
+	lookup := database.LoadSiteClientHostnameLookup(ctx, siteID)
+	if stateRows, err := database.Tx(ctx).Query(`
+		SELECT id, COALESCE(name, ''), COALESCE(last_ip, ''), state_json
+		FROM devices
+		WHERE site_id = $1 AND state_json IS NOT NULL
+	`, siteID); err == nil {
+		for stateRows.Next() {
+			var id, name, lastIP string
+			var stateJSON []byte
+			if scanErr := stateRows.Scan(&id, &name, &lastIP, &stateJSON); scanErr == nil && len(stateJSON) > 0 {
+				var state map[string]interface{}
+				if json.Unmarshal(stateJSON, &state) == nil {
+					lookup.MergeDeviceState(id, name, lastIP, state)
+				}
+			}
+		}
+		stateRows.Close()
+	}
+
 	var talkers []TopTalkerData
 	for result.Next() {
 		mac, ok := result.Record().ValueByKey("mac").(string)
@@ -176,8 +197,9 @@ func GetTopTalkers(ctx context.Context, siteID, timeRange string) ([]TopTalkerDa
 		}
 
 		talkers = append(talkers, TopTalkerData{
-			MAC:   mac,
-			Bytes: conns, // Temp using conns as bytes metric base
+			MAC:      mac,
+			Hostname: lookup.Resolve(mac),
+			Bytes:    conns, // Temp using conns as bytes metric base
 		})
 	}
 

@@ -88,7 +88,10 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 		for hRows.Next() {
 			var m, h string
 			if err := hRows.Scan(&m, &h); err == nil {
-				customHostnames[m] = h
+				h = strings.TrimSpace(h)
+				if h != "" && h != "*" {
+					customHostnames[database.NormalizeMAC(m)] = h
+				}
 			}
 		}
 	}
@@ -101,8 +104,9 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 					if lease, ok := leaseRaw.(map[string]interface{}); ok {
 						mac, _ := lease["mac"].(string)
 						hostname, _ := lease["hostname"].(string)
+						hostname = strings.TrimSpace(hostname)
 						if mac != "" && hostname != "" && hostname != "*" {
-							dhcpHostnames[mac] = hostname
+							dhcpHostnames[database.NormalizeMAC(mac)] = hostname
 						}
 					}
 				}
@@ -195,17 +199,22 @@ func GenerateEchoLocation(ctx context.Context, siteID string) (EchoGraph, error)
 							clientMAC, okMac := cMap["mac"].(string)
 							if okMac {
 								if _, exists := nodesMap[clientMAC]; !exists {
+									normClientMAC := database.NormalizeMAC(clientMAC)
 									clientName := "CLIENT_" + clientMAC[len(clientMAC)-5:]
-									if name, ok := customHostnames[clientMAC]; ok && name != "" {
+									resolvedHost := ""
+									if name, ok := customHostnames[normClientMAC]; ok && name != "" {
 										clientName = name
-									} else if name, ok := dhcpHostnames[clientMAC]; ok && name != "" {
+										resolvedHost = name
+									} else if name, ok := dhcpHostnames[normClientMAC]; ok && name != "" {
 										clientName = name
+										resolvedHost = name
 									}
 
 									nodesMap[clientMAC] = EchoNode{
 										ID:       clientMAC,
 										Name:     clientName,
 										Type:     "client",
+										Hostname: resolvedHost,
 										HasAlert: false,
 									}
 								}

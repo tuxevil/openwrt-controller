@@ -178,6 +178,7 @@ const devicesWithRates = computed(() => {
       return {
         ...c,
         mac,
+        hostname: c.hostname || ttRate.hostname || '',
         // Show actual throughput. DO NOT fallback to PHY link speed for actual traffic rates
         rate_rx: actualRx,
         rate_tx: actualTx,
@@ -190,7 +191,7 @@ const devicesWithRates = computed(() => {
   })
 })
 
-const currentLimitForm = ref({ mac: '', profileKbytes: 640, durationMin: 10, deviceId: '' })
+const currentLimitForm = ref({ mac: '', hostname: '', profileKbytes: 640, durationMin: 10, deviceId: '' })
 const showSniperModal = ref(false)
 const shaping = ref(false)
 const shapedMacs = ref([])
@@ -198,6 +199,7 @@ const shapedMacs = ref([])
 const openSniperModal = (device, client) => {
   currentLimitForm.value.deviceId = device.device_id
   currentLimitForm.value.mac = client.mac
+  currentLimitForm.value.hostname = client.hostname || ''
   currentLimitForm.value.profileKbytes = 640
   currentLimitForm.value.durationMin = 10
   showSniperModal.value = true
@@ -279,7 +281,7 @@ const clearSniper = async (device, client) => {
               <thead class="text-xs text-[#E4FF1A]/60 border-b border-[#E4FF1A]/20">
                 <tr>
                   <th class="py-2 pr-4">STATUS</th>
-                  <th class="py-2">MAC ADDRESS</th>
+                  <th class="py-2">CLIENT</th>
                   <th class="py-2">IFACE</th>
                   <th class="py-2 text-right">SIGNAL</th>
                   <th class="py-2 text-right">RX</th>
@@ -303,10 +305,14 @@ const clearSniper = async (device, client) => {
                     <span v-else class="text-xs text-[#39FF14]/60 border border-[#39FF14]/20 px-1 py-0.5">ONLINE</span>
                   </td>
 
-                  <!-- MAC -->
-                  <td class="py-3 font-bold flex items-center gap-2" :class="shapedMacs.includes(client.mac) ? 'text-[#DC143C]' : 'text-[#39FF14]'">
+                  <!-- Client Hostname (MAC/IP on hover) -->
+                  <td
+                    class="py-3 font-bold flex items-center gap-2"
+                    :class="shapedMacs.includes(client.mac) ? 'text-[#DC143C]' : 'text-[#39FF14]'"
+                    :title="client.ip_address ? `${client.mac} · ${client.ip_address}` : client.mac"
+                  >
                     <span v-if="shapedMacs.includes(client.mac)" title="Sniper Active">🎯</span>
-                    {{ client.mac }}
+                    <span>{{ client.hostname || client.mac }}</span>
                   </td>
 
                   <!-- Iface -->
@@ -360,7 +366,8 @@ const clearSniper = async (device, client) => {
       <div class="bg-[#0a0a0a] border border-[#DC143C] p-6 w-[420px] flex flex-col gap-4 shadow-[0_0_30px_rgba(220,20,60,0.4)]">
         <h2 class="text-xl text-[#DC143C] font-bold mb-1">&gt; 🎯 DEPLOY SNIPER SHAPER</h2>
         <div class="text-xs text-[#DC143C]/70 border border-[#DC143C]/20 bg-[#DC143C]/5 p-2">
-          TARGET: <span class="text-white font-bold">{{ currentLimitForm.mac }}</span>
+          TARGET: <span class="text-white font-bold">{{ currentLimitForm.hostname || currentLimitForm.mac }}</span>
+          <span v-if="currentLimitForm.hostname" class="text-[#DC143C]/60 ml-2">({{ currentLimitForm.mac }})</span>
         </div>
 
         <div class="flex flex-col gap-2">

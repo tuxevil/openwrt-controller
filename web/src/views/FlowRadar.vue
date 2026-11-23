@@ -120,7 +120,7 @@ onUnmounted(() => {
             <thead>
               <tr class="text-[10px] uppercase tracking-widest text-gray-600 border-b border-gray-800 bg-[#0a0a0a]">
                 <th class="px-3 py-2 text-left w-12">PROTO</th>
-                <th class="px-3 py-2 text-left">DST_IP</th>
+                <th class="px-3 py-2 text-left">DESTINATION</th>
                 <th class="px-3 py-2 text-left">PORT</th>
                 <th class="px-3 py-2 text-right w-16">CONNS</th>
                 <th class="px-3 py-2 text-left">SRC_CLIENT</th>
@@ -139,9 +139,9 @@ onUnmounted(() => {
                 <td class="px-3 py-1.5">
                   <span :class="protoColor(flow.proto)" class="font-bold uppercase">{{ flow.proto }}</span>
                 </td>
-                <td class="px-3 py-1.5">
+                <td class="px-3 py-1.5" :title="flow.dst">
                   <span :class="flow.flagged ? 'text-neon-red font-bold drop-shadow-[0_0_5px_#ff0041]' : 'text-gray-200'">
-                    {{ flow.dst }}
+                    {{ flow.dst_hostname || flow.dst }}
                   </span>
                 </td>
                 <td class="px-3 py-1.5">
@@ -152,7 +152,13 @@ onUnmounted(() => {
                 <td class="px-3 py-1.5 text-right font-bold" :class="flow.flagged ? 'text-neon-red' : 'text-gray-300'">
                   {{ flow.conns }}
                 </td>
-                <td class="px-3 py-1.5 text-gray-500 text-[10px]">{{ flow.sample_src || '—' }}</td>
+                <td
+                  class="px-3 py-1.5 text-[11px]"
+                  :class="flow.sample_src_hostname ? 'text-neon-cyan font-semibold' : 'text-gray-500 text-[10px]'"
+                  :title="flow.sample_src || ''"
+                >
+                  {{ flow.sample_src_hostname || flow.sample_src || '—' }}
+                </td>
                 <td class="px-3 py-1.5">
                   <span v-if="flow.flagged" class="text-neon-red font-bold text-[10px] tracking-widest drop-shadow-[0_0_5px_#ff0041]">
                     ⚠ {{ flow.reason }}

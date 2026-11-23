@@ -326,3 +326,62 @@ func TestGetSiteTopologyHandler_InfersStarAndDaisyChainWithoutMetadata(t *testin
 		t.Fatalf("expected exactly 3 wired edges (gw->ap2, gw->ap3, ap3->ap4), got %+v", seen)
 	}
 }
+
+func TestGetSiteTopologyResolvesCustomHostnameCaseInsensitive(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("sqlmock.New: %v", err)
+	}
+	origDB := database.DB
+	database.DB = db
+	t.Cleanup(func() {
+		database.DB = origDB
+		_ = db.Close()
+	})
+
+	const siteID = "site-host-1"
+	mock.ExpectQuery(`SELECT COALESCE\(topology_metadata`).
+		WithArgs(siteID).
+		WillReturnRows(sqlmock.NewRows([]string{"topology_metadata"}).AddRow([]byte(`{}`)))
+
+	gwState := `{"board":{"hostname":"mr8300"},"wireless_stations":{"phy0-ap0":[{"mac":"3c:28:6d:0f:85:db","signal":-50}]}}`
+	mock.ExpectQuery(`SELECT id, state_json`).
+		WithArgs(siteID).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "state_json", "device_role"}).
+			AddRow("e8:9f:80:14:69:c5", []byte(gwState), "Gateway"))
+
+	mock.ExpectQuery(`SELECT device_id FROM incidents`).
+		WithArgs(siteID).
+		WillReturnRows(sqlmock.NewRows([]string{"device_id"}))
+
+	// Stored uppercase in client_hostnames, reported lowercase in wireless_stations.
+	mock.ExpectQuery(`SELECT mac, hostname FROM client_hostnames`).
+		WithArgs(siteID).
+		WillReturnRows(sqlmock.NewRows([]string{"mac", "hostname"}).
+			AddRow("3C:28:6D:0F:85:DB", "pixel3"))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sites/"+siteID+"/topology", nil)
+	req.SetPathValue("site_id", siteID)
+	rec := httptest.NewRecorder()
+
+	GetSiteTopologyHandler(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body=%s)", rec.Code, rec.Body.String())
+	}
+
+	var resp struct {
+		Data TopologyGraph `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+
+	node, ok := resp.Data.Nodes["3c:28:6d:0f:85:db"]
+	if !ok {
+		t.Fatalf("expected client node 3c:28:6d:0f:85:db in topology, got %+v", resp.Data.Nodes)
+	}
+	if node.Name != "pixel3" || node.Hostname != "pixel3" {
+		t.Fatalf("client node = %+v, want Name=pixel3 Hostname=pixel3", node)
+	}
+}

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -395,4 +396,183 @@ func addNetworkTelemetryIdentities(directory map[string]NetworkIdentity, siteID,
 func identityMapString(values map[string]interface{}, key string) string {
 	value, _ := values[key].(string)
 	return strings.TrimSpace(value)
+}
+
+// SiteClientHostnameLookup maps normalized MAC addresses and IPv4 addresses
+// to operator-assigned or DHCP-reported hostnames within a site.
+type SiteClientHostnameLookup struct {
+	ByMAC map[string]string
+	ByIP  map[string]string
+}
+
+// NewSiteClientHostnameLookup returns an initialized empty lookup table.
+func NewSiteClientHostnameLookup() SiteClientHostnameLookup {
+	return SiteClientHostnameLookup{
+		ByMAC: make(map[string]string),
+		ByIP:  make(map[string]string),
+	}
+}
+
+// LoadSiteClientHostnameLookup loads custom client hostnames for a site using
+// the tenant-scoped transaction on ctx.
+func LoadSiteClientHostnameLookup(ctx context.Context, siteID string) SiteClientHostnameLookup {
+	lookup := NewSiteClientHostnameLookup()
+	if strings.TrimSpace(siteID) == "" {
+		return lookup
+	}
+	tx := Tx(ctx)
+	if tx == nil {
+		return lookup
+	}
+	rows, err := tx.Query("SELECT mac, hostname FROM client_hostnames WHERE site_id = $1", siteID)
+	if err != nil {
+		return lookup
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var mac, hostname string
+		if err := rows.Scan(&mac, &hostname); err != nil {
+			continue
+		}
+		hostname = strings.TrimSpace(hostname)
+		if hostname == "" || hostname == "*" {
+			continue
+		}
+		if key := NormalizeMAC(mac); key != "" {
+			lookup.ByMAC[key] = hostname
+		}
+	}
+	return lookup
+}
+
+// MergeDeviceState indexes node identity, DHCP leases, and ARP entries from a
+// device telemetry snapshot without overwriting custom operator hostnames.
+func (l *SiteClientHostnameLookup) MergeDeviceState(deviceID, deviceName, lastIP string, state map[string]interface{}) {
+	if l.ByMAC == nil {
+		l.ByMAC = make(map[string]string)
+	}
+	if l.ByIP == nil {
+		l.ByIP = make(map[string]string)
+	}
+
+	nodeName := strings.TrimSpace(deviceName)
+	if nodeName == "" && state != nil {
+		if board, ok := state["board"].(map[string]interface{}); ok {
+			nodeName = identityMapString(board, "hostname")
+		}
+	}
+	if key := NormalizeMAC(deviceID); key != "" {
+		if nodeName != "" && l.ByMAC[key] == "" {
+			l.ByMAC[key] = nodeName
+		}
+		if ip := strings.TrimSpace(lastIP); ip != "" {
+			if resolved := l.ByMAC[key]; resolved != "" && l.ByIP[ip] == "" {
+				l.ByIP[ip] = resolved
+			}
+		}
+	}
+
+	if state == nil {
+		return
+	}
+
+	if dhcpBlock, ok := state["dhcp"].(map[string]interface{}); ok {
+		if leases, ok := dhcpBlock["leases"].([]interface{}); ok {
+			for _, leaseRaw := range leases {
+				lease, ok := leaseRaw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				mac := NormalizeMAC(identityMapString(lease, "mac"))
+				ip := identityMapString(lease, "ip")
+				host := identityMapString(lease, "hostname")
+				if host == "*" {
+					host = ""
+				}
+				if mac != "" && host != "" && l.ByMAC[mac] == "" {
+					l.ByMAC[mac] = host
+				}
+				if ip != "" {
+					resolved := host
+					if mac != "" && l.ByMAC[mac] != "" {
+						resolved = l.ByMAC[mac]
+					}
+					if resolved != "" {
+						l.ByIP[ip] = resolved
+					}
+				}
+			}
+		}
+	}
+
+	var arpRaw interface{}
+	if ns, ok := state["neighbor_stats"].(map[string]interface{}); ok {
+		arpRaw = ns["arp_table"]
+	}
+	if arpRaw == nil {
+		arpRaw = state["arp_table"]
+	}
+	if entries, ok := arpRaw.([]interface{}); ok {
+		for _, entryRaw := range entries {
+			entry, ok := entryRaw.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			mac := NormalizeMAC(identityMapString(entry, "mac"))
+			ip := identityMapString(entry, "ip")
+			if mac != "" && ip != "" {
+				if resolved := l.ByMAC[mac]; resolved != "" {
+					l.ByIP[ip] = resolved
+				}
+			}
+		}
+	}
+}
+
+// ResolveMAC returns the hostname for a MAC address, if known.
+func (l SiteClientHostnameLookup) ResolveMAC(mac string) string {
+	key := NormalizeMAC(mac)
+	if key == "" {
+		return ""
+	}
+	return l.ByMAC[key]
+}
+
+// ResolveIP returns the hostname for an IPv4 address, if known.
+func (l SiteClientHostnameLookup) ResolveIP(ip string) string {
+	ip = strings.TrimSpace(ip)
+	if ip == "" {
+		return ""
+	}
+	return l.ByIP[ip]
+}
+
+// Resolve returns the hostname for either a MAC address or an IP address.
+func (l SiteClientHostnameLookup) Resolve(ref string) string {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return ""
+	}
+	if host := l.ResolveMAC(ref); host != "" {
+		return host
+	}
+	return l.ResolveIP(ref)
+}
+
+// DeviceDisplayName picks the most human-readable name for an OpenWrt node.
+func DeviceDisplayName(id string, name *string, state map[string]interface{}, lookup SiteClientHostnameLookup) string {
+	if name != nil && strings.TrimSpace(*name) != "" {
+		return strings.TrimSpace(*name)
+	}
+	if state != nil {
+		if board, ok := state["board"].(map[string]interface{}); ok {
+			if h := identityMapString(board, "hostname"); h != "" {
+				return h
+			}
+		}
+	}
+	if h := lookup.ResolveMAC(id); h != "" {
+		return h
+	}
+	return id
 }
