@@ -116,13 +116,23 @@ func TestCreateSentinelProposalRejectsUnknownManagedDevice(t *testing.T) {
 func TestSentinelPromptGuidesClientLogTroubleshootingAndLanguage(t *testing.T) {
 	for _, needle := range []string{
 		"Answer in the same language as the operator's question",
-		"ALWAYS inspect search_logs",
+		"inspect search_logs",
 		"DHCPDISCOVER/DHCPOFFER/DHCPREQUEST/DHCPACK",
 		"never put a client MAC",
+		"ALWAYS include the owning router/AP node hostname",
+		"never repeat an earlier answer about a different client",
 	} {
 		if !strings.Contains(sentinelAgentSystemPrompt, needle) {
 			t.Fatalf("sentinelAgentSystemPrompt missing guidance %q", needle)
 		}
+	}
+
+	if got := extractSentinelClientRefFromQuery("me gustaria identificar este cliente 10.128.128.219, que me puedes decir sobre el?"); got != "10.128.128.219" {
+		t.Fatalf("extractSentinelClientRefFromQuery(ip) = %q, want 10.128.128.219", got)
+	}
+	planWithIP := sentinelContextToolPlan("me gustaria identificar este cliente 10.128.128.219", SentinelCase{SiteID: "site-1"})
+	if len(planWithIP) == 0 || planWithIP[0] != "search_logs" {
+		t.Fatalf("planWithIP = %v, want search_logs first", planWithIP)
 	}
 
 	if got := sentinelResponseLanguageInstruction("por que este cliente no se esta pudiendo conectar? 3c:28:6d:0f:85:db"); !strings.Contains(got, "Spanish") {

@@ -557,7 +557,11 @@ func sentinelSearchLogsTool(ctx context.Context, invocation sentinelToolInvocati
 		if identity, ok := database.ResolveNetworkIdentity(identityDirectory, id); ok {
 			name = identity.DisplayLabel()
 		}
-		out = append(out, map[string]interface{}{"timestamp": timestamp.UTC().Format(time.RFC3339), "severity": level, "message": message, "message_human": database.AnnotateNetworkText(message, identityDirectory), "device_id": id, "device_name": name})
+		messageHuman := database.AnnotateNetworkText(message, identityDirectory)
+		if strings.TrimSpace(name) != "" {
+			messageHuman = fmt.Sprintf("[node=%s] %s", strings.TrimSpace(name), messageHuman)
+		}
+		out = append(out, map[string]interface{}{"timestamp": timestamp.UTC().Format(time.RFC3339), "severity": level, "message": message, "message_human": messageHuman, "device_id": id, "device_name": name})
 	}
 	return out, rows.Err()
 }

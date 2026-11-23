@@ -18,7 +18,10 @@ import (
 	"openwrt-controller/internal/database"
 )
 
-var sentinelQueryMACPattern = regexp.MustCompile(`(?i)\b([0-9a-f]{2}(?::[0-9a-f]{2}){5})\b`)
+var (
+	sentinelQueryMACPattern  = regexp.MustCompile(`(?i)\b([0-9a-f]{2}(?::[0-9a-f]{2}){5})\b`)
+	sentinelQueryIPv4Pattern = regexp.MustCompile(`\b((?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(?:\.(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3})\b`)
+)
 
 func extractSentinelMACFromQuery(query string) string {
 	match := sentinelQueryMACPattern.FindStringSubmatch(query)
@@ -26,6 +29,21 @@ func extractSentinelMACFromQuery(query string) string {
 		return ""
 	}
 	return strings.ToLower(match[1])
+}
+
+func extractSentinelIPFromQuery(query string) string {
+	match := sentinelQueryIPv4Pattern.FindStringSubmatch(query)
+	if len(match) < 2 {
+		return ""
+	}
+	return match[1]
+}
+
+func extractSentinelClientRefFromQuery(query string) string {
+	if mac := extractSentinelMACFromQuery(query); mac != "" {
+		return mac
+	}
+	return extractSentinelIPFromQuery(query)
 }
 
 // SentinelContextTrustClass describes provenance, not execution authority.
@@ -225,7 +243,7 @@ func PersistSentinelCaseEvidence(schema, caseID, runID, origin string, evidence 
 
 func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	normalized := normalizeSentinelQuery(strings.Join([]string{query, item.Source, item.Title}, " "))
-	targetMAC := extractSentinelMACFromQuery(query)
+	targetRef := extractSentinelClientRefFromQuery(query)
 	selected := map[string]bool{}
 	add := func(names ...string) {
 		for _, name := range names {
@@ -233,7 +251,7 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 		}
 	}
 
-	if targetMAC != "" {
+	if targetRef != "" {
 		add("search_logs", "get_site_clients", "get_device_status", "get_incidents")
 	}
 	if isSentinelHardwareQuery(normalized) {
@@ -282,7 +300,7 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	}
 
 	order := []string{"get_device_status", "get_site_clients", "get_incidents", "get_recent_changes", "get_topology", "search_logs"}
-	if targetMAC != "" || (item.SiteID != "" && sentinelRoamingQuery(normalized)) {
+	if targetRef != "" || (item.SiteID != "" && sentinelRoamingQuery(normalized)) {
 		add("search_logs")
 		order = append([]string{"search_logs"}, order[:len(order)-1]...)
 	}
@@ -431,9 +449,9 @@ func CompileSentinelCaseContext(ctx context.Context, schema, caseID string, hist
 		}
 		originalArgs := sentinelContextToolArguments(toolName, item)
 		if toolName == "search_logs" {
-			if targetMAC := extractSentinelMACFromQuery(query); targetMAC != "" {
+			if targetRef := extractSentinelClientRefFromQuery(query); targetRef != "" {
 				args, _ := decodeSentinelToolArguments(originalArgs)
-				args["query"] = targetMAC
+				args["query"] = targetRef
 				args["limit"] = 25
 				originalArgs = sentinelJSONData(args)
 			} else if item.SiteID != "" && sentinelRoamingQuery(normalizeSentinelQuery(query+" "+item.Title)) {
