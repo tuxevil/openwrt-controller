@@ -126,3 +126,21 @@ func TestSentinelNativeRetriesMalformedFinalAnswerOnce(t *testing.T) {
 		t.Fatalf("expected recovery from plain prose final answer: reqs=%d tok=%d turn=%+v err=%v", requests, tokens, turn, err)
 	}
 }
+
+func TestSentinelNativeAcceptsCleanPlainProseAfterRetry(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"content":"No puedo ejecutar comandos del sistema operativo ni apagar el Wi-Fi."}}],"usage":{"total_tokens":12}}`)
+	}))
+	defer server.Close()
+	c := sentinelNativeConversation{
+		route:    SentinelModelRoute{BaseURL: server.URL, Model: "test", ToolMode: "native_tools"},
+		messages: []aiChatMessage{{Role: "user", Content: "Apaga el Wi-Fi"}},
+		callIDs:  make(map[string]bool),
+	}
+	turn, _, tokens, err := c.next(t.Context(), 1)
+	if err != nil || requests != 2 || tokens != 24 || turn.Message != "No puedo ejecutar comandos del sistema operativo ni apagar el Wi-Fi." || len(turn.ToolCalls) != 0 || turn.Proposal != nil {
+		t.Fatalf("expected clean plain prose acceptance after retry: reqs=%d tok=%d turn=%+v err=%v", requests, tokens, turn, err)
+	}
+}

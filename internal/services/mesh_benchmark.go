@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"openwrt-controller/internal/database"
@@ -182,31 +183,43 @@ func RunNodeBenchmark(ctx context.Context, deviceID, deviceName, targetIP string
 	res.LatencyMs = MeasurePingLatency(targetIP)
 
 	// 2. Start iperf3 server daemon on the node
-	_ = executeRemoteSSH(targetIP, "killall iperf3 2>/dev/null || true; iperf3 -s -D")
+	_ = executeRemoteSSH(targetIP, "killall iperf3 2>/dev/null || true; iperf3 -s -D >/dev/null 2>&1 </dev/null")
 	defer func() {
 		_ = executeRemoteSSH(targetIP, "killall iperf3 2>/dev/null || true")
 	}()
 
-	// Wait up to 3 seconds for port 5201 to accept connections
+	// Wait up to 3 seconds for port 5201 to accept connections, then allow iperf3 -s
+	// a brief moment to reset after closing the readiness probe socket.
 	for i := 0; i < 6; i++ {
 		conn, err := net.DialTimeout("tcp", targetIP+":5201", 500*time.Millisecond)
 		if err == nil {
 			conn.Close()
+			time.Sleep(350 * time.Millisecond)
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	// 3. Run controller-side client test (3 seconds, JSON output)
-	cmd := exec.CommandContext(ctx, "iperf3", "-c", targetIP, "-t", "3", "-J")
+	// 3. Run controller-side client test (3 seconds, JSON output) with 1 retry on transient busy
 	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	err := cmd.Run()
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		stdout.Reset()
+		stderr.Reset()
+		cmd := exec.CommandContext(ctx, "iperf3", "-c", targetIP, "-t", "3", "-J")
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err = cmd.Run()
+		if err == nil {
+			break
+		}
+		if attempt == 0 {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
 	if err != nil {
 		res.Status = "ERROR"
-		res.Error = fmt.Sprintf("iperf3 failed: %v, %s", err, stderr.String())
+		res.Error = fmt.Sprintf("iperf3 failed: %v, %s", err, strings.TrimSpace(stderr.String()))
 		res.Assessment = "Unable to complete throughput test."
 		return res
 	}

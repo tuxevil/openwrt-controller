@@ -153,10 +153,18 @@ func (c *sentinelNativeConversation) normalize(reply aiCompletion, remaining int
 			return sentinelAssistantTurn{}, errSentinelTextualNativeCall
 		}
 		if err != nil {
-			// If the model emitted plain prose (no tool_calls), allow a single
-			// format-recovery retry before failing.
-			if !strings.Contains(choice.Message.Content, `"tool_calls"`) {
-				return sentinelAssistantTurn{}, errSentinelMalformedFinal
+			trimmed := strings.TrimSpace(choice.Message.Content)
+			if trimmed != "" && !strings.Contains(trimmed, `"tool_calls"`) {
+				// First attempt: ask once to reformat into JSON.
+				if !c.retried {
+					return sentinelAssistantTurn{}, errSentinelMalformedFinal
+				}
+				// After retry, if the model still returned clean plain prose (no
+				// embedded JSON/tool_calls/proposals), accept it as the final
+				// message instead of failing with HTTP 502.
+				if !strings.HasPrefix(trimmed, "{") && !strings.Contains(trimmed, `"proposal"`) {
+					return sentinelAssistantTurn{Message: trimmed}, nil
+				}
 			}
 		}
 		return turn, err
