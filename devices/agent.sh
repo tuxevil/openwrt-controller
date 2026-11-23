@@ -1755,6 +1755,58 @@ collect_recent_logs() {
     rm -f "$log_file"
 }
 
+wireless_snapshot_local_macfilters() {
+    local snapshot_file="$1"
+    local us
+    local iface_sec
+    local iface_dev
+    local iface_ssid
+    local iface_filter
+    local iface_list
+
+    us=$(printf '\037')
+    : > "$snapshot_file"
+    for iface_sec in $(uci -q show wireless 2>/dev/null | awk -F'[.=]' '/=wifi-iface$/ {print $2}'); do
+        iface_dev=$(uci -q get "wireless.${iface_sec}.device" 2>/dev/null || true)
+        iface_ssid=$(uci -q get "wireless.${iface_sec}.ssid" 2>/dev/null || true)
+        iface_filter=$(uci -q get "wireless.${iface_sec}.macfilter" 2>/dev/null || true)
+        iface_list=$(uci -q get "wireless.${iface_sec}.maclist" 2>/dev/null || true)
+        if [ -n "$iface_dev" ] && [ -n "$iface_ssid" ] && { [ -n "$iface_filter" ] || [ -n "$iface_list" ]; }; then
+            printf '%s%s%s%s%s%s%s\n' "$iface_dev" "$us" "$iface_ssid" "$us" "$iface_filter" "$us" "$iface_list" >> "$snapshot_file"
+        fi
+    done
+}
+
+wireless_restore_local_macfilter() {
+    local snapshot_file="$1"
+    local target_sec="$2"
+    local target_dev="$3"
+    local target_ssid="$4"
+    local us
+    local saved_dev
+    local saved_ssid
+    local saved_filter
+    local saved_list
+    local saved_mac
+
+    [ -s "$snapshot_file" ] || return 0
+    us=$(printf '\037')
+    while IFS="$us" read -r saved_dev saved_ssid saved_filter saved_list; do
+        if [ "$saved_dev" = "$target_dev" ] && [ "$saved_ssid" = "$target_ssid" ]; then
+            if [ -n "$saved_filter" ]; then
+                uci set "wireless.${target_sec}.macfilter=$saved_filter"
+            fi
+            if [ -n "$saved_list" ]; then
+                for saved_mac in $saved_list; do
+                    uci add_list "wireless.${target_sec}.maclist=$saved_mac"
+                done
+            fi
+            return 0
+        fi
+    done < "$snapshot_file"
+    return 0
+}
+
 if [ "${1:-}" = "--self-test-signature" ]; then
     [ "$#" -eq 4 ] || exit 1
     verify_agent_artifact "$2" "$3" "$4"
@@ -1828,6 +1880,15 @@ fi
 if [ "${1:-}" = "--self-test-log-collection" ]; then
     collect_recent_logs
     exit 0
+fi
+
+if [ "${1:-}" = "--self-test-wireless-macfilter" ]; then
+    [ "$#" -eq 4 ] || exit 1
+    MACFILTER_TEST_SNAPSHOT="/tmp/nerve-agent-macfilter-test.$$"
+    trap 'rm -f "$MACFILTER_TEST_SNAPSHOT"' EXIT
+    wireless_snapshot_local_macfilters "$MACFILTER_TEST_SNAPSHOT"
+    wireless_restore_local_macfilter "$MACFILTER_TEST_SNAPSHOT" "$2" "$3" "$4"
+    exit $?
 fi
 
 if [ "${1:-}" = "--recover-transactions" ]; then
@@ -2429,6 +2490,9 @@ EOF
                 else
                 (
                 set -e
+                MACFILTER_SNAPSHOT="/tmp/nerve-agent-macfilter.$$"
+                trap 'rm -f "$MACFILTER_SNAPSHOT"' EXIT
+                wireless_snapshot_local_macfilters "$MACFILTER_SNAPSHOT"
                 while uci -q delete wireless.@wifi-iface[0]; do :; done
                 for CFG in $(uci show wireless | grep -o 'wireless\.cfg_radio[0-9]_[0-9]*' | cut -d. -f2 | sort -u); do uci delete wireless.$CFG; done
                 
@@ -2519,6 +2583,7 @@ EOF
                                 uci set wireless.$SECTION.time_advertisement='2'
                                 uci set wireless.$SECTION.time_zone='<-05>5'
                             fi
+                            wireless_restore_local_macfilter "$MACFILTER_SNAPSHOT" "$SECTION" "$RADIO" "$W_SSID"
                         fi
                         i=$((i+1))
                     done

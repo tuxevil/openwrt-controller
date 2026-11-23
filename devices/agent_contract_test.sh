@@ -71,7 +71,7 @@ if [ -z "$PAYLOAD_LINE" ] || [ -z "$NEIGHBOR_DEFAULT_LINE" ] || [ "$NEIGHBOR_DEF
     exit 1
 fi
 RUNTIME_PREFLIGHT_LINE=$(awk '/Runtime configuration or device identity is missing/ {print NR; exit}' "$AGENT")
-for self_test in --self-test-signature --self-test-transaction --self-test-operation --self-test-change-set --self-test-status --self-test-change-set-transition --self-test-runtime-config --self-test-log-collection; do
+for self_test in --self-test-signature --self-test-transaction --self-test-operation --self-test-change-set --self-test-status --self-test-change-set-transition --self-test-runtime-config --self-test-log-collection --self-test-wireless-macfilter; do
     SELF_TEST_LINE=$(awk -v flag="$self_test" 'index($0, flag) {print NR; exit}' "$AGENT")
     if [ -z "$RUNTIME_PREFLIGHT_LINE" ] || [ -z "$SELF_TEST_LINE" ] || [ "$SELF_TEST_LINE" -ge "$RUNTIME_PREFLIGHT_LINE" ]; then
         echo "$self_test must dispatch before runtime preflight" >&2

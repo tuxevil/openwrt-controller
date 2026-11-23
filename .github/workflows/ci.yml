@@ -178,6 +178,8 @@ jobs:
           devices/agent_log_collection_test.sh
           devices/agent_change_set_test.sh
           devices/agent_transaction_test.sh
+          devices/agent_wireless_optional_test.sh
+          devices/agent_wireless_macfilter_test.sh
 
   # ────────────────────────────────────────────────────────────────────
   # Docker image build (no push by default; tag-and-push lives in the
