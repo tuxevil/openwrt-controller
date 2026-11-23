@@ -295,3 +295,15 @@ func TestCompactSentinelDeviceStateStripsBloatAndPreservesRadios(t *testing.T) {
 		}
 	}
 }
+
+func TestSentinelLooksLikeUnexecutedProbeNarration(t *testing.T) {
+	if !sentinelLooksLikeUnexecutedProbeNarration("Ejecutando prueba iperf3 contra el dispositivo wndr3800.") {
+		t.Fatal("expected narration to be detected")
+	}
+	if !sentinelLooksLikeUnexecutedProbeNarration("Se ha iniciado la prueba iperf3. Por favor, espere un momento.") {
+		t.Fatal("expected wait narration to be detected")
+	}
+	if sentinelLooksLikeUnexecutedProbeNarration("No puedo ejecutar comandos del sistema operativo como cat /etc/passwd.") {
+		t.Fatal("refusal must NOT trigger probe nudge")
+	}
+}

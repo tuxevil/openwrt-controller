@@ -403,10 +403,10 @@ var sentinelToolRegistry = newSentinelToolRegistry([]sentinelRegisteredTool{
 			d := sentinelToolDescriptor(
 				"run_iperf3_test", "diagnostics",
 				"Run a synchronous 3-second iperf3 speed benchmark between the controller and a managed OpenWrt router, returning throughput_mbps, retransmits, and latency_ms.",
-				SentinelToolScopeSite, SentinelToolCostHigh, 20000, 1,
+				SentinelToolScopeTenant, SentinelToolCostHigh, 20000, 1,
 				map[string]SentinelToolSchemaProperty{
 					"device_id": sentinelStringProperty("Managed router name (e.g. wndr3800, uapmesh, mr8300), MAC, or IP to benchmark", "", 128),
-					"site_id":   sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+					"site_id":   sentinelStringProperty("Optional site identifier", "sentinel_identifier", 128),
 				},
 				SentinelToolSchema{Type: "object", Description: "iperf3 throughput_mbps, retransmits, and latency_ms benchmark result.", AdditionalProperties: true},
 			)

@@ -1745,7 +1745,7 @@ func sentinelRunIperf3TestTool(ctx context.Context, invocation sentinelToolInvoc
 	sentinelIperfLastRun[cooldownKey] = now
 	sentinelIperfCooldownMu.Unlock()
 
-	bench := RunNodeBenchmark(ctx, dev.ID, devName, dev.LastIP, LinkBaseline{})
+	bench := RunNodeBenchmark(ctx, dev.ID, devName, dev.LastIP, GetBaselineForDevice(dev.ID, dev.LastIP))
 	return map[string]interface{}{
 		"device_id":       bench.DeviceID,
 		"device_name":     bench.DeviceName,

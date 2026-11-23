@@ -137,6 +137,30 @@ func appendSentinelCaseEvidencePrompt(prompt *strings.Builder, toolName, encoded
 // The system prompt remains static and privileged. All dynamic Case data,
 // conversation history, prior evidence, telemetry, and tool results are
 // serialized as explicitly data-only JSON below that boundary.
+func sentinelLooksLikeUnexecutedProbeNarration(message string) bool {
+	norm := normalizeSentinelQuery(message)
+	if norm == "" {
+		return false
+	}
+	// Never nudge when the model explicitly refused an unsafe/disallowed request.
+	for _, refusal := range []string{"no puedo", "cannot", "can not", "not allowed", "no permitido", "ignorado", "rechazado"} {
+		if strings.Contains(norm, refusal) {
+			return false
+		}
+	}
+	for _, phrase := range []string{
+		"ejecutando", "se ha iniciado", "iniciando la prueba", "he iniciado",
+		"por favor espere", "espere un momento", "please wait", "running the test",
+		"starting the test", "he ejecutado un ping", "he ejecutado el test",
+		"llamare a", "voy a ejecutar", "procedo a ejecutar",
+	} {
+		if strings.Contains(norm, phrase) {
+			return true
+		}
+	}
+	return false
+}
+
 func runSentinelInvestigationForCase(parent context.Context, schema, caseID string, history []SentinelStoredMessage, query, siteID string) (result SentinelInvestigationResult, runErr error) {
 	started := time.Now()
 	defer func() {
@@ -189,6 +213,8 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 	// bounded even when a prefetch attempt fails and produces no evidence row.
 	modelToolLimit := sentinelMaxToolCalls - sentinelCaseContextToolReserve
 	modelToolCalls := 0
+	probeNudged := false
+	isActiveProbe := isSentinelActiveProbeQuery(normalizeSentinelQuery(query))
 	observedCalls := make(map[string]bool)
 	native := newSentinelNativeConversation(reasoningClass, prompt.String(), langDirective)
 
@@ -221,6 +247,14 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 		if err != nil {
 			result.StopReason = "model_error"
 			return result, err
+		}
+		if len(envelope.ToolCalls) == 0 && native != nil && isActiveProbe && modelToolCalls == 0 && !probeNudged && sentinelLooksLikeUnexecutedProbeNarration(envelope.Message) {
+			probeNudged = true
+			native.messages = append(native.messages, aiChatMessage{
+				Role:    "user",
+				Content: "You narrated running a probe without invoking any tool function. Call the requested native tool function (such as run_iperf3_test, ping_host, dns_lookup, probe_tcp_port, or traceroute_host) now to execute it and return the real measurements.",
+			})
+			continue
 		}
 		if envelope.Message != "" {
 			result.Answer = redactSentinelSecrets(strings.TrimSpace(envelope.Message))
