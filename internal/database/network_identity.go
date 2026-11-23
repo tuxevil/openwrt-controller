@@ -8,6 +8,7 @@ import (
 	"net"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -192,9 +193,13 @@ func LoadNetworkIdentityDirectory(schema, siteID string) (map[string]NetworkIden
 		if scanErr := manualRows.Scan(&mac, &rowSite, &hostname, &trusted, &trustLabel, &trustReason, &expires); scanErr != nil {
 			continue
 		}
+		trimmedRef := strings.TrimSpace(mac)
 		identity := NetworkIdentity{
-			SiteID: rowSite, MAC: NormalizeMAC(mac), Kind: "client", Label: strings.TrimSpace(trustLabel),
+			SiteID: rowSite, MAC: NormalizeMAC(trimmedRef), Kind: "client", Label: strings.TrimSpace(trustLabel),
 			Hostname: strings.TrimSpace(hostname), Manual: true, Trusted: trusted, TrustReason: strings.TrimSpace(trustReason),
+		}
+		if net.ParseIP(trimmedRef) != nil {
+			identity.IP = trimmedRef
 		}
 		if expires.Valid {
 			value := expires.Time
@@ -438,7 +443,11 @@ func LoadSiteClientHostnameLookup(ctx context.Context, siteID string) SiteClient
 		if hostname == "" || hostname == "*" {
 			continue
 		}
-		if key := NormalizeMAC(mac); key != "" {
+		trimmedRef := strings.TrimSpace(mac)
+		if net.ParseIP(trimmedRef) != nil {
+			lookup.ByIP[trimmedRef] = hostname
+		}
+		if key := NormalizeMAC(trimmedRef); key != "" {
 			lookup.ByMAC[key] = hostname
 		}
 	}
@@ -575,4 +584,92 @@ func DeviceDisplayName(id string, name *string, state map[string]interface{}, lo
 		return h
 	}
 	return id
+}
+
+var (
+	dhcpHostnameSyncMu   sync.Mutex
+	dhcpHostnameSyncSeen = map[string]string{}
+)
+
+// ExtractDHCPHostnameMap extracts canonical MAC -> hostname pairs from a device
+// telemetry payload's dhcp.leases array, ignoring empty or wildcard names.
+func ExtractDHCPHostnameMap(state map[string]interface{}) map[string]string {
+	out := make(map[string]string)
+	if state == nil {
+		return out
+	}
+	dhcpBlock, ok := state["dhcp"].(map[string]interface{})
+	if !ok {
+		return out
+	}
+	leases, ok := dhcpBlock["leases"].([]interface{})
+	if !ok {
+		return out
+	}
+	for _, leaseRaw := range leases {
+		lease, ok := leaseRaw.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		rawMAC := identityMapString(lease, "mac")
+		host := identityMapString(lease, "hostname")
+		if rawMAC == "" || host == "" || host == "*" {
+			continue
+		}
+		parsed, err := net.ParseMAC(rawMAC)
+		if err != nil || len(parsed) != 6 {
+			continue
+		}
+		out[strings.ToUpper(parsed.String())] = host
+	}
+	return out
+}
+
+// SyncDHCPHostnamesFromState persists newly discovered DHCP client hostnames
+// into client_hostnames without overwriting existing operator-defined names.
+func SyncDHCPHostnamesFromState(schema, siteID string, state map[string]interface{}) {
+	if DB == nil || strings.TrimSpace(siteID) == "" {
+		return
+	}
+	safeSchema, err := SafeSchemaIdent(schema)
+	if err != nil {
+		return
+	}
+	discovered := ExtractDHCPHostnameMap(state)
+	if len(discovered) == 0 {
+		return
+	}
+
+	pending := make(map[string]string)
+	dhcpHostnameSyncMu.Lock()
+	for mac, host := range discovered {
+		cacheKey := safeSchema + "|" + siteID + "|" + mac
+		if dhcpHostnameSyncSeen[cacheKey] != host {
+			pending[mac] = host
+		}
+	}
+	dhcpHostnameSyncMu.Unlock()
+
+	if len(pending) == 0 {
+		return
+	}
+
+	// #nosec G201 -- safeSchema is validated by SafeSchemaIdent; values are parameterized.
+	query := fmt.Sprintf(`
+		INSERT INTO %s.client_hostnames (mac, site_id, hostname, updated_at)
+		VALUES ($1, $2, $3, CURRENT_TIMESTAMP)
+		ON CONFLICT (mac) DO UPDATE SET
+			hostname = EXCLUDED.hostname,
+			updated_at = CURRENT_TIMESTAMP
+		WHERE NULLIF(%s.client_hostnames.hostname, '') IS NULL
+	`, safeSchema, safeSchema)
+
+	for mac, host := range pending {
+		if _, err := DB.Exec(query, mac, siteID, host); err != nil {
+			continue
+		}
+		dhcpHostnameSyncMu.Lock()
+		dhcpHostnameSyncSeen[safeSchema+"|"+siteID+"|"+mac] = host
+		dhcpHostnameSyncMu.Unlock()
+	}
 }

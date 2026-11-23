@@ -430,10 +430,13 @@ func TelemetryHandler(w http.ResponseWriter, r *http.Request) {
 		}(deviceID, parsedLogs, tenantSchema)
 	}
 
-	// 4. The Signal (Alerts Evaluation)
+	// 4. The Signal (Alerts Evaluation) & DHCP Hostname Auto-Sync
 	var sID string
 	_ = database.Tx(r.Context()).QueryRow("SELECT site_id FROM "+tenantSchema+".devices WHERE id = $1", deviceID).Scan(&sID)
 	go services.ProcessTelemetry(tenantSchema, deviceID, sID, metrics)
+	if sID != "" {
+		go database.SyncDHCPHostnamesFromState(tenantSchema, sID, raw)
+	}
 
 	// 5. FLOW_SENSE — process conntrack snapshot
 	if rawFlows, ok := raw["flow_sense"].([]interface{}); ok && len(rawFlows) > 0 {
