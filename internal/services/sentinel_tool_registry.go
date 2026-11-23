@@ -804,7 +804,7 @@ func compactSentinelDeviceState(raw []byte, identityDirectory map[string]databas
 	// Strip high-volume telemetry blobs that have dedicated tools
 	// (search_logs, get_site_clients, get_flow_summary, get_dhcp_leases)
 	// so all managed nodes fit comfortably without hitting truncation.
-	for _, drop := range []string{"logs", "arp_table", "bridge_table", "neighbor_stats", "flow_sense", "top_talkers"} {
+	for _, drop := range []string{"logs", "arp_table", "bridge_table", "neighbor_stats", "neighbor_aps", "flow_sense", "top_talkers"} {
 		delete(state, drop)
 	}
 	if dhcp, ok := state["dhcp"].(map[string]interface{}); ok {
@@ -887,13 +887,15 @@ func sentinelGetDeviceStatusTool(ctx context.Context, invocation sentinelToolInv
 	identityDirectory, _ := database.LoadNetworkIdentityDirectory(schema, siteID)
 	out := []map[string]interface{}{}
 	for rows.Next() {
-		var id, name, model, status, lastIP string
+		var id string
+		var nameNS, modelNS, statusNS, lastIPNS sql.NullString
 		var lastSeen sql.NullTime
 		var state, capabilities []byte
 		var desired, observed, successful int64
-		if err := rows.Scan(&id, &name, &model, &status, &lastSeen, &lastIP, &state, &capabilities, &desired, &observed, &successful); err != nil {
+		if err := rows.Scan(&id, &nameNS, &modelNS, &statusNS, &lastSeen, &lastIPNS, &state, &capabilities, &desired, &observed, &successful); err != nil {
 			continue
 		}
+		name, model, status, lastIP := nameNS.String, modelNS.String, statusNS.String, lastIPNS.String
 		displayName := name
 		if identity, ok := database.ResolveNetworkIdentity(identityDirectory, id); ok {
 			displayName = identity.DisplayLabel()
@@ -1077,13 +1079,14 @@ func sentinelGetRecentChangesTool(ctx context.Context, invocation sentinelToolIn
 	defer rows.Close()
 	out := []map[string]interface{}{}
 	for rows.Next() {
-		var id, name, status string
+		var id string
+		var nameNS, statusNS sql.NullString
 		var rolloutAt sql.NullTime
 		var desired, observed, successful int64
-		if err := rows.Scan(&id, &name, &status, &rolloutAt, &desired, &observed, &successful); err != nil {
+		if err := rows.Scan(&id, &nameNS, &statusNS, &rolloutAt, &desired, &observed, &successful); err != nil {
 			continue
 		}
-		out = append(out, map[string]interface{}{"id": id, "name": name, "last_rollout_status": status, "last_rollout_at": nullableTime(rolloutAt), "desired_generation": desired, "observed_generation": observed, "last_successful_generation": successful})
+		out = append(out, map[string]interface{}{"id": id, "name": nameNS.String, "last_rollout_status": statusNS.String, "last_rollout_at": nullableTime(rolloutAt), "desired_generation": desired, "observed_generation": observed, "last_successful_generation": successful})
 	}
 	return out, rows.Err()
 }
