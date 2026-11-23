@@ -104,3 +104,25 @@ func TestSentinelNativeRetriesTextualCallOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestSentinelNativeRetriesMalformedFinalAnswerOnce(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"content":"El cliente pixel3 está conectado en mr8300."}}],"usage":{"total_tokens":15}}`)
+			return
+		}
+		fmt.Fprint(w, `{"choices":[{"finish_reason":"stop","message":{"content":"{\"message\":\"El cliente pixel3 está conectado en mr8300.\",\"proposal\":null}"}}],"usage":{"total_tokens":20}}`)
+	}))
+	defer server.Close()
+	c := sentinelNativeConversation{
+		route:    SentinelModelRoute{BaseURL: server.URL, Model: "test", ToolMode: "native_tools"},
+		messages: []aiChatMessage{{Role: "user", Content: "Identifica pixel3"}},
+		callIDs:  make(map[string]bool),
+	}
+	turn, _, tokens, err := c.next(t.Context(), 1)
+	if err != nil || requests != 2 || tokens != 35 || turn.Message != "El cliente pixel3 está conectado en mr8300." {
+		t.Fatalf("expected recovery from plain prose final answer: reqs=%d tok=%d turn=%+v err=%v", requests, tokens, turn, err)
+	}
+}

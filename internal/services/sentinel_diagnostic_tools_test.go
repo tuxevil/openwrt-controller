@@ -148,12 +148,21 @@ func TestParseWANLiveStatusParsesWireGuardAndMwan3AndResolvesVPS(t *testing.T) {
 		"balanced:\n" +
 		" wan (100%)\n" +
 		"wanb_only:\n" +
-		" unreachable\n"
+		" unreachable\n" +
+		"---STARLINK_DISH---\n" +
+		"2 packets transmitted, 2 packets received, 0% packet loss\n" +
+		"round-trip min/avg/max = 1.333/1.356/1.380 ms\n" +
+		"---WAN_POP---\n" +
+		"2 packets transmitted, 2 packets received, 0% packet loss\n" +
+		"round-trip min/avg/max = 25.427/27.862/30.298 ms\n"
 
 	lookup := database.NewSiteClientHostnameLookup()
 	lookup.ByIP["10.128.129.1"] = "vps"
 
-	wg, mwan := parseWANLiveStatus(raw, now, lookup)
+	wg, mwan, sl := parseWANLiveStatus(raw, now, lookup)
+	if sl["available"] != true || sl["health_rating"] != "OPTIMAL" || sl["dish_rtt_ms"] != 1.36 || sl["pop_rtt_ms"] != 27.86 {
+		t.Fatalf("unexpected live starlink probe: %#v", sl)
+	}
 	if wg["peer_count"] != 1 {
 		t.Fatalf("wg peer_count = %#v", wg)
 	}

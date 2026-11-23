@@ -100,7 +100,10 @@ func sentinelNativeCatalog() []map[string]any {
 	return tools
 }
 
-var errSentinelTextualNativeCall = errors.New("native model returned textual tool calls")
+var (
+	errSentinelTextualNativeCall = errors.New("native model returned textual tool calls")
+	errSentinelMalformedFinal    = errors.New("native model returned non-JSON final answer")
+)
 
 func (c *sentinelNativeConversation) next(ctx context.Context, remaining int) (sentinelAssistantTurn, string, int, error) {
 	payload := map[string]any{"model": c.route.Model, "messages": c.messages, "tools": sentinelNativeCatalog()}
@@ -122,15 +125,20 @@ func (c *sentinelNativeConversation) next(ctx context.Context, remaining int) (s
 		tokens += reply.Usage.TotalTokens
 		turn, err := c.normalize(reply, remaining)
 		logSentinelNativeTurn(c.route, reply, time.Since(start), len(turn.ToolCalls), err != nil)
-		if !errors.Is(err, errSentinelTextualNativeCall) || c.retried || c.requests >= sentinelMaxRounds {
+		retryable := errors.Is(err, errSentinelTextualNativeCall) || errors.Is(err, errSentinelMalformedFinal)
+		if !retryable || c.retried || c.requests >= sentinelMaxRounds {
 			return turn, c.route.Model, tokens, err
 		}
 
 		// The rejected response never enters the transcript or reaches the registry.
 		c.retried = true
-		correction := aiChatMessage{Role: "user", Content: "Reformat the previous response. Request evidence through the native functions, or return only a final JSON object with message and no textual tool_calls."}
+		correctionText := "Reformat the previous response. Request evidence through the native functions, or return only a final JSON object with message and no textual tool_calls."
+		if errors.Is(err, errSentinelMalformedFinal) {
+			correctionText = "Return ONLY a valid JSON object {\"message\":\"...\",\"proposal\":null} with no extra text or markdown fences outside the JSON."
+		}
+		correction := aiChatMessage{Role: "user", Content: correctionText}
 		payload["messages"] = append(append([]aiChatMessage(nil), c.messages...), correction)
-		slog.Info("Sentinel retrying textual tool response", "route", c.route.Class, "request", c.requests)
+		slog.Info("Sentinel retrying native response format", "route", c.route.Class, "request", c.requests, "reason", err.Error())
 	}
 }
 
@@ -143,6 +151,13 @@ func (c *sentinelNativeConversation) normalize(reply aiCompletion, remaining int
 		turn, err := parseSentinelEnvelope(choice.Message.Content)
 		if err == nil && len(turn.ToolCalls) != 0 {
 			return sentinelAssistantTurn{}, errSentinelTextualNativeCall
+		}
+		if err != nil {
+			// If the model emitted plain prose (no tool_calls), allow a single
+			// format-recovery retry before failing.
+			if !strings.Contains(choice.Message.Content, `"tool_calls"`) {
+				return sentinelAssistantTurn{}, errSentinelMalformedFinal
+			}
 		}
 		return turn, err
 	}

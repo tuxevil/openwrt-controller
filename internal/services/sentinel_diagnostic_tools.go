@@ -879,8 +879,53 @@ func queryStarlinkHealthLive(ctx context.Context, siteID string) map[string]inte
 	}
 }
 
-func parseWANLiveStatus(raw string, now time.Time, lookup database.SiteClientHostnameLookup) (map[string]interface{}, map[string]interface{}) {
-	parts := strings.SplitN(raw, "---MWAN3---", 2)
+func parseWANLiveStatus(raw string, now time.Time, lookup database.SiteClientHostnameLookup) (map[string]interface{}, map[string]interface{}, map[string]interface{}) {
+	// Split optional Starlink / WAN live ping sections from the end
+	starlinkProbe := map[string]interface{}{"available": false}
+	mainPart := raw
+	if idx := strings.Index(mainPart, "---STARLINK_DISH---"); idx >= 0 {
+		probeTail := mainPart[idx+len("---STARLINK_DISH---"):]
+		mainPart = mainPart[:idx]
+		dishPart := probeTail
+		popPart := ""
+		if pIdx := strings.Index(probeTail, "---WAN_POP---"); pIdx >= 0 {
+			dishPart = probeTail[:pIdx]
+			popPart = probeTail[pIdx+len("---WAN_POP---"):]
+		}
+		dishStats := parsePingSummary(dishPart)
+		popStats := parsePingSummary(popPart)
+		dishOK, _ := dishStats["reachable"].(bool)
+		popOK, _ := popStats["reachable"].(bool)
+		if dishOK || popOK {
+			dishRTT, _ := dishStats["avg_ms"].(float64)
+			popRTT, _ := popStats["avg_ms"].(float64)
+			loss, _ := popStats["packet_loss_pct"].(float64)
+			status := "ONLINE"
+			rating := "SATISFACTORY"
+			if !popOK {
+				status = "DEGRADED"
+				rating = "DEGRADED"
+			} else if dishOK && dishRTT < 5.0 && popRTT < 55.0 && loss == 0 {
+				rating = "OPTIMAL"
+			}
+			starlinkProbe = map[string]interface{}{
+				"available":       true,
+				"source":          "live_gateway_probe",
+				"dish_ip":         "192.168.100.1",
+				"dish_reachable":  dishOK,
+				"dish_rtt_ms":     mathRound2(dishRTT),
+				"pop_target":      "1.1.1.1",
+				"pop_reachable":   popOK,
+				"pop_rtt_ms":      mathRound2(popRTT),
+				"packet_loss_pct": mathRound2(loss),
+				"status":          status,
+				"health_rating":   rating,
+				"last_sampled_at": now.UTC().Format(time.RFC3339),
+			}
+		}
+	}
+
+	parts := strings.SplitN(mainPart, "---MWAN3---", 2)
 	wgPart := parts[0]
 	mwanPart := ""
 	if len(parts) == 2 {
@@ -1010,7 +1055,7 @@ func parseWANLiveStatus(raw string, now time.Time, lookup database.SiteClientHos
 		"ipv4_policies": mwanPolicies,
 	}
 
-	return wgSummary, mwanSummary
+	return wgSummary, mwanSummary, starlinkProbe
 }
 
 func sentinelGetWANHealthTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
@@ -1021,7 +1066,10 @@ func sentinelGetWANHealthTool(ctx context.Context, invocation sentinelToolInvoca
 	}
 
 	// Never transmit WireGuard private_key ($2 on NF==5) or preshared_key ($3 on NF>=9).
-	const wanLiveCmd = `wg show all dump 2>/dev/null | awk -F'\t' 'NF==5{print "WG_IFACE\t"$1"\t"$4"\t"$5} NF>=9{print "WG_PEER\t"$1"\t"substr($2,1,12)"\t"$4"\t"$5"\t"$6"\t"$7"\t"$8"\t"$9}'; echo '---MWAN3---'; mwan3 status 2>/dev/null | head -n 45`
+	const wanLiveCmd = `wg show all dump 2>/dev/null | awk -F'\t' 'NF==5{print "WG_IFACE\t"$1"\t"$4"\t"$5} NF>=9{print "WG_PEER\t"$1"\t"substr($2,1,12)"\t"$4"\t"$5"\t"$6"\t"$7"\t"$8"\t"$9}'; echo '---MWAN3---'; mwan3 status 2>/dev/null | head -n 45; echo '---STARLINK_DISH---'; ping -c 2 -W 1 192.168.100.1 2>/dev/null || true; echo '---WAN_POP---'; ping -c 2 -W 1 1.1.1.1 2>/dev/null || true`
+
+	starlinkLive := queryStarlinkHealthLive(ctx, siteID)
+	starlinkAvailable, _ := starlinkLive["available"].(bool)
 
 	gateways := []map[string]interface{}{}
 	for _, dev := range devices {
@@ -1043,9 +1091,15 @@ func sentinelGetWANHealthTool(ctx context.Context, invocation sentinelToolInvoca
 			"system":      dev.State["system"],
 		}
 		if out, sshErr := orchestrator.ExecuteCommandWithOutput(invocation.Schema, dev.ID, wanLiveCmd); sshErr == nil {
-			wgLive, mwanLive := parseWANLiveStatus(out, time.Now(), lookup)
+			wgLive, mwanLive, slProbe := parseWANLiveStatus(out, time.Now(), lookup)
 			gw["wireguard_live"] = wgLive
 			gw["mwan3_live"] = mwanLive
+			if !starlinkAvailable {
+				if ok, _ := slProbe["available"].(bool); ok {
+					starlinkLive = slProbe
+					starlinkAvailable = true
+				}
+			}
 		} else {
 			gw["live_probe_error"] = sshErr.Error()
 		}
@@ -1054,7 +1108,7 @@ func sentinelGetWANHealthTool(ctx context.Context, invocation sentinelToolInvoca
 
 	return map[string]interface{}{
 		"site_id":       siteID,
-		"starlink_live": queryStarlinkHealthLive(ctx, siteID),
+		"starlink_live": starlinkLive,
 		"gateway_count": len(gateways),
 		"gateways":      gateways,
 	}, nil
@@ -1202,14 +1256,21 @@ func parseUCIFirewallSummary(raw string, lookup database.SiteClientHostnameLooku
 		}
 	}
 
+	pfSummary := fmt.Sprintf("%d WAN-to-LAN port forwards (DNAT redirects) configured", len(portForwards))
+	if len(portForwards) == 0 {
+		pfSummary = "NONE (0 exposed WAN-to-LAN port forwards / DNAT redirects configured)"
+	}
+
 	return map[string]interface{}{
-		"defaults":           defaults,
-		"zones":              zones,
-		"forwardings":        forwardings,
-		"port_forward_count": len(portForwards),
-		"port_forwards":      portForwards,
-		"rule_count":         len(rules),
-		"rules":              rules,
+		"defaults":                      defaults,
+		"zones":                         zones,
+		"forwardings":                   forwardings,
+		"port_forward_count":            len(portForwards),
+		"exposed_port_forwards_summary": pfSummary,
+		"port_forwards":                 portForwards,
+		"rule_count":                    len(rules),
+		"builtin_and_filter_rules":      rules,
+		"note":                          "port_forwards are actual WAN->LAN exposed DNAT port forwards. builtin_and_filter_rules (such as Allow-DHCP-Renew UDP 68, Allow-DHCPv6 UDP 546, Allow-Ping, Allow-IPSec) are standard OpenWrt router filter rules, NOT exposed LAN port forwards.",
 	}
 }
 
