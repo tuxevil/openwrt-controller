@@ -137,24 +137,13 @@ func appendSentinelCaseEvidencePrompt(prompt *strings.Builder, toolName, encoded
 // The system prompt remains static and privileged. All dynamic Case data,
 // conversation history, prior evidence, telemetry, and tool results are
 // serialized as explicitly data-only JSON below that boundary.
-func sentinelLooksLikeUnexecutedProbeNarration(message string) bool {
+func sentinelLooksLikeRefusal(message string) bool {
 	norm := normalizeSentinelQuery(message)
 	if norm == "" {
 		return false
 	}
-	// Never nudge when the model explicitly refused an unsafe/disallowed request.
-	for _, refusal := range []string{"no puedo", "cannot", "can not", "not allowed", "no permitido", "ignorado", "rechazado"} {
+	for _, refusal := range []string{"no puedo", "cannot", "can not", "not allowed", "no permitido", "ignorado", "rechazado", "no existe una herramienta"} {
 		if strings.Contains(norm, refusal) {
-			return false
-		}
-	}
-	for _, phrase := range []string{
-		"ejecutando", "se ha iniciado", "iniciando la prueba", "he iniciado",
-		"por favor espere", "espere un momento", "please wait", "running the test",
-		"starting the test", "he ejecutado un ping", "he ejecutado el test",
-		"llamare a", "voy a ejecutar", "procedo a ejecutar",
-	} {
-		if strings.Contains(norm, phrase) {
 			return true
 		}
 	}
@@ -248,11 +237,11 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 			result.StopReason = "model_error"
 			return result, err
 		}
-		if len(envelope.ToolCalls) == 0 && native != nil && isActiveProbe && modelToolCalls == 0 && !probeNudged && sentinelLooksLikeUnexecutedProbeNarration(envelope.Message) {
+		if len(envelope.ToolCalls) == 0 && native != nil && isActiveProbe && modelToolCalls == 0 && !probeNudged && !sentinelLooksLikeRefusal(envelope.Message) {
 			probeNudged = true
 			native.messages = append(native.messages, aiChatMessage{
 				Role:    "user",
-				Content: "You narrated running a probe without invoking any tool function. Call the requested native tool function (such as run_iperf3_test, ping_host, dns_lookup, probe_tcp_port, or traceroute_host) now to execute it and return the real measurements.",
+				Content: "You have NOT executed any active probe tool yet. Do NOT fabricate numbers or narrate running a test. Invoke the requested native tool function (run_iperf3_test, ping_host, dns_lookup, probe_tcp_port, traceroute_host, or lookup_mac_vendor) right now to get real measurements.",
 			})
 			continue
 		}
