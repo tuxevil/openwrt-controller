@@ -241,9 +241,43 @@ func PersistSentinelCaseEvidence(schema, caseID, runID, origin string, evidence 
 	return refs, nil
 }
 
+func isSentinelActiveProbeQuery(normalized string) bool {
+	for _, phrase := range []string{"puerto tcp", "tcp port"} {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	for _, term := range []string{
+		"ping", "ping_host", "traceroute", "traceroute_host", "traza",
+		"dns_lookup", "nslookup", "dig", "probe_tcp_port",
+		"iperf", "iperf3", "run_iperf3_test", "lookup_mac_vendor",
+	} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSentinelWiFiConfigQuery(normalized string) bool {
+	for _, phrase := range []string{"configuracion wifi", "config wifi", "wifi config", "wireless config", "configuracion inalambrica"} {
+		if strings.Contains(normalized, phrase) {
+			return true
+		}
+	}
+	for _, term := range []string{"htmode", "macfilter", "maclist", "vht80", "vht40", "ht40", "bssid", "txpower"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			return true
+		}
+	}
+	return false
+}
+
 func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	normalized := normalizeSentinelQuery(strings.Join([]string{query, item.Source, item.Title}, " "))
 	targetRef := extractSentinelClientRefFromQuery(query)
+	activeProbe := isSentinelActiveProbeQuery(normalized)
+	wifiConfig := isSentinelWiFiConfigQuery(normalized)
 	selected := map[string]bool{}
 	add := func(names ...string) {
 		for _, name := range names {
@@ -251,11 +285,22 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 		}
 	}
 
+	if activeProbe {
+		// Keep prefetched context lean for active probes (ping, dns_lookup,
+		// probe_tcp_port, traceroute, iperf3, lookup_mac_vendor) so the model
+		// invokes the native tool cleanly with accurate node names/IPs.
+		add("get_device_status")
+		return []string{"get_device_status"}
+	}
+
 	if targetRef != "" {
 		add("search_logs", "get_client_diagnostics", "get_site_clients", "get_device_status")
 	}
 	if isSentinelHardwareQuery(normalized) {
 		add("get_device_status")
+	}
+	if wifiConfig {
+		add("get_wifi_config_summary")
 	}
 	hasClientTerm := false
 	for _, term := range []string{"client", "clients", "cliente", "clientes", "station", "stations", "endpoint", "endpoints"} {
@@ -274,10 +319,15 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 			break
 		}
 	}
-	for _, term := range []string{"bandwidth", "ancho", "velocidad", "consumo", "throughput", "talker", "talkers", "sniper", "shaping"} {
-		if sentinelQueryContainsTerm(normalized, term) {
+	if !wifiConfig {
+		for _, term := range []string{"bandwidth", "consumo", "throughput", "talker", "talkers", "sniper", "shaping", "limitacion"} {
+			if sentinelQueryContainsTerm(normalized, term) {
+				add("get_bandwidth_stats")
+				break
+			}
+		}
+		if strings.Contains(normalized, "ancho de banda") {
 			add("get_bandwidth_stats")
-			break
 		}
 	}
 	for _, term := range []string{"flow", "flows", "flujo", "flujos", "conntrack", "trafico", "traffic", "p2p", "torrent"} {
@@ -311,13 +361,13 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 		}
 	}
 	if isSentinelAdGuardConfigured() {
-		for _, term := range []string{"adguard", "adguardhome", "querylog", "bloqueado", "bloqueados", "bloqueo", "bloqueos", "blocked", "dominio", "dominios", "domain", "domains", "filtro", "filtros", "dns"} {
+		for _, term := range []string{"adguard", "adguardhome", "querylog", "bloqueado", "bloqueados", "bloqueo", "bloqueos", "bloqueando", "blocked", "dominio", "dominios", "domain", "domains", "filtro", "filtros", "dns"} {
 			if sentinelQueryContainsTerm(normalized, term) {
 				add("get_adguard_stats")
 				break
 			}
 		}
-		for _, term := range []string{"querylog", "bloqueado", "bloqueados", "blocked", "consultas", "queries", "filtro", "filtros"} {
+		for _, term := range []string{"querylog", "bloqueo", "bloqueado", "bloqueados", "bloqueando", "blocked", "consultas", "queries", "filtro", "filtros", "reciente", "recientemente"} {
 			if sentinelQueryContainsTerm(normalized, term) {
 				add("get_adguard_querylog")
 				break
@@ -350,7 +400,7 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	}
 
 	order := []string{
-		"get_client_diagnostics", "get_adguard_stats", "get_adguard_querylog",
+		"get_client_diagnostics", "get_wifi_config_summary", "get_adguard_stats", "get_adguard_querylog",
 		"get_device_status", "get_site_clients",
 		"get_bandwidth_stats", "get_flow_summary", "get_rf_spectrum", "get_wan_health", "get_firewall_summary", "get_dhcp_leases",
 		"get_incidents", "get_recent_changes", "get_topology", "search_logs",

@@ -247,4 +247,42 @@ func TestSentinelContextToolPlanSelectsFirewallAndWAN(t *testing.T) {
 	if !foundWAN {
 		t.Fatalf("expected get_wan_health in %v", wanPlan)
 	}
+
+	wifiPlan := sentinelContextToolPlan("Revisa la configuración Wi-Fi actual de mr8300: canales, ancho de banda (htmode) y macfilter.", SentinelCase{})
+	foundWiFi, foundBW := false, false
+	for _, tool := range wifiPlan {
+		if tool == "get_wifi_config_summary" {
+			foundWiFi = true
+		}
+		if tool == "get_bandwidth_stats" {
+			foundBW = true
+		}
+	}
+	if !foundWiFi || foundBW {
+		t.Fatalf("expected get_wifi_config_summary without get_bandwidth_stats, got %v", wifiPlan)
+	}
+
+	pingPlan := sentinelContextToolPlan("Haz ping a 10.128.128.3 desde mr8300", SentinelCase{SiteID: "site-1"})
+	if len(pingPlan) != 1 || pingPlan[0] != "get_device_status" {
+		t.Fatalf("expected lean get_device_status for active probe, got %v", pingPlan)
+	}
+}
+
+func TestCompactSentinelDeviceStateStripsBloatAndPreservesRadios(t *testing.T) {
+	raw := []byte(`{"board":{"hostname":"mr8300"},"logs":"very huge log blob","arp_table":[{"ip":"10.0.0.1"}],"bridge_table":[{"mac":"aa:bb"}],"dhcp":{"leases":[{"ip":"10.0.0.2"}]},"wireless_stations":{"phy2-ap0":[{"mac":"3c:28:6d:0f:85:db","signal":-50,"tx_rate":"144.4","tx_failed":0,"extra_noise":"drop"}]}}`)
+	compacted := compactSentinelDeviceState(raw, map[string]database.NetworkIdentity{
+		"3C:28:6D:0F:85:DB": {Label: "pixel3"},
+	})
+	encoded, _ := json.Marshal(compacted)
+	s := string(encoded)
+	for _, forbidden := range []string{"very huge log blob", "arp_table", "bridge_table", "extra_noise"} {
+		if strings.Contains(s, forbidden) {
+			t.Fatalf("expected %q to be stripped from compact device state: %s", forbidden, s)
+		}
+	}
+	for _, expected := range []string{"mr8300", "lease_count", "phy2-ap0", "pixel3"} {
+		if !strings.Contains(s, expected) {
+			t.Fatalf("expected %q in compact device state: %s", expected, s)
+		}
+	}
 }

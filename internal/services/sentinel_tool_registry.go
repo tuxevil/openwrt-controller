@@ -793,6 +793,66 @@ func sentinelSearchLogsTool(ctx context.Context, invocation sentinelToolInvocati
 	return out, rows.Err()
 }
 
+func compactSentinelDeviceState(raw []byte, identityDirectory map[string]database.NetworkIdentity) interface{} {
+	if len(raw) == 0 {
+		return nil
+	}
+	var state map[string]interface{}
+	if err := json.Unmarshal(raw, &state); err != nil || state == nil {
+		return sentinelJSONOrNull(raw)
+	}
+	// Strip high-volume telemetry blobs that have dedicated tools
+	// (search_logs, get_site_clients, get_flow_summary, get_dhcp_leases)
+	// so all managed nodes fit comfortably without hitting truncation.
+	for _, drop := range []string{"logs", "arp_table", "bridge_table", "neighbor_stats", "flow_sense", "top_talkers"} {
+		delete(state, drop)
+	}
+	if dhcp, ok := state["dhcp"].(map[string]interface{}); ok {
+		if leases, ok := dhcp["leases"].([]interface{}); ok {
+			state["dhcp"] = map[string]interface{}{"lease_count": len(leases)}
+		}
+	}
+	if ws, ok := state["wireless_stations"].(map[string]interface{}); ok {
+		compactWS := make(map[string]interface{}, len(ws))
+		for iface, listRaw := range ws {
+			list, ok := listRaw.([]interface{})
+			if !ok {
+				continue
+			}
+			compactList := make([]map[string]interface{}, 0, len(list))
+			for _, itemRaw := range list {
+				st, ok := itemRaw.(map[string]interface{})
+				if !ok {
+					continue
+				}
+				mac := database.NormalizeMAC(stringField(st, "mac"))
+				name := ""
+				if idInfo, ok := database.ResolveNetworkIdentity(identityDirectory, mac); ok {
+					name = idInfo.DisplayLabel()
+				}
+				entry := map[string]interface{}{
+					"mac":        mac,
+					"signal":     st["signal"],
+					"tx_rate":    st["tx_rate"],
+					"tx_failed":  st["tx_failed"],
+					"tx_retries": st["tx_retries"],
+				}
+				if name != "" {
+					entry["hostname"] = name
+				}
+				compactList = append(compactList, entry)
+			}
+			compactWS[iface] = compactList
+		}
+		state["wireless_stations"] = compactWS
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil {
+		return sentinelJSONOrNull(raw)
+	}
+	return json.RawMessage(redactSentinelSecrets(string(encoded)))
+}
+
 func sentinelGetDeviceStatusTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
 	args, schema, limit := invocation.Args, invocation.Schema, invocation.Limit
 	deviceID, _ := args["device_id"].(string)
@@ -841,7 +901,7 @@ func sentinelGetDeviceStatusTool(ctx context.Context, invocation sentinelToolInv
 		if strings.TrimSpace(displayName) == "" {
 			displayName = id
 		}
-		out = append(out, map[string]interface{}{"id": id, "name": name, "display_name": displayName, "model": model, "status": status, "last_seen_at": nullableTime(lastSeen), "last_ip": lastIP, "hardware": normalizeSentinelHardware(model, state, capabilities), "state": sentinelJSONOrNull(state), "capabilities": sentinelJSONOrNull(capabilities), "desired_generation": desired, "observed_generation": observed, "last_successful_generation": successful})
+		out = append(out, map[string]interface{}{"id": id, "name": name, "display_name": displayName, "model": model, "status": status, "last_seen_at": nullableTime(lastSeen), "last_ip": lastIP, "hardware": normalizeSentinelHardware(model, state, capabilities), "state": compactSentinelDeviceState(state, identityDirectory), "capabilities": sentinelJSONOrNull(capabilities), "desired_generation": desired, "observed_generation": observed, "last_successful_generation": successful})
 	}
 	return out, rows.Err()
 }
@@ -920,7 +980,36 @@ func sentinelGetTopologyTool(ctx context.Context, invocation sentinelToolInvocat
 	if err != nil {
 		return nil, err
 	}
-	return json.RawMessage(redactSentinelSecrets(string(metadata))), nil
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(metadata, &parsed); err != nil || parsed == nil {
+		return json.RawMessage(redactSentinelSecrets(string(metadata))), nil
+	}
+	if devices, lookup, dErr := loadSentinelSiteDevices(ctx, invocation.Schema, siteID); dErr == nil && len(devices) > 0 {
+		rolesMap, _ := parsed["roles"].(map[string]interface{})
+		nodes := make([]map[string]interface{}, 0, len(devices))
+		for _, dev := range devices {
+			role := dev.DeviceRole
+			if rolesMap != nil {
+				if r, ok := rolesMap[dev.ID].(string); ok && r != "" {
+					role = r
+				}
+			}
+			nodes = append(nodes, map[string]interface{}{
+				"id":           dev.ID,
+				"display_name": database.DeviceDisplayName(dev.ID, &dev.Name, dev.State, lookup),
+				"model":        dev.Model,
+				"status":       dev.Status,
+				"last_ip":      dev.LastIP,
+				"role":         role,
+			})
+		}
+		parsed["nodes"] = nodes
+	}
+	encoded, err := json.Marshal(parsed)
+	if err != nil {
+		return json.RawMessage(redactSentinelSecrets(string(metadata))), nil
+	}
+	return json.RawMessage(redactSentinelSecrets(string(encoded))), nil
 }
 
 func sentinelGetNotesTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {

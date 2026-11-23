@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 
 	"openwrt-controller/internal/database"
 
@@ -45,6 +46,7 @@ func ExecuteCommand(schema, deviceID string, cmd string) error {
 			ssh.PublicKeys(signer),
 		},
 		HostKeyCallback: TofuHostKeyCallback,
+		Timeout:         10 * time.Second,
 	}
 
 	sshConn, err := ssh.Dial("tcp", targetIP.String+":22", config)
@@ -59,19 +61,24 @@ func ExecuteCommand(schema, deviceID string, cmd string) error {
 	}
 	defer session.Close()
 
-	var out bytes.Buffer
-	session.Stdout = &out
-	session.Stderr = &out
-	session.Stdin = strings.NewReader(cmd)
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+	script := cmd
+	if !strings.HasSuffix(script, "\n") {
+		script += "\n"
+	}
+	session.Stdin = strings.NewReader(script)
 	err = session.Run("sh")
+	combined := stdout.String() + stderr.String()
 	if err != nil {
 		// Detect specifically if nftables is missing (exit code 127 or "command not found" string)
 		if e, ok := err.(*ssh.ExitError); ok {
-			if e.ExitStatus() == 127 || out.String() == "bash: nft: command not found\n" || out.String() == "ash: nft: not found\n" {
+			if e.ExitStatus() == 127 || combined == "bash: nft: command not found\n" || combined == "ash: nft: not found\n" {
 				return fmt.Errorf("Incompatible Engine: nftables not supported on this device")
 			}
 		}
-		return fmt.Errorf("command execution failed: %v, output: %s", err, out.String())
+		return fmt.Errorf("command execution failed: %v, output: %s", err, combined)
 	}
 
 	return nil
@@ -100,6 +107,7 @@ func ExecuteCommandWithOutput(schema, deviceID string, cmd string) (string, erro
 			ssh.PublicKeys(signer),
 		},
 		HostKeyCallback: TofuHostKeyCallback,
+		Timeout:         10 * time.Second,
 	}
 
 	sshConn, err := ssh.Dial("tcp", targetIP.String+":22", config)
@@ -114,13 +122,24 @@ func ExecuteCommandWithOutput(schema, deviceID string, cmd string) (string, erro
 	}
 	defer session.Close()
 
-	var out bytes.Buffer
-	session.Stdout = &out
-	session.Stderr = &out
-	session.Stdin = strings.NewReader(cmd)
-	err = session.Run("sh")
-	if err != nil {
-		return out.String(), fmt.Errorf("command execution failed: %v", err)
+	var stdout, stderr bytes.Buffer
+	session.Stdout = &stdout
+	session.Stderr = &stderr
+	script := cmd
+	if !strings.HasSuffix(script, "\n") {
+		script += "\n"
 	}
-	return out.String(), nil
+	session.Stdin = strings.NewReader(script)
+	err = session.Run("sh")
+	combined := stdout.String()
+	if stderr.Len() > 0 {
+		if combined != "" && !strings.HasSuffix(combined, "\n") {
+			combined += "\n"
+		}
+		combined += stderr.String()
+	}
+	if err != nil {
+		return combined, fmt.Errorf("command execution failed: %v", err)
+	}
+	return combined, nil
 }

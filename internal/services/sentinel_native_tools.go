@@ -66,7 +66,7 @@ func newSentinelNativeConversation(class SentinelReasoningClass, prompt, langDir
 }
 
 func sentinelNativeSystemPrompt() string {
-	return sentinelAgentInstructions + "\nUse native function calls to request evidence. Return the final answer as a JSON object with message and an optional proposal (summary, device_id, config, commands, health_checks). Do not put tool_calls in JSON content.\n" + sentinelAgentEvidenceGuidance
+	return sentinelAgentInstructions + "\nCRITICAL TOOL-CALLING RULE: Whenever the operator asks for an active probe (ping_host, dns_lookup, probe_tcp_port, traceroute_host, run_iperf3_test) or data not already in CASE_CONTEXT_JSON, emit a native function call IMMEDIATELY instead of answering from guesses. NEVER claim you executed a probe unless its tool output is in the evidence. Only AFTER you have all needed tool evidence, return the final answer as a JSON object {\"message\":\"...\",\"proposal\":null} (do not put tool_calls in JSON content).\n" + sentinelAgentEvidenceGuidance
 }
 
 func sentinelNativeCatalog() []map[string]any {

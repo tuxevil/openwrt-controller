@@ -463,12 +463,14 @@ func sentinelGetClientDiagnosticsTool(ctx context.Context, invocation sentinelTo
 	}
 
 	connType := classifySentinelClientConnection(sources)
+	found := len(sources) > 0 || targetMAC != "" || targetHostname != "" || len(recentLogs) > 0
 	if len(sources) == 0 {
 		connType = "not_observed"
 	}
 
 	result := map[string]interface{}{
 		"query":           clientRef,
+		"found":           found,
 		"mac":             targetMAC,
 		"hostname":        targetHostname,
 		"ip":              targetIP,
@@ -479,6 +481,9 @@ func sentinelGetClientDiagnosticsTool(ctx context.Context, invocation sentinelTo
 		"arp_nodes":       arpObservedOn,
 		"bridge_nodes":    bridgeObservedOn,
 		"recent_logs":     recentLogs,
+	}
+	if !found {
+		result["note"] = "This client/IP/MAC was NOT found in any active wireless radio, DHCP lease, ARP table, bridge table, or recent system logs. Do NOT report it as wired or connected."
 	}
 	if vendorInfo != nil {
 		result["vendor"] = vendorInfo.Vendor
