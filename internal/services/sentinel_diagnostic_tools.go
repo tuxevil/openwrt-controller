@@ -796,12 +796,227 @@ func sentinelGetDHCPLeasesTool(ctx context.Context, invocation sentinelToolInvoc
 
 // ── 6. get_wan_health ────────────────────────────────────────────────────────
 
+var sentinelSiteIDRegex = regexp.MustCompile(`^[a-zA-Z0-9-]{1,64}$`)
+
+func queryStarlinkHealthLive(ctx context.Context, siteID string) map[string]interface{} {
+	if database.InfluxClient == nil || !sentinelSiteIDRegex.MatchString(siteID) {
+		return map[string]interface{}{"available": false}
+	}
+	query := `from(bucket: "` + database.GetInfluxBucket() + `")
+		|> range(start: -10m)
+		|> filter(fn: (r) => r["_measurement"] == "starlink_health")
+		|> filter(fn: (r) => r["site_id"] == "` + siteID + `")
+		|> last()`
+
+	qctx, cancel := context.WithTimeout(ctx, 4*time.Second)
+	defer cancel()
+
+	result, err := database.InfluxClient.QueryAPI(database.GetInfluxOrg()).Query(qctx, query)
+	if err != nil {
+		return map[string]interface{}{"available": false, "error": err.Error()}
+	}
+	defer result.Close()
+
+	status := ""
+	var dishRTT, popRTT, pktLoss float64
+	microOutage := false
+	var sampledAt time.Time
+	found := false
+
+	for result.Next() {
+		found = true
+		rec := result.Record()
+		sampledAt = rec.Time()
+		if tag, ok := rec.ValueByKey("status").(string); ok && tag != "" {
+			status = tag
+		}
+		switch rec.Field() {
+		case "dish_rtt_ms":
+			if v, ok := rec.Value().(float64); ok {
+				dishRTT = v
+			}
+		case "pop_rtt_ms":
+			if v, ok := rec.Value().(float64); ok {
+				popRTT = v
+			}
+		case "packet_loss":
+			if v, ok := rec.Value().(float64); ok {
+				pktLoss = v
+			}
+		case "micro_outage":
+			if v, ok := rec.Value().(int64); ok {
+				microOutage = v == 1
+			}
+		}
+	}
+	if !found {
+		return map[string]interface{}{"available": false, "reason": "no starlink_health samples in last 10m"}
+	}
+
+	rating := status
+	if status == "ONLINE" {
+		if dishRTT < 5.0 && popRTT < 55.0 && pktLoss == 0 {
+			rating = "OPTIMAL"
+		} else {
+			rating = "SATISFACTORY"
+		}
+	}
+
+	return map[string]interface{}{
+		"available":       true,
+		"status":          status,
+		"health_rating":   rating,
+		"dish_rtt_ms":     mathRound2(dishRTT),
+		"pop_rtt_ms":      mathRound2(popRTT),
+		"packet_loss_pct": mathRound2(pktLoss),
+		"micro_outage":    microOutage,
+		"last_sampled_at": sampledAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func parseWANLiveStatus(raw string, now time.Time, lookup database.SiteClientHostnameLookup) (map[string]interface{}, map[string]interface{}) {
+	parts := strings.SplitN(raw, "---MWAN3---", 2)
+	wgPart := parts[0]
+	mwanPart := ""
+	if len(parts) == 2 {
+		mwanPart = parts[1]
+	}
+
+	wgInterfaces := []map[string]interface{}{}
+	wgPeers := []map[string]interface{}{}
+	for _, line := range strings.Split(wgPart, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		fields := strings.Split(line, "\t")
+		switch fields[0] {
+		case "WG_IFACE":
+			if len(fields) >= 4 {
+				wgInterfaces = append(wgInterfaces, map[string]interface{}{
+					"interface":   fields[1],
+					"listen_port": fields[2],
+					"fwmark":      fields[3],
+				})
+			}
+		case "WG_PEER":
+			if len(fields) >= 9 {
+				hsUnix, _ := strconv.ParseInt(fields[5], 10, 64)
+				rxBytes, _ := strconv.ParseInt(fields[6], 10, 64)
+				txBytes, _ := strconv.ParseInt(fields[7], 10, 64)
+				var hsAgeSec int64 = -1
+				alive := false
+				hsTime := ""
+				if hsUnix > 0 {
+					hsAgeSec = now.Unix() - hsUnix
+					if hsAgeSec < 0 {
+						hsAgeSec = 0
+					}
+					alive = hsAgeSec <= 180
+					hsTime = time.Unix(hsUnix, 0).UTC().Format(time.RFC3339)
+				}
+
+				allowedRaw := strings.Split(fields[4], ",")
+				allowedHosts := []string{}
+				for _, cidr := range allowedRaw {
+					cidr = strings.TrimSpace(cidr)
+					if cidr == "" {
+						continue
+					}
+					ipStr := strings.SplitN(cidr, "/", 2)[0]
+					if h := lookup.ResolveIP(ipStr); h != "" {
+						allowedHosts = append(allowedHosts, h)
+					} else if _, ipNet, err := net.ParseCIDR(cidr); err == nil {
+						for ipKey, name := range lookup.ByIP {
+							if ip := net.ParseIP(ipKey); ip != nil && ipNet.Contains(ip) {
+								allowedHosts = append(allowedHosts, name+" ("+ipKey+")")
+							}
+						}
+					}
+				}
+				sort.Strings(allowedHosts)
+
+				peer := map[string]interface{}{
+					"interface":             fields[1],
+					"peer_pubkey_prefix":    fields[2],
+					"endpoint":              fields[3],
+					"allowed_ips":           fields[4],
+					"latest_handshake_at":   hsTime,
+					"handshake_age_seconds": hsAgeSec,
+					"tunnel_alive":          alive,
+					"rx_bytes":              rxBytes,
+					"tx_bytes":              txBytes,
+					"rx_mb":                 mathRound2(float64(rxBytes) / (1024 * 1024)),
+					"tx_mb":                 mathRound2(float64(txBytes) / (1024 * 1024)),
+					"persistent_keepalive":  fields[8],
+				}
+				if len(allowedHosts) > 0 {
+					peer["known_remote_hosts"] = allowedHosts
+				}
+				wgPeers = append(wgPeers, peer)
+			}
+		}
+	}
+
+	wgSummary := map[string]interface{}{
+		"interfaces": wgInterfaces,
+		"peers":      wgPeers,
+		"peer_count": len(wgPeers),
+	}
+
+	mwanIfaces := []string{}
+	mwanPolicies := map[string]string{}
+	section := ""
+	currentPolicy := ""
+	for _, rawLine := range strings.Split(mwanPart, "\n") {
+		trimmed := strings.TrimSpace(rawLine)
+		if trimmed == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(trimmed, "Interface status:"):
+			section = "interfaces"
+			continue
+		case strings.HasPrefix(trimmed, "Current ipv4 policies:"):
+			section = "ipv4_policies"
+			currentPolicy = ""
+			continue
+		case strings.HasPrefix(trimmed, "Current ipv6 policies:"), strings.HasPrefix(trimmed, "Directly connected"):
+			section = "other"
+			continue
+		}
+		if section == "interfaces" && strings.HasPrefix(trimmed, "interface ") {
+			mwanIfaces = append(mwanIfaces, trimmed)
+		} else if section == "ipv4_policies" {
+			if strings.HasSuffix(trimmed, ":") {
+				currentPolicy = strings.TrimSuffix(trimmed, ":")
+			} else if currentPolicy != "" {
+				if prev := mwanPolicies[currentPolicy]; prev != "" {
+					mwanPolicies[currentPolicy] = prev + ", " + trimmed
+				} else {
+					mwanPolicies[currentPolicy] = trimmed
+				}
+			}
+		}
+	}
+	mwanSummary := map[string]interface{}{
+		"available":     len(mwanIfaces) > 0 || len(mwanPolicies) > 0,
+		"interfaces":    mwanIfaces,
+		"ipv4_policies": mwanPolicies,
+	}
+
+	return wgSummary, mwanSummary
+}
+
 func sentinelGetWANHealthTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
 	siteID, _ := invocation.Args["site_id"].(string)
 	devices, lookup, err := loadSentinelSiteDevices(ctx, invocation.Schema, siteID)
 	if err != nil {
 		return nil, err
 	}
+
+	// Never transmit WireGuard private_key ($2 on NF==5) or preshared_key ($3 on NF>=9).
+	const wanLiveCmd = `wg show all dump 2>/dev/null | awk -F'\t' 'NF==5{print "WG_IFACE\t"$1"\t"$4"\t"$5} NF>=9{print "WG_PEER\t"$1"\t"substr($2,1,12)"\t"$4"\t"$5"\t"$6"\t"$7"\t"$8"\t"$9}'; echo '---MWAN3---'; mwan3 status 2>/dev/null | head -n 45`
 
 	gateways := []map[string]interface{}{}
 	for _, dev := range devices {
@@ -812,7 +1027,7 @@ func sentinelGetWANHealthTool(ctx context.Context, invocation sentinelToolInvoca
 			continue
 		}
 		devName := database.DeviceDisplayName(dev.ID, &dev.Name, dev.State, lookup)
-		gateways = append(gateways, map[string]interface{}{
+		gw := map[string]interface{}{
 			"device_id":   dev.ID,
 			"device_name": devName,
 			"status":      dev.Status,
@@ -821,13 +1036,262 @@ func sentinelGetWANHealthTool(ctx context.Context, invocation sentinelToolInvoca
 			"starlink":    dev.State["starlink"],
 			"wireguard":   dev.State["wireguard"],
 			"system":      dev.State["system"],
-		})
+		}
+		if out, sshErr := orchestrator.ExecuteCommandWithOutput(invocation.Schema, dev.ID, wanLiveCmd); sshErr == nil {
+			wgLive, mwanLive := parseWANLiveStatus(out, time.Now(), lookup)
+			gw["wireguard_live"] = wgLive
+			gw["mwan3_live"] = mwanLive
+		} else {
+			gw["live_probe_error"] = sshErr.Error()
+		}
+		gateways = append(gateways, gw)
 	}
 
 	return map[string]interface{}{
 		"site_id":       siteID,
+		"starlink_live": queryStarlinkHealthLive(ctx, siteID),
 		"gateway_count": len(gateways),
 		"gateways":      gateways,
+	}, nil
+}
+
+// ── 6b. get_firewall_summary ─────────────────────────────────────────────────
+
+func trimUCIValue(raw string) string {
+	s := strings.TrimSpace(raw)
+	if len(s) >= 2 && strings.HasPrefix(s, "'") && strings.HasSuffix(s, "'") {
+		return s[1 : len(s)-1]
+	}
+	return s
+}
+
+func parseUCIFirewallSummary(raw string, lookup database.SiteClientHostnameLookup) map[string]interface{} {
+	type sectionData struct {
+		kind  string
+		order int
+		attrs map[string]string
+	}
+	sections := map[string]*sectionData{}
+	order := 0
+
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "firewall.") {
+			continue
+		}
+		rest := strings.TrimPrefix(line, "firewall.")
+		eqIdx := strings.IndexByte(rest, '=')
+		if eqIdx <= 0 {
+			continue
+		}
+		lhs := rest[:eqIdx]
+		rhs := trimUCIValue(rest[eqIdx+1:])
+
+		dotIdx := strings.IndexByte(lhs, '.')
+		if dotIdx < 0 {
+			sec := sections[lhs]
+			if sec == nil {
+				order++
+				sec = &sectionData{kind: rhs, order: order, attrs: map[string]string{}}
+				sections[lhs] = sec
+			} else {
+				sec.kind = rhs
+			}
+			continue
+		}
+		secName := lhs[:dotIdx]
+		optName := lhs[dotIdx+1:]
+		lowerOpt := strings.ToLower(optName)
+		if strings.Contains(lowerOpt, "secret") || strings.Contains(lowerOpt, "password") || strings.Contains(lowerOpt, "key") {
+			continue
+		}
+		sec := sections[secName]
+		if sec == nil {
+			order++
+			sec = &sectionData{order: order, attrs: map[string]string{}}
+			sections[secName] = sec
+		}
+		sec.attrs[optName] = rhs
+	}
+
+	ordered := make([]*sectionData, 0, len(sections))
+	for _, s := range sections {
+		ordered = append(ordered, s)
+	}
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].order < ordered[j].order })
+
+	defaults := map[string]string{}
+	zones := []map[string]string{}
+	forwardings := []map[string]string{}
+	portForwards := []map[string]interface{}{}
+	rules := []map[string]interface{}{}
+
+	for _, sec := range ordered {
+		switch sec.kind {
+		case "defaults":
+			for _, k := range []string{"input", "output", "forward", "synflood_protect", "flow_offloading", "flow_offloading_hw", "drop_invalid"} {
+				if v, ok := sec.attrs[k]; ok {
+					defaults[k] = v
+				}
+			}
+		case "zone":
+			z := map[string]string{
+				"name":    sec.attrs["name"],
+				"input":   sec.attrs["input"],
+				"output":  sec.attrs["output"],
+				"forward": sec.attrs["forward"],
+			}
+			if v := sec.attrs["network"]; v != "" {
+				z["network"] = v
+			}
+			if v := sec.attrs["masq"]; v != "" {
+				z["masq"] = v
+			}
+			zones = append(zones, z)
+		case "forwarding":
+			forwardings = append(forwardings, map[string]string{
+				"src":  sec.attrs["src"],
+				"dest": sec.attrs["dest"],
+			})
+		case "redirect":
+			enabled := sec.attrs["enabled"] != "0"
+			destIP := sec.attrs["dest_ip"]
+			entry := map[string]interface{}{
+				"name":      sec.attrs["name"],
+				"enabled":   enabled,
+				"src":       sec.attrs["src"],
+				"src_dport": sec.attrs["src_dport"],
+				"dest":      sec.attrs["dest"],
+				"dest_ip":   destIP,
+				"dest_port": sec.attrs["dest_port"],
+				"proto":     sec.attrs["proto"],
+				"target":    sec.attrs["target"],
+			}
+			if host := lookup.ResolveIP(destIP); host != "" {
+				entry["dest_hostname"] = host
+			}
+			portForwards = append(portForwards, entry)
+		case "rule":
+			enabled := sec.attrs["enabled"] != "0"
+			entry := map[string]interface{}{
+				"name":    sec.attrs["name"],
+				"enabled": enabled,
+				"src":     sec.attrs["src"],
+				"dest":    sec.attrs["dest"],
+				"proto":   sec.attrs["proto"],
+				"target":  sec.attrs["target"],
+			}
+			if v := sec.attrs["dest_port"]; v != "" {
+				entry["dest_port"] = v
+			}
+			if v := sec.attrs["family"]; v != "" {
+				entry["family"] = v
+			}
+			if v := sec.attrs["dest_ip"]; v != "" {
+				entry["dest_ip"] = v
+				if host := lookup.ResolveIP(v); host != "" {
+					entry["dest_hostname"] = host
+				}
+			}
+			rules = append(rules, entry)
+		}
+	}
+
+	return map[string]interface{}{
+		"defaults":           defaults,
+		"zones":              zones,
+		"forwardings":        forwardings,
+		"port_forward_count": len(portForwards),
+		"port_forwards":      portForwards,
+		"rule_count":         len(rules),
+		"rules":              rules,
+	}
+}
+
+func sentinelGetFirewallSummaryTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
+	siteID, _ := invocation.Args["site_id"].(string)
+	deviceRef, _ := invocation.Args["device_id"].(string)
+
+	devices, lookup, err := loadSentinelSiteDevices(ctx, invocation.Schema, siteID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Threat Shield status + per-device drop counters from DB
+	threatEnabled := false
+	_ = database.DB.QueryRowContext(ctx,
+		fmt.Sprintf("SELECT COALESCE(threat_shield_enabled, false) FROM %s.sites WHERE id = $1", invocation.Schema), siteID,
+	).Scan(&threatEnabled)
+
+	dropStats := []map[string]interface{}{}
+	totalDrops := int64(0)
+	if rows, qErr := database.DB.QueryContext(ctx,
+		fmt.Sprintf("SELECT id, COALESCE(name, ''), COALESCE(threat_shield_drops, 0) FROM %s.devices WHERE site_id = $1 ORDER BY threat_shield_drops DESC, id ASC", invocation.Schema),
+		siteID,
+	); qErr == nil {
+		stateByID := map[string]map[string]interface{}{}
+		for _, d := range devices {
+			stateByID[d.ID] = d.State
+		}
+		for rows.Next() {
+			var devID, name string
+			var drops int64
+			if rows.Scan(&devID, &name, &drops) == nil {
+				totalDrops += drops
+				dropStats = append(dropStats, map[string]interface{}{
+					"device_id":   devID,
+					"device_name": database.DeviceDisplayName(devID, &name, stateByID[devID], lookup),
+					"drops":       drops,
+				})
+			}
+		}
+		rows.Close()
+	}
+
+	// Select gateway(s) or explicit device for live UCI firewall inspection
+	targets := []sentinelSiteDeviceRow{}
+	if strings.TrimSpace(deviceRef) != "" {
+		dev, err := resolveSentinelManagedDevice(ctx, invocation.Schema, siteID, deviceRef)
+		if err != nil {
+			return nil, err
+		}
+		targets = []sentinelSiteDeviceRow{dev}
+	} else {
+		for _, dev := range devices {
+			if strings.EqualFold(dev.DeviceRole, "Gateway") {
+				targets = append(targets, dev)
+			}
+		}
+		if len(targets) == 0 && len(devices) > 0 {
+			targets = []sentinelSiteDeviceRow{devices[0]}
+		}
+	}
+
+	nodeFirewalls := make([]map[string]interface{}, 0, len(targets))
+	for _, dev := range targets {
+		devName := database.DeviceDisplayName(dev.ID, &dev.Name, dev.State, lookup)
+		entry := map[string]interface{}{
+			"device_id":   dev.ID,
+			"device_name": devName,
+			"last_ip":     dev.LastIP,
+		}
+		if out, sshErr := orchestrator.ExecuteCommandWithOutput(invocation.Schema, dev.ID, "uci show firewall 2>/dev/null"); sshErr == nil {
+			entry["firewall"] = parseUCIFirewallSummary(out, lookup)
+		} else {
+			entry["error"] = sshErr.Error()
+		}
+		nodeFirewalls = append(nodeFirewalls, entry)
+	}
+
+	return map[string]interface{}{
+		"site_id": siteID,
+		"threat_shield": map[string]interface{}{
+			"enabled":      threatEnabled,
+			"total_drops":  totalDrops,
+			"intel":        GetThreatIntelStatus(),
+			"device_drops": dropStats,
+		},
+		"nodes": nodeFirewalls,
 	}, nil
 }
 

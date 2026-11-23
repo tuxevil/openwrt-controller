@@ -6,6 +6,9 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
+
+	"openwrt-controller/internal/database"
 )
 
 func TestSentinelProbeValidationRejectsInjectionAndPublicTCP(t *testing.T) {
@@ -130,5 +133,118 @@ round-trip min/avg/max = 0.512/0.620/0.728 ms`
 	hops := parseTracerouteHops(traceOut)
 	if len(hops) != 3 || hops[0]["ip"] != "10.128.128.1" || hops[1]["rtt_ms"] != 21.34 || hops[2]["ip"] != "*" {
 		t.Fatalf("parseTracerouteHops = %#v", hops)
+	}
+}
+
+func TestParseWANLiveStatusParsesWireGuardAndMwan3AndResolvesVPS(t *testing.T) {
+	now := time.Unix(1795456262, 0).UTC()
+	raw := "WG_IFACE\twg0\t51820\toff\n" +
+		"WG_PEER\twg0\tZ6to1qQJ1234\t18.226.129.187:31337\t10.128.129.0/24,192.168.1.0/24\t1795456202\t104857600\t209715200\t25\n" +
+		"---MWAN3---\n" +
+		"Interface status:\n" +
+		" interface wan is online and tracking is active (online 49h:35m:41s, uptime 49h:36m:01s)\n" +
+		" interface wanb is unknown and tracking is down (31)\n\n" +
+		"Current ipv4 policies:\n" +
+		"balanced:\n" +
+		" wan (100%)\n" +
+		"wanb_only:\n" +
+		" unreachable\n"
+
+	lookup := database.NewSiteClientHostnameLookup()
+	lookup.ByIP["10.128.129.1"] = "vps"
+
+	wg, mwan := parseWANLiveStatus(raw, now, lookup)
+	if wg["peer_count"] != 1 {
+		t.Fatalf("wg peer_count = %#v", wg)
+	}
+	peers := wg["peers"].([]map[string]interface{})
+	if peers[0]["tunnel_alive"] != true || peers[0]["handshake_age_seconds"] != int64(60) {
+		t.Fatalf("unexpected peer handshake state: %#v", peers[0])
+	}
+	if peers[0]["rx_mb"] != 100.0 || peers[0]["tx_mb"] != 200.0 {
+		t.Fatalf("unexpected peer transfer mb: %#v", peers[0])
+	}
+	hosts, _ := peers[0]["known_remote_hosts"].([]string)
+	if len(hosts) != 1 || hosts[0] != "vps (10.128.129.1)" {
+		t.Fatalf("expected vps host resolution, got %#v", hosts)
+	}
+	if mwan["available"] != true {
+		t.Fatalf("expected mwan3 available, got %#v", mwan)
+	}
+	policies := mwan["ipv4_policies"].(map[string]string)
+	if policies["balanced"] != "wan (100%)" || policies["wanb_only"] != "unreachable" {
+		t.Fatalf("unexpected mwan3 policies: %#v", policies)
+	}
+}
+
+func TestParseUCIFirewallSummaryResolvesHostnamesAndSanitizes(t *testing.T) {
+	raw := `firewall.@defaults[0]=defaults
+firewall.@defaults[0].input='REJECT'
+firewall.@defaults[0].output='ACCEPT'
+firewall.@defaults[0].forward='REJECT'
+firewall.@defaults[0].synflood_protect='1'
+firewall.@zone[0]=zone
+firewall.@zone[0].name='wan'
+firewall.@zone[0].input='REJECT'
+firewall.@zone[0].output='ACCEPT'
+firewall.@zone[0].forward='REJECT'
+firewall.@zone[0].masq='1'
+firewall.@forwarding[0]=forwarding
+firewall.@forwarding[0].src='lan'
+firewall.@forwarding[0].dest='wan'
+firewall.@redirect[0]=redirect
+firewall.@redirect[0].name='Allow-HTTPS-Prod'
+firewall.@redirect[0].src='wan'
+firewall.@redirect[0].src_dport='443'
+firewall.@redirect[0].dest='lan'
+firewall.@redirect[0].dest_ip='10.128.128.22'
+firewall.@redirect[0].dest_port='443'
+firewall.@redirect[0].proto='tcp'
+firewall.@redirect[0].target='DNAT'
+firewall.@rule[0]=rule
+firewall.@rule[0].name='Allow-Ping'
+firewall.@rule[0].src='wan'
+firewall.@rule[0].proto='icmp'
+firewall.@rule[0].target='ACCEPT'
+firewall.@rule[0].secret_key='should-not-appear'`
+
+	lookup := database.NewSiteClientHostnameLookup()
+	lookup.ByIP["10.128.128.22"] = "prod"
+
+	summary := parseUCIFirewallSummary(raw, lookup)
+	if summary["port_forward_count"] != 1 || summary["rule_count"] != 1 {
+		t.Fatalf("unexpected counts: %#v", summary)
+	}
+	forwards := summary["port_forwards"].([]map[string]interface{})
+	if forwards[0]["dest_hostname"] != "prod" || forwards[0]["src_dport"] != "443" || forwards[0]["enabled"] != true {
+		t.Fatalf("unexpected port forward: %#v", forwards[0])
+	}
+	encoded, _ := json.Marshal(summary)
+	if strings.Contains(string(encoded), "should-not-appear") {
+		t.Fatalf("secret leaked into firewall summary: %s", string(encoded))
+	}
+}
+
+func TestSentinelContextToolPlanSelectsFirewallAndWAN(t *testing.T) {
+	fwPlan := sentinelContextToolPlan("que puertos tengo expuestos en el firewall?", SentinelCase{})
+	foundFW := false
+	for _, tool := range fwPlan {
+		if tool == "get_firewall_summary" {
+			foundFW = true
+		}
+	}
+	if !foundFW {
+		t.Fatalf("expected get_firewall_summary in %v", fwPlan)
+	}
+
+	wanPlan := sentinelContextToolPlan("esta vivo el tunel wireguard hacia el vps?", SentinelCase{})
+	foundWAN := false
+	for _, tool := range wanPlan {
+		if tool == "get_wan_health" {
+			foundWAN = true
+		}
+	}
+	if !foundWAN {
+		t.Fatalf("expected get_wan_health in %v", wanPlan)
 	}
 }

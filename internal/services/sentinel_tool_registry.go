@@ -276,14 +276,27 @@ var sentinelToolRegistry = newSentinelToolRegistry([]sentinelRegisteredTool{
 	{
 		descriptor: sentinelToolDescriptor(
 			"get_wan_health", "observability",
-			"Read gateway WAN (Starlink), WireGuard tunnel, and system health telemetry for the site.",
-			SentinelToolScopeSite, SentinelToolCostLow, 4000, 3,
+			"Read live Starlink health (InfluxDB), gateway WireGuard tunnel handshake/traffic, mwan3 interface/policy status, and system load for the site.",
+			SentinelToolScopeSite, SentinelToolCostMedium, 8000, 3,
 			map[string]SentinelToolSchemaProperty{
 				"site_id": sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
 			},
-			SentinelToolSchema{Type: "object", Description: "Gateway WAN, Starlink, and WireGuard telemetry.", AdditionalProperties: true},
+			SentinelToolSchema{Type: "object", Description: "Live Starlink, WireGuard, mwan3, and gateway WAN health.", AdditionalProperties: true},
 		),
 		handler: sentinelGetWANHealthTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_firewall_summary", "security",
+			"Read sanitized gateway firewall zones, forwardings, port forwards (with resolved destination hostnames), inbound rules, and Threat Shield drop counters.",
+			SentinelToolScopeSite, SentinelToolCostMedium, 8000, 3,
+			map[string]SentinelToolSchemaProperty{
+				"site_id":   sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+				"device_id": sentinelStringProperty("Optional node name, MAC, or IP (defaults to site gateway)", "", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "Sanitized firewall summary and Threat Shield counters.", AdditionalProperties: true},
+		),
+		handler: sentinelGetFirewallSummaryTool,
 	},
 	{
 		descriptor: sentinelToolDescriptor(

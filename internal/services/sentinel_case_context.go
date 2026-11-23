@@ -292,9 +292,15 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 			break
 		}
 	}
-	for _, term := range []string{"starlink", "wireguard", "vpn", "mwan3"} {
+	for _, term := range []string{"starlink", "wireguard", "vpn", "mwan3", "tunel", "tunnel", "vps"} {
 		if sentinelQueryContainsTerm(normalized, term) {
 			add("get_wan_health")
+			break
+		}
+	}
+	for _, term := range []string{"firewall", "puerto", "puertos", "expuesto", "expuestos", "portforward", "forward", "threat", "shield", "nat", "redir"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			add("get_firewall_summary")
 			break
 		}
 	}
@@ -346,7 +352,7 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	order := []string{
 		"get_client_diagnostics", "get_adguard_stats", "get_adguard_querylog",
 		"get_device_status", "get_site_clients",
-		"get_bandwidth_stats", "get_flow_summary", "get_rf_spectrum", "get_wan_health", "get_dhcp_leases",
+		"get_bandwidth_stats", "get_flow_summary", "get_rf_spectrum", "get_wan_health", "get_firewall_summary", "get_dhcp_leases",
 		"get_incidents", "get_recent_changes", "get_topology", "search_logs",
 	}
 	if targetRef != "" || (item.SiteID != "" && sentinelRoamingQuery(normalized)) {

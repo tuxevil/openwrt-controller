@@ -17,6 +17,7 @@ func TestSentinelToolRegistryContainsOnlyPhaseOneReadTools(t *testing.T) {
 		"get_client_diagnostics",
 		"get_device_status",
 		"get_dhcp_leases",
+		"get_firewall_summary",
 		"get_flow_summary",
 		"get_incidents",
 		"get_notes",
