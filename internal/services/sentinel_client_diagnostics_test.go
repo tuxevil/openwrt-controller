@@ -135,13 +135,23 @@ func TestSentinelPromptGuidesClientLogTroubleshootingAndLanguage(t *testing.T) {
 		t.Fatalf("planWithIP = %v, want search_logs first", planWithIP)
 	}
 
-	if got := sentinelResponseLanguageInstruction("por que este cliente no se esta pudiendo conectar? 3c:28:6d:0f:85:db"); !strings.Contains(got, "Spanish") {
+	if got := sentinelResponseLanguageInstruction("por que este cliente no se esta pudiendo conectar? 3c:28:6d:0f:85:db"); !strings.Contains(got, "ESPAÑOL") {
 		t.Fatalf("expected Spanish language directive, got %q", got)
 	}
-	if got := sentinelResponseLanguageInstruction("¿Cuál es el estado de la red?"); !strings.Contains(got, "Spanish") {
+	if got := sentinelResponseLanguageInstruction("ayudame a identificar el cliente 10.128.128.219"); !strings.Contains(got, "ESPAÑOL") {
+		t.Fatalf("expected Spanish language directive for 'ayudame a identificar el cliente', got %q", got)
+	}
+	if got := sentinelResponseLanguageInstruction("¿Cuál es el estado de la red?"); !strings.Contains(got, "ESPAÑOL") {
 		t.Fatalf("expected Spanish language directive for accented query, got %q", got)
 	}
-	if got := sentinelResponseLanguageInstruction("Why is client 3c:28:6d:0f:85:db failing DHCP?"); strings.Contains(got, "Spanish") {
+	if got := sentinelResponseLanguageInstruction("Why is client 3c:28:6d:0f:85:db failing DHCP?"); strings.Contains(got, "ESPAÑOL") {
 		t.Fatalf("English query should not force Spanish, got %q", got)
+	}
+	t.Setenv("SENTINEL_DEFAULT_LANGUAGE", "es")
+	if got := sentinelResponseLanguageInstruction("10.128.128.219"); !strings.Contains(got, "ESPAÑOL") {
+		t.Fatalf("expected Spanish fallback with SENTINEL_DEFAULT_LANGUAGE=es, got %q", got)
+	}
+	if got := sentinelResponseLanguageInstruction("Why is client 3c:28:6d:0f:85:db failing DHCP?"); strings.Contains(got, "ESPAÑOL") {
+		t.Fatalf("explicit English query should still stay English even with SENTINEL_DEFAULT_LANGUAGE=es, got %q", got)
 	}
 }

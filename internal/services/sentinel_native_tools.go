@@ -40,7 +40,7 @@ type sentinelNativeConversation struct {
 	retried  bool
 }
 
-func newSentinelNativeConversation(class SentinelReasoningClass, prompt string) *sentinelNativeConversation {
+func newSentinelNativeConversation(class SentinelReasoningClass, prompt, langDirective string) *sentinelNativeConversation {
 	settings := database.GetPlatformSettings()
 	for _, candidate := range sentinelReasoningRouteChain(class) {
 		route, err := resolveSentinelModelRouteWithEnv(candidate, settings, os.Getenv)
@@ -50,10 +50,14 @@ func newSentinelNativeConversation(class SentinelReasoningClass, prompt string) 
 		if route.ToolMode != "native_tools" {
 			return nil
 		}
+		sysPrompt := sentinelNativeSystemPrompt()
+		if strings.TrimSpace(langDirective) != "" {
+			sysPrompt += "\n" + strings.TrimSpace(langDirective)
+		}
 		return &sentinelNativeConversation{
 			route: route, callIDs: make(map[string]bool),
 			messages: []aiChatMessage{
-				{Role: "system", Content: sentinelNativeSystemPrompt()},
+				{Role: "system", Content: sysPrompt},
 				{Role: "user", Content: prompt},
 			},
 		}
