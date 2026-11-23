@@ -81,6 +81,20 @@ function close() {
   command.value = ''
 }
 
+function startNewConversation() {
+  if (isProcessing.value) return
+  localStorage.removeItem('sentinel_conversation_id')
+  conversationId.value = ''
+  command.value = ''
+  history.value = [
+    { type: 'system', text: 'NEW SENTINEL SESSION STARTED. Awaiting infrastructure directive...' }
+  ]
+  nextTick(() => {
+    scrollBottom()
+    inputEl.value?.focus()
+  })
+}
+
 watch(
   () => props.modelValue,
   async (open) => {
@@ -214,14 +228,26 @@ function renderTable(rows) {
             SITE_CONTEXT: {{ activeSiteId || 'FLEET_SCOPE' }}
           </div>
         </div>
-        <button
-          type="button"
-          aria-label="Close Sentinel Operator chat"
-          @click="close"
-          class="p-2 sm:p-1.5 text-muted hover:text-neon-red border border-gridline sm:border-transparent hover:border-neon-red/40 transition-colors shrink-0 clip-chamfer-sm"
-        >
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
-        </button>
+        <div class="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            aria-label="Start new Sentinel conversation"
+            title="Start a new conversation (clears active context)"
+            :disabled="isProcessing"
+            @click="startNewConversation"
+            class="px-2.5 py-1.5 sm:py-1 text-[10px] tracking-widest font-bold text-neon-cyan border border-neon-cyan/40 hover:bg-neon-cyan/20 disabled:opacity-40 transition-colors clip-chamfer-sm"
+          >
+            + NEW CHAT
+          </button>
+          <button
+            type="button"
+            aria-label="Close Sentinel Operator chat"
+            @click="close"
+            class="p-2 sm:p-1.5 text-muted hover:text-neon-red border border-gridline sm:border-transparent hover:border-neon-red/40 transition-colors shrink-0 clip-chamfer-sm"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="square" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+          </button>
+        </div>
       </div>
 
       <!-- History Area -->

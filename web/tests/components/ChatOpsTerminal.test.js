@@ -68,4 +68,29 @@ describe('ChatOpsTerminal', () => {
 
     wrapper.unmount()
   })
+
+  it('starts a fresh conversation and clears localStorage when clicking + NEW CHAT', async () => {
+    localStorage.setItem('sentinel_conversation_id', 'old-conv-1')
+    vi.spyOn(api.client, 'get').mockResolvedValueOnce({
+      data: {
+        messages: [
+          { role: 'user', content: 'old question' },
+          { role: 'assistant', content: 'old answer' }
+        ]
+      }
+    })
+
+    const wrapper = mount(ChatOpsTerminal, { props: { modelValue: true } })
+    await flushPromises()
+    expect(wrapper.text()).toContain('old answer')
+
+    await wrapper.get('button[aria-label="Start new Sentinel conversation"]').trigger('click')
+    await flushPromises()
+
+    expect(localStorage.getItem('sentinel_conversation_id')).toBeNull()
+    expect(wrapper.text()).not.toContain('old answer')
+    expect(wrapper.text()).toContain('NEW SENTINEL SESSION STARTED')
+
+    wrapper.unmount()
+  })
 })
