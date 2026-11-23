@@ -239,6 +239,7 @@ func runSentinelInvestigationForCase(parent context.Context, schema, caseID stri
 		}
 		if len(envelope.ToolCalls) == 0 && native != nil && isActiveProbe && modelToolCalls == 0 && !probeNudged && !sentinelLooksLikeRefusal(envelope.Message) {
 			probeNudged = true
+			native.requireToolOnce = true
 			native.messages = append(native.messages, aiChatMessage{
 				Role:    "user",
 				Content: "You have NOT executed any active probe tool yet. Do NOT fabricate numbers or narrate running a test. Invoke the requested native tool function (run_iperf3_test, ping_host, dns_lookup, probe_tcp_port, traceroute_host, or lookup_mac_vendor) right now to get real measurements.",

@@ -32,12 +32,13 @@ type aiToolFunction struct {
 }
 
 type sentinelNativeConversation struct {
-	route    SentinelModelRoute
-	messages []aiChatMessage
-	callIDs  map[string]bool
-	pending  []aiToolCall
-	requests int
-	retried  bool
+	route           SentinelModelRoute
+	messages        []aiChatMessage
+	callIDs         map[string]bool
+	pending         []aiToolCall
+	requests        int
+	retried         bool
+	requireToolOnce bool
 }
 
 func newSentinelNativeConversation(class SentinelReasoningClass, prompt, langDirective string) *sentinelNativeConversation {
@@ -113,6 +114,9 @@ func (c *sentinelNativeConversation) next(ctx context.Context, remaining int) (s
 	}
 	if remaining <= 0 {
 		payload["tool_choice"] = "none"
+	} else if c.requireToolOnce {
+		payload["tool_choice"] = "required"
+		c.requireToolOnce = false
 	}
 	var tokens int
 	for {
