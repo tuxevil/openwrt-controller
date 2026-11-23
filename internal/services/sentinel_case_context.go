@@ -304,6 +304,20 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 			break
 		}
 	}
+	if isSentinelAdGuardConfigured() {
+		for _, term := range []string{"adguard", "adguardhome", "querylog", "bloqueado", "bloqueados", "bloqueo", "bloqueos", "blocked", "dominio", "dominios", "domain", "domains", "filtro", "filtros", "dns"} {
+			if sentinelQueryContainsTerm(normalized, term) {
+				add("get_adguard_stats")
+				break
+			}
+		}
+		for _, term := range []string{"querylog", "bloqueado", "bloqueados", "blocked", "consultas", "queries", "filtro", "filtros"} {
+			if sentinelQueryContainsTerm(normalized, term) {
+				add("get_adguard_querylog")
+				break
+			}
+		}
+	}
 	for _, term := range []string{"connectivity", "conexion", "conectividad", "offline", "online", "packet", "loss", "latency", "wan", "dns", "gateway", "internet"} {
 		if sentinelQueryContainsTerm(normalized, term) {
 			add("get_device_status", "get_incidents", "get_recent_changes")
@@ -330,7 +344,8 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	}
 
 	order := []string{
-		"get_client_diagnostics", "get_device_status", "get_site_clients",
+		"get_client_diagnostics", "get_adguard_stats", "get_adguard_querylog",
+		"get_device_status", "get_site_clients",
 		"get_bandwidth_stats", "get_flow_summary", "get_rf_spectrum", "get_wan_health", "get_dhcp_leases",
 		"get_incidents", "get_recent_changes", "get_topology", "search_logs",
 	}

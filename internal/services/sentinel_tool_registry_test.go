@@ -11,6 +11,8 @@ func TestSentinelToolRegistryContainsOnlyPhaseOneReadTools(t *testing.T) {
 	descriptors := SentinelToolDescriptors()
 	want := []string{
 		"dns_lookup",
+		"get_adguard_querylog",
+		"get_adguard_stats",
 		"get_bandwidth_stats",
 		"get_client_diagnostics",
 		"get_device_status",

@@ -359,6 +359,34 @@ var sentinelToolRegistry = newSentinelToolRegistry([]sentinelRegisteredTool{
 	},
 	{
 		descriptor: sentinelToolDescriptor(
+			"get_adguard_stats", "dns",
+			"Read AdGuardHome protection status, active filter lists, DNS query/block counts, top clients (resolved to hostnames), top queried domains, top blocked domains, and upstream latencies.",
+			SentinelToolScopeTenant, SentinelToolCostLow, 6000, 4,
+			map[string]SentinelToolSchemaProperty{
+				"site_id":   sentinelStringProperty("Optional site scope for hostname resolution", "sentinel_identifier", 128),
+				"top_limit": sentinelIntegerProperty("Maximum entries per top list (1-50, default 15)", 1, 50),
+			},
+			SentinelToolSchema{Type: "object", Description: "Read-only AdGuardHome statistics and top lists.", AdditionalProperties: true},
+		),
+		handler: sentinelGetAdGuardStatsTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_adguard_querylog", "dns",
+			"Read recent in-memory AdGuardHome DNS query log entries (up to 100), optionally filtered by client hostname/IP, domain substring, or response_status (all, blocked, filtered, whitelisted, rewritten, processed).",
+			SentinelToolScopeTenant, SentinelToolCostLow, 6000, 4,
+			map[string]SentinelToolSchemaProperty{
+				"site_id":         sentinelStringProperty("Optional site scope for hostname resolution", "sentinel_identifier", 128),
+				"search":          sentinelStringProperty("Optional domain substring, client IP, or client hostname", "", 253),
+				"response_status": sentinelStringProperty("Optional filter: all, blocked, filtered, whitelisted, rewritten, processed", "", 32),
+				"limit":           sentinelIntegerProperty("Maximum queries to return (1-100, default 30)", 1, 100),
+			},
+			SentinelToolSchema{Type: "object", Description: "Read-only AdGuardHome recent DNS queries.", AdditionalProperties: true},
+		),
+		handler: sentinelGetAdGuardQueryLogTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
 			"run_iperf3_test", "diagnostics",
 			"Run a short (3s) iperf3 throughput benchmark between the controller and a managed OpenWrt node (5-minute per-node cooldown; use only when explicitly asked for a speed test).",
 			SentinelToolScopeSite, SentinelToolCostHigh, 20000, 1,
@@ -812,7 +840,7 @@ func sentinelGetSiteClientsTool(ctx context.Context, invocation sentinelToolInvo
 
 func sentinelToolRunsWithoutDB(name string) bool {
 	switch name {
-	case "lookup_mac_vendor", "ping_host", "dns_lookup", "probe_tcp_port", "traceroute_host":
+	case "lookup_mac_vendor", "ping_host", "dns_lookup", "probe_tcp_port", "traceroute_host", "get_adguard_stats", "get_adguard_querylog":
 		return true
 	default:
 		return false
