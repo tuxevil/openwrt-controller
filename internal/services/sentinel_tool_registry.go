@@ -27,6 +27,7 @@ const (
 	SentinelToolScopeSite      SentinelToolScope           = "site"
 	SentinelToolCostLow        SentinelToolCostHint        = "low"
 	SentinelToolCostMedium     SentinelToolCostHint        = "medium"
+	SentinelToolCostHigh       SentinelToolCostHint        = "high"
 
 	// Phase 1 deliberately treats every tool result as evidence rather than
 	// executable instructions or trusted policy. More granular provenance can
@@ -205,6 +206,170 @@ var sentinelToolRegistry = newSentinelToolRegistry([]sentinelRegisteredTool{
 		),
 		handler: sentinelLookupMACVendorTool,
 	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_client_diagnostics", "observability",
+			"Consolidated client dossier by MAC, IP, or hostname: OUI vendor, Wi-Fi radio stats (signal, tx_failed, tx_retries, MCS), DHCP lease, ARP/bridge state, shaping rule, and recent logs.",
+			SentinelToolScopeTenant, SentinelToolCostLow, 4000, 4,
+			map[string]SentinelToolSchemaProperty{
+				"client":  sentinelStringProperty("Client MAC address, IPv4 address, or hostname", "", 128),
+				"site_id": sentinelStringProperty("Optional site scope", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "Consolidated client diagnostic dossier.", AdditionalProperties: true},
+		),
+		handler: sentinelGetClientDiagnosticsTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_bandwidth_stats", "observability",
+			"Read live per-node WAN/LAN interface throughput, top_talkers (with hostnames), and active Sniper bandwidth shaping rules.",
+			SentinelToolScopeSite, SentinelToolCostLow, 4000, 3,
+			map[string]SentinelToolSchemaProperty{
+				"site_id": sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+				"limit":   sentinelIntegerProperty("Maximum entries", 1, 200),
+			},
+			SentinelToolSchema{Type: "object", Description: "Per-node bandwidth, top talkers, and shaping rules.", AdditionalProperties: true},
+		),
+		handler: sentinelGetBandwidthStatsTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_flow_summary", "observability",
+			"Read active conntrack outbound/LAN flows (FlowRadar) with resolved client hostnames and threat flags; optionally filter by client or flagged_only.",
+			SentinelToolScopeSite, SentinelToolCostLow, 4000, 3,
+			map[string]SentinelToolSchemaProperty{
+				"site_id":      sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+				"client":       sentinelStringProperty("Optional client hostname, IP, or MAC filter", "", 128),
+				"flagged_only": sentinelBooleanProperty("Only return flagged/suspicious flows"),
+				"limit":        sentinelIntegerProperty("Maximum flows", 1, 100),
+			},
+			SentinelToolSchema{Type: "object", Description: "Active site flow summary with resolved hostnames.", AdditionalProperties: true},
+		),
+		handler: sentinelGetFlowSummaryTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_rf_spectrum", "observability",
+			"Read wireless RF health across all AP radios and clients (signal, noise, SNR, tx_retries, tx_failed, data rates) sorted worst SNR first.",
+			SentinelToolScopeSite, SentinelToolCostLow, 4000, 3,
+			map[string]SentinelToolSchemaProperty{
+				"site_id": sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "Per-radio and per-client RF metrics.", AdditionalProperties: true},
+		),
+		handler: sentinelGetRFSpectrumTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_dhcp_leases", "observability",
+			"List active DHCP leases reported by routers with resolved hostnames and IEEE OUI vendor; optional filter query.",
+			SentinelToolScopeSite, SentinelToolCostLow, 4000, 3,
+			map[string]SentinelToolSchemaProperty{
+				"site_id": sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+				"query":   sentinelStringProperty("Optional MAC, IP, hostname, or vendor filter", "", 128),
+				"limit":   sentinelIntegerProperty("Maximum leases", 1, 200),
+			},
+			SentinelToolSchema{Type: "object", Description: "Active DHCP leases with vendor info.", AdditionalProperties: true},
+		),
+		handler: sentinelGetDHCPLeasesTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_wan_health", "observability",
+			"Read gateway WAN (Starlink), WireGuard tunnel, and system health telemetry for the site.",
+			SentinelToolScopeSite, SentinelToolCostLow, 4000, 3,
+			map[string]SentinelToolSchemaProperty{
+				"site_id": sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "Gateway WAN, Starlink, and WireGuard telemetry.", AdditionalProperties: true},
+		),
+		handler: sentinelGetWANHealthTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"get_wifi_config_summary", "observability",
+			"Read sanitized live wireless UCI/iw configuration (channels, htmode, txpower, 802.11r/k/v, macfilter) from managed APs without passwords.",
+			SentinelToolScopeSite, SentinelToolCostMedium, 8000, 2,
+			map[string]SentinelToolSchemaProperty{
+				"site_id":   sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+				"device_id": sentinelStringProperty("Optional node name, MAC, or IP", "", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "Sanitized wireless configuration per node.", AdditionalProperties: true},
+		),
+		handler: sentinelGetWiFiConfigSummaryTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"ping_host", "diagnostics",
+			"Run a bounded ICMP ping probe (1-5 packets) from the controller or a managed router to measure reachability, packet loss, and RTT.",
+			SentinelToolScopeTenant, SentinelToolCostMedium, 12000, 4,
+			map[string]SentinelToolSchemaProperty{
+				"target":         sentinelStringProperty("IPv4/IPv6 address or hostname to ping", "", 253),
+				"from_device_id": sentinelStringProperty("Optional managed router name, MAC, or IP to run ping from", "", 128),
+				"count":          sentinelIntegerProperty("Packet count (1-5, default 4)", 1, 5),
+				"site_id":        sentinelStringProperty("Optional site scope", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "ICMP ping reachability, packet loss, and RTT summary.", AdditionalProperties: true},
+		),
+		handler: sentinelPingHostTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"dns_lookup", "diagnostics",
+			"Resolve a DNS domain and measure latency against the gateway AdGuardHome (default) or a specified DNS server IP; detects AdGuardHome sinkhole blocks (0.0.0.0).",
+			SentinelToolScopeTenant, SentinelToolCostLow, 5000, 4,
+			map[string]SentinelToolSchemaProperty{
+				"domain":  sentinelStringProperty("DNS domain name to resolve", "", 253),
+				"server":  sentinelStringProperty("Optional DNS server IP (defaults to gateway AdGuardHome)", "", 64),
+				"site_id": sentinelStringProperty("Optional site scope", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "DNS resolution result, latency, and AdGuard block hint.", AdditionalProperties: true},
+		),
+		handler: sentinelDNSLookupTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"probe_tcp_port", "diagnostics",
+			"Check if a TCP port on a private LAN/local service (e.g. AdGuardHome, Home Assistant, Frigate, Proxmox, Ollama) is reachable.",
+			SentinelToolScopeTenant, SentinelToolCostLow, 4000, 6,
+			map[string]SentinelToolSchemaProperty{
+				"host":       sentinelStringProperty("Private LAN IP or local hostname", "", 253),
+				"port":       sentinelIntegerProperty("TCP port number (1-65535)", 1, 65535),
+				"timeout_ms": sentinelIntegerProperty("Optional timeout in ms (200-3000)", 200, 3000),
+				"site_id":    sentinelStringProperty("Optional site scope", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "TCP port reachability and connect latency.", AdditionalProperties: true},
+		),
+		handler: sentinelProbeTCPPortTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"traceroute_host", "diagnostics",
+			"Trace network path hops (max 15 hops) from the controller or a managed router to diagnose Starlink vs WireGuard VPS routing.",
+			SentinelToolScopeTenant, SentinelToolCostMedium, 15000, 2,
+			map[string]SentinelToolSchemaProperty{
+				"target":         sentinelStringProperty("IPv4/IPv6 address or hostname to trace", "", 253),
+				"from_device_id": sentinelStringProperty("Optional managed router name, MAC, or IP", "", 128),
+				"max_hops":       sentinelIntegerProperty("Maximum hops (1-15, default 12)", 1, 15),
+				"site_id":        sentinelStringProperty("Optional site scope", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "Traceroute hop list.", AdditionalProperties: true},
+		),
+		handler: sentinelTracerouteHostTool,
+	},
+	{
+		descriptor: sentinelToolDescriptor(
+			"run_iperf3_test", "diagnostics",
+			"Run a short (3s) iperf3 throughput benchmark between the controller and a managed OpenWrt node (5-minute per-node cooldown; use only when explicitly asked for a speed test).",
+			SentinelToolScopeSite, SentinelToolCostHigh, 20000, 1,
+			map[string]SentinelToolSchemaProperty{
+				"device_id": sentinelStringProperty("Managed router name, MAC, or IP to benchmark", "", 128),
+				"site_id":   sentinelStringProperty("Site identifier", "sentinel_identifier", 128),
+			},
+			SentinelToolSchema{Type: "object", Description: "iperf3 throughput, retransmits, and latency benchmark.", AdditionalProperties: true},
+		),
+		handler: sentinelRunIperf3TestTool,
+	},
 })
 
 func sentinelToolDescriptor(name, category, description string, scope SentinelToolScope, cost SentinelToolCostHint, timeoutMillis, maxCalls int, inputProperties map[string]SentinelToolSchemaProperty, output SentinelToolSchema) SentinelToolDescriptor {
@@ -234,6 +399,10 @@ func sentinelStringProperty(description, format string, maxLength int) SentinelT
 
 func sentinelIntegerProperty(description string, minimum, maximum float64) SentinelToolSchemaProperty {
 	return SentinelToolSchemaProperty{Type: "integer", Description: description, Minimum: &minimum, Maximum: &maximum}
+}
+
+func sentinelBooleanProperty(description string) SentinelToolSchemaProperty {
+	return SentinelToolSchemaProperty{Type: "boolean", Description: description}
 }
 
 func sentinelArrayOutput(description string) SentinelToolSchema {
@@ -414,6 +583,10 @@ func validateSentinelArguments(schema SentinelToolSchema, args map[string]interf
 			if property.Maximum != nil && value > *property.Maximum {
 				return fmt.Errorf("%s is above the maximum for %s", key, toolName)
 			}
+		case "boolean":
+			if _, ok := raw.(bool); !ok {
+				return fmt.Errorf("%s must be a boolean for %s", key, toolName)
+			}
 		default:
 			return fmt.Errorf("unsupported schema type %q for %s", property.Type, toolName)
 		}
@@ -426,7 +599,7 @@ func (r *SentinelToolRegistry) Execute(parent context.Context, call SentinelTool
 	if !ok {
 		return nil, fmt.Errorf("unsupported sentinel tool %q", call.Name)
 	}
-	if database.DB == nil && call.Name != "lookup_mac_vendor" {
+	if database.DB == nil && !sentinelToolRunsWithoutDB(call.Name) {
 		return nil, fmt.Errorf("database is unavailable")
 	}
 	args, err := decodeSentinelToolArguments(call.Arguments)
@@ -635,6 +808,15 @@ func sentinelGetDeviceStatusTool(ctx context.Context, invocation sentinelToolInv
 func sentinelGetSiteClientsTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
 	siteID, _ := invocation.Args["site_id"].(string)
 	return getSentinelSiteClientsContext(ctx, invocation.Schema, siteID, invocation.Limit)
+}
+
+func sentinelToolRunsWithoutDB(name string) bool {
+	switch name {
+	case "lookup_mac_vendor", "ping_host", "dns_lookup", "probe_tcp_port", "traceroute_host":
+		return true
+	default:
+		return false
+	}
 }
 
 func sentinelLookupMACVendorTool(_ context.Context, invocation sentinelToolInvocation) (interface{}, error) {

@@ -252,7 +252,7 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 	}
 
 	if targetRef != "" {
-		add("search_logs", "get_site_clients", "get_device_status", "get_incidents")
+		add("search_logs", "get_client_diagnostics", "get_site_clients", "get_device_status")
 	}
 	if isSentinelHardwareQuery(normalized) {
 		add("get_device_status")
@@ -271,6 +271,36 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 			if hasClientTerm {
 				add("get_device_status")
 			}
+			break
+		}
+	}
+	for _, term := range []string{"bandwidth", "ancho", "velocidad", "consumo", "throughput", "talker", "talkers", "sniper", "shaping"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			add("get_bandwidth_stats")
+			break
+		}
+	}
+	for _, term := range []string{"flow", "flows", "flujo", "flujos", "conntrack", "trafico", "traffic", "p2p", "torrent"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			add("get_flow_summary")
+			break
+		}
+	}
+	for _, term := range []string{"snr", "ruido", "noise", "espectro", "spectrum", "canal", "channel", "senal", "signal"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			add("get_rf_spectrum")
+			break
+		}
+	}
+	for _, term := range []string{"starlink", "wireguard", "vpn", "mwan3"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			add("get_wan_health")
+			break
+		}
+	}
+	for _, term := range []string{"lease", "leases", "dhcp"} {
+		if sentinelQueryContainsTerm(normalized, term) {
+			add("get_dhcp_leases")
 			break
 		}
 	}
@@ -299,7 +329,11 @@ func sentinelContextToolPlan(query string, item SentinelCase) []string {
 		}
 	}
 
-	order := []string{"get_device_status", "get_site_clients", "get_incidents", "get_recent_changes", "get_topology", "search_logs"}
+	order := []string{
+		"get_client_diagnostics", "get_device_status", "get_site_clients",
+		"get_bandwidth_stats", "get_flow_summary", "get_rf_spectrum", "get_wan_health", "get_dhcp_leases",
+		"get_incidents", "get_recent_changes", "get_topology", "search_logs",
+	}
 	if targetRef != "" || (item.SiteID != "" && sentinelRoamingQuery(normalized)) {
 		add("search_logs")
 		order = append([]string{"search_logs"}, order[:len(order)-1]...)
@@ -448,6 +482,13 @@ func CompileSentinelCaseContext(ctx context.Context, schema, caseID string, hist
 			continue
 		}
 		originalArgs := sentinelContextToolArguments(toolName, item)
+		if toolName == "get_client_diagnostics" {
+			if targetRef := extractSentinelClientRefFromQuery(query); targetRef != "" {
+				args, _ := decodeSentinelToolArguments(originalArgs)
+				args["client"] = targetRef
+				originalArgs = sentinelJSONData(args)
+			}
+		}
 		if toolName == "search_logs" {
 			if targetRef := extractSentinelClientRefFromQuery(query); targetRef != "" {
 				args, _ := decodeSentinelToolArguments(originalArgs)

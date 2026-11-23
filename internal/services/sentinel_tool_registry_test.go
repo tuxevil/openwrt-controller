@@ -10,14 +10,26 @@ import (
 func TestSentinelToolRegistryContainsOnlyPhaseOneReadTools(t *testing.T) {
 	descriptors := SentinelToolDescriptors()
 	want := []string{
+		"dns_lookup",
+		"get_bandwidth_stats",
+		"get_client_diagnostics",
 		"get_device_status",
+		"get_dhcp_leases",
+		"get_flow_summary",
 		"get_incidents",
 		"get_notes",
 		"get_recent_changes",
+		"get_rf_spectrum",
 		"get_site_clients",
 		"get_topology",
+		"get_wan_health",
+		"get_wifi_config_summary",
 		"lookup_mac_vendor",
+		"ping_host",
+		"probe_tcp_port",
+		"run_iperf3_test",
 		"search_logs",
+		"traceroute_host",
 	}
 	if len(descriptors) != len(want) {
 		t.Fatalf("registry contains %d tools, want %d: %#v", len(descriptors), len(want), descriptors)
