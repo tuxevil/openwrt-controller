@@ -50,8 +50,25 @@ func TestSentinelMCPRevocationAndCaseScope(t *testing.T) {
 	if r := call("tools/list", "{}", ""); r.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous response: %d %s", r.Code, r.Body)
 	}
-	if r := call("tools/list", "{}", token); r.Code != 200 || !strings.Contains(r.Body.String(), "get_site_health") || !strings.Contains(r.Body.String(), "get_case") {
-		t.Fatalf("list response: %d %s", r.Code, r.Body)
+	if r := call("tools/list", "{}", token); r.Code != 200 ||
+		!strings.Contains(r.Body.String(), "get_site_health") ||
+		!strings.Contains(r.Body.String(), "get_case") ||
+		!strings.Contains(r.Body.String(), "list_cases") ||
+		!strings.Contains(r.Body.String(), "ask_sentinel") ||
+		!strings.Contains(r.Body.String(), "get_wan_health") ||
+		!strings.Contains(r.Body.String(), "get_firewall_summary") ||
+		!strings.Contains(r.Body.String(), "get_adguard_stats") ||
+		!strings.Contains(r.Body.String(), "lookup_mac_vendor") ||
+		!strings.Contains(r.Body.String(), "ping_host") {
+		t.Fatalf("list response missing expected tools: %d %s", r.Code, r.Body)
+	}
+
+	// Verify bridged read-only Sentinel tool works directly over MCP (even without DB)
+	if r := call("tools/call", `{"name":"lookup_mac_vendor","arguments":{"mac":"3c:28:6d:0f:85:db"}}`, token); r.Code != 200 || !strings.Contains(r.Body.String(), "Google, Inc.") {
+		t.Fatalf("lookup_mac_vendor MCP call failed: %d %s", r.Code, r.Body)
+	}
+	if r := call("tools/call", `{"name":"lookup_mac_vendor","arguments":{"mac":"3e:fb:ef:76:06:79"}}`, token); r.Code != 200 || !strings.Contains(r.Body.String(), `"locally_administered":true`) {
+		t.Fatalf("lookup_mac_vendor randomized MAC MCP call failed: %d %s", r.Code, r.Body)
 	}
 
 	db, mock, err := sqlmock.New()

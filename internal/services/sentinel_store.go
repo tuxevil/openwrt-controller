@@ -592,6 +592,35 @@ func GetSentinelCaseForSite(ctx context.Context, schema, siteID, caseID string) 
 	return item, err
 }
 
+// ListSentinelCasesForSite returns recent reduced case views scoped strictly to
+// an assigned external site (for MCP / external AI assistant callers).
+func ListSentinelCasesForSite(ctx context.Context, schema, siteID string, limit int) ([]SentinelCase, error) {
+	safeSchema, err := database.SafeSQLSchemaIdent(schema)
+	if err != nil {
+		return nil, err
+	}
+	if limit < 1 || limit > 50 {
+		limit = 20
+	}
+	rows, err := database.DB.QueryContext(ctx, fmt.Sprintf(`SELECT id::text, site_id::text, severity, status, title, summary, updated_at
+		FROM %s.sentinel_cases WHERE site_id = $1 ORDER BY updated_at DESC LIMIT $2`, safeSchema), siteID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []SentinelCase{}
+	for rows.Next() {
+		var item SentinelCase
+		if err := rows.Scan(&item.ID, &item.SiteID, &item.Severity, &item.Status, &item.Title, &item.Summary, &item.UpdatedAt); err != nil {
+			continue
+		}
+		item.Title = redactSentinelSecrets(item.Title)
+		item.Summary = redactSentinelSecrets(item.Summary)
+		out = append(out, item)
+	}
+	return out, rows.Err()
+}
+
 func CreateSentinelNote(schema, siteID, deviceID, title, content, createdBy string) (SentinelNote, error) {
 	safeSchema, err := sentinelSchema(schema)
 	if err != nil {

@@ -743,6 +743,47 @@ func SentinelToolDescriptors() []SentinelToolDescriptor {
 	return sentinelToolRegistry.Descriptors()
 }
 
+// ExecuteSentinelMCPTool executes a registered read-only Sentinel tool on behalf
+// of an authenticated external MCP identity. It always overrides schema and
+// site_id with the verified identity scope so callers cannot escape their site.
+func ExecuteSentinelMCPTool(ctx context.Context, toolName, schema, siteID string, rawArgs json.RawMessage) (interface{}, error) {
+	descriptor, ok := sentinelToolRegistry.Descriptor(toolName)
+	if !ok || descriptor.SideEffectClass != SentinelToolSideEffectNone {
+		return nil, fmt.Errorf("unsupported read-only sentinel tool %q", toolName)
+	}
+	args := map[string]interface{}{}
+	if trimmed := strings.TrimSpace(string(rawArgs)); trimmed != "" && trimmed != "null" {
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return nil, fmt.Errorf("invalid tool arguments: %w", err)
+		}
+	}
+	args["schema"] = schema
+	if _, supportsSite := descriptor.InputSchema.Properties["site_id"]; supportsSite {
+		args["site_id"] = siteID
+	} else {
+		delete(args, "site_id")
+	}
+	encoded, err := json.Marshal(args)
+	if err != nil {
+		return nil, err
+	}
+	result, err := sentinelToolRegistry.Execute(ctx, SentinelToolCall{
+		Name:      toolName,
+		Arguments: encoded,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resultJSON, mErr := json.Marshal(result); mErr == nil {
+		redacted := redactSentinelSecrets(string(resultJSON))
+		var clean interface{}
+		if json.Unmarshal([]byte(redacted), &clean) == nil {
+			return clean, nil
+		}
+	}
+	return result, nil
+}
+
 func sentinelSearchLogsTool(ctx context.Context, invocation sentinelToolInvocation) (interface{}, error) {
 	args, schema, limit := invocation.Args, invocation.Schema, invocation.Limit
 	queryText, _ := args["query"].(string)
