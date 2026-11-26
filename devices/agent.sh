@@ -2319,8 +2319,13 @@ while true; do
     if command -v tailscale >/dev/null 2>&1; then
         TS_JSON=$(tailscale status --json 2>/dev/null || true)
         if [ -n "$TS_JSON" ]; then
-            TAILSCALE_STATUS=$(printf '%s' "$TS_JSON" | jsonfilter -e '{"backend_state":@.BackendState,"version":@.Version,"tailscale_ips":@.Self.TailscaleIPs,"dns_name":@.Self.DNSName,"online":@.Self.Online,"exit_node":@.Self.ExitNode,"rx_bytes":@.Self.RxBytes,"tx_bytes":@.Self.TxBytes}' 2>/dev/null || echo "{}")
-            [ -n "$TAILSCALE_STATUS" ] || TAILSCALE_STATUS="{}"
+            TS_STATE=$(printf '%s' "$TS_JSON" | jsonfilter -e '@.BackendState' 2>/dev/null || true)
+            TS_DNS=$(printf '%s' "$TS_JSON" | jsonfilter -e '@.Self.DNSName' 2>/dev/null || true)
+            TS_ONLINE=$(printf '%s' "$TS_JSON" | jsonfilter -e '@.Self.Online' 2>/dev/null || true)
+            TS_IPS=$(printf '%s' "$TS_JSON" | jsonfilter -e '@.Self.TailscaleIPs' 2>/dev/null || true)
+            [ "$TS_ONLINE" = "true" ] || TS_ONLINE="false"
+            [ -n "$TS_IPS" ] || TS_IPS="[]"
+            TAILSCALE_STATUS=$(printf '{"backend_state":"%s","dns_name":"%s","online":%s,"tailscale_ips":%s}' "$TS_STATE" "$TS_DNS" "$TS_ONLINE" "$TS_IPS")
         fi
     fi
 
