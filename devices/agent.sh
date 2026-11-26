@@ -2104,7 +2104,17 @@ while true; do
     command -v fw3 >/dev/null 2>&1 && CAP_FIREWALL="firewall3"
     CAP_SWITCH="unknown"
     [ -d /sys/class/net ] && { command -v bridge >/dev/null 2>&1 && CAP_SWITCH="dsa"; command -v swconfig >/dev/null 2>&1 && CAP_SWITCH="swconfig"; }
-    CAP_PACKAGES=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34]|tailscale)' | head -n 32 | sed 's/.*/"&"/' | join_csv)
+    if command -v apk >/dev/null 2>&1; then
+        CAP_PACKAGES=$(apk list -I 2>/dev/null | awk '{print $1}' | sed 's/-[0-9].*//' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34]|tailscale)' | head -n 32 | sed 's/.*/"&"/' | join_csv)
+    else
+        CAP_PACKAGES=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34]|tailscale)' | head -n 32 | sed 's/.*/"&"/' | join_csv)
+    fi
+    if command -v tailscale >/dev/null 2>&1; then
+        case "$CAP_PACKAGES" in
+            *tailscale*) ;;
+            *) [ -n "$CAP_PACKAGES" ] && CAP_PACKAGES="$CAP_PACKAGES,\"tailscale\"" || CAP_PACKAGES="\"tailscale\"" ;;
+        esac
+    fi
     [ -n "$CAP_PACKAGES" ] || CAP_PACKAGES=""
 
     # 2. RECOLECCIÓN WIRELESS AVANZADA (Parser de 3 líneas para iwinfo)
