@@ -166,6 +166,8 @@ func SetupRoutes() *http.ServeMux {
 	mux.HandleFunc("GET /api/sites/{site_id}/vpn", middleware.WithAuth(handlers.GetVPNConfigHandler))
 	mux.HandleFunc("POST /api/sites/{site_id}/vpn/endpoint", middleware.WithAuth(middleware.RequireAdmin(handlers.UpdateVPNEndpointHandler)))
 	mux.HandleFunc("GET /api/sites/{site_id}/vpn/peers", middleware.WithAuth(handlers.GetVPNPeersHandler))
+	mux.HandleFunc("GET /api/sites/{site_id}/tailscale", middleware.WithAuth(handlers.GetSiteTailscaleHandler))
+	mux.HandleFunc("POST /api/devices/{device_id}/tailscale/plan", middleware.WithAuth(middleware.RequireAdmin(handlers.GenerateTailscalePlanHandler)))
 
 	// ── Vault / Firmware ──────────────────────────────────────────────────────
 	mux.HandleFunc("POST /api/devices/{device_id}/backup", middleware.WithAuth(handlers.CreateBackupTrigger))

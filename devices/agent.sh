@@ -2104,7 +2104,7 @@ while true; do
     command -v fw3 >/dev/null 2>&1 && CAP_FIREWALL="firewall3"
     CAP_SWITCH="unknown"
     [ -d /sys/class/net ] && { command -v bridge >/dev/null 2>&1 && CAP_SWITCH="dsa"; command -v swconfig >/dev/null 2>&1 && CAP_SWITCH="swconfig"; }
-    CAP_PACKAGES=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34])' | head -n 32 | sed 's/.*/"&"/' | join_csv)
+    CAP_PACKAGES=$(opkg list-installed 2>/dev/null | awk '{print $1}' | grep -E '^(wireguard|usteer|sqm|luci-app-sqm|kmod-sched-cake|firewall[34]|tailscale)' | head -n 32 | sed 's/.*/"&"/' | join_csv)
     [ -n "$CAP_PACKAGES" ] || CAP_PACKAGES=""
 
     # 2. RECOLECCIÓN WIRELESS AVANZADA (Parser de 3 líneas para iwinfo)
@@ -2314,6 +2314,16 @@ while true; do
         [ -z "$FLOW_SENSE_DATA" ] && FLOW_SENSE_DATA="[]"
     fi
 
+    # 5.8 TAILSCALE TELEMETRY (if installed)
+    TAILSCALE_STATUS="{}"
+    if command -v tailscale >/dev/null 2>&1; then
+        TS_JSON=$(tailscale status --json 2>/dev/null || true)
+        if [ -n "$TS_JSON" ]; then
+            TAILSCALE_STATUS=$(printf '%s' "$TS_JSON" | jsonfilter -e '{"backend_state":@.BackendState,"version":@.Version,"tailscale_ips":@.Self.TailscaleIPs,"dns_name":@.Self.DNSName,"online":@.Self.Online,"exit_node":@.Self.ExitNode,"rx_bytes":@.Self.RxBytes,"tx_bytes":@.Self.TxBytes}' 2>/dev/null || echo "{}")
+            [ -n "$TAILSCALE_STATUS" ] || TAILSCALE_STATUS="{}"
+        fi
+    fi
+
     # 6. CONSTRUCCIÓN DEL PAYLOAD
     CHANGE_SET_STATUS_PAYLOAD=$(change_set_status_json)
     TRANSACTION_STATUS_PAYLOAD=$(transaction_status_json)
@@ -2331,6 +2341,7 @@ while true; do
     "neighbor_stats": $NEIGHBOR_STATS,
     "dhcp": $DHCP_LEASES,
     "flow_sense": $FLOW_SENSE_DATA,
+    "tailscale": $TAILSCALE_STATUS,
     "logs": "$SYS_LOGS",
     "transaction": $TRANSACTION_STATUS_PAYLOAD,
     "change_set_transaction": $CHANGE_SET_STATUS_PAYLOAD,
